@@ -399,14 +399,9 @@ The `FunctionRegistry` is the persistent store for LLM-generated transformation 
 - `function_registry/registry.json` — JSON array of entries, each with: `key`, `function_name`, `file` path, `created_for_domain`, `source_type`, `target_type`, `tags`, `used_count`, `last_used`, `validation_passed`, `created_at`
 - `function_registry/functions/*.py` — the actual Python source files
 
-**Currently registered functions (4):**
+**Currently registered functions (0):**
 
-| Key | Function | Domain | Type Conversion | Used |
-|-----|----------|--------|-----------------|------|
-| `object_to_string_product_name` | `transform_product_name` | nutrition | `object` → `string` | 4× |
-| `object_to_string_category` | `transform_category` | nutrition | `object` → `string` | 4× |
-| `object_to_string_data_source` | `transform_data_source` | nutrition | `object` → `string` | 1× |
-| `int64_to_string_published_date` | `transform_published_date` | safety | `int64` → `string` | 2× |
+The registry is populated dynamically when the pipeline runs and encounters schema gaps. Functions are generated on first use and persisted for reuse on subsequent runs.
 
 **Key methods:**
 - **`lookup(source_type, target_type, tags)`**: Finds a registered function matching the type signature. First filters by exact source_type + target_type match, then ranks candidates by tag overlap. Returns the best match or `None`.
