@@ -1,0 +1,4 @@
+data/
+.env
+.claude
+.ruff_cache
