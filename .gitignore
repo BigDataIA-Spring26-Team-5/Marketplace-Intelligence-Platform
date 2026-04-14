@@ -1,4 +1,79 @@
-data/
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Environment / secrets
+# =========================
 .env
-.claude
-.ruff_cache
+.env.*
+!.env.example
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+
+# =========================
+# Testing / coverage
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =========================
+# ML / Data artifacts
+# =========================
+
+# Raw & intermediate data
+data/
+
+# Generated outputs
+output/
+
+# Corpus artifacts (keep JSON, ignore heavy index)
+corpus/faiss_index.bin
+
+# Optional: ignore all corpus except metadata
+# corpus/*
+# !corpus/*.json
+
+# =========================
+# Build / packaging
+# =========================
+build/
+dist/
+*.egg-info/
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# OS / Editor junk
+# =========================
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/
+
+# JetBrains
+.idea/
+
+# =========================
+# Notebooks (if you add later)
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Misc
+# =========================
+*.tmp
+*.bak
