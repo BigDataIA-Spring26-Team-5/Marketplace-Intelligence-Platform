@@ -9,6 +9,9 @@ from src.blocks.base import Block
 class StripPunctuationBlock(Block):
     name = "strip_punctuation"
     domain = "all"
+    description = "Replace non-alphanumeric characters with spaces in product_name and brand_name"
+    inputs = ["product_name", "brand_name"]
+    outputs = ["product_name", "brand_name"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()

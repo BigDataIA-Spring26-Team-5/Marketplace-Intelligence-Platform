@@ -14,6 +14,9 @@ SIZE_PATTERN = re.compile(
 class ExtractQuantityColumnBlock(Block):
     name = "extract_quantity_column"
     domain = "nutrition"
+    description = "Extract size/quantity from product_name into a separate sizes column"
+    inputs = ["product_name"]
+    outputs = ["product_name", "sizes"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()

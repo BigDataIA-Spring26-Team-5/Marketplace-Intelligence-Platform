@@ -9,24 +9,40 @@ from pathlib import Path
 import pandas as pd
 
 from src.agents.state import PipelineState
-from src.agents.prompts import SCHEMA_ANALYSIS_PROMPT, FIRST_RUN_SCHEMA_PROMPT
+from src.agents.prompts import SCHEMA_ANALYSIS_PROMPT
 from src.models.llm import call_llm_json, get_orchestrator_llm
 from src.schema.analyzer import (
     profile_dataframe,
     load_unified_schema,
-    save_unified_schema,
-    derive_unified_schema_from_source,
 )
-from src.registry.function_registry import FunctionRegistry
+from src.registry.block_registry import BlockRegistry
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-REGISTRY_DIR = PROJECT_ROOT / "function_registry"
+
+_BLOCK_COLUMN_PROVIDERS: dict[str, str] = {
+    "allergens": "extract_allergens",
+    "primary_category": "llm_enrich",
+    "dietary_tags": "llm_enrich",
+    "is_organic": "llm_enrich",
+}
+
+
+def _detect_enrichment_columns(unified_schema: dict, source_schema: dict) -> list[str]:
+    """Return names of enrichment columns in the unified schema absent from source data."""
+    source_cols = set(source_schema.keys())
+    return [
+        name
+        for name, spec in unified_schema.get("columns", {}).items()
+        if spec.get("enrichment") and name not in source_cols
+    ]
 
 
 def load_source_node(state: PipelineState) -> dict:
     """Load CSV and compute schema profile."""
+    if state.get("source_df") is not None:
+        return {}
     source_path = state["source_path"]
     logger.info(f"Loading source: {source_path}")
 
@@ -41,11 +57,14 @@ def load_source_node(state: PipelineState) -> dict:
 
 def analyze_schema_node(state: PipelineState) -> dict:
     """
-    Agent 1 LLM call: analyze source schema against unified schema.
+    Agent 1 LLM call: analyze source schema against the gold-standard unified schema.
 
-    On first run (no unified schema), derives the schema from source.
-    On subsequent runs, diffs against existing unified schema.
+    Diffs the source schema against the unified schema and returns a column mapping
+    plus a list of gaps requiring block generation. Raises FileNotFoundError if
+    config/unified_schema.json is absent.
     """
+    if state.get("unified_schema") is not None:
+        return {}
     source_schema = state["source_schema"]
     domain = state.get("domain", "nutrition")
     model = get_orchestrator_llm()
@@ -53,102 +72,138 @@ def analyze_schema_node(state: PipelineState) -> dict:
     unified = load_unified_schema()
 
     if unified is None:
-        # First run — derive unified schema
-        logger.info("No unified schema found — first run, deriving from source")
-        result = call_llm_json(
-            model=model,
-            messages=[{
-                "role": "user",
-                "content": FIRST_RUN_SCHEMA_PROMPT.format(
-                    source_schema=json.dumps(source_schema, indent=2),
-                    domain=domain,
-                ),
-            }],
+        raise FileNotFoundError(
+            "config/unified_schema.json not found. "
+            "The unified schema is the gold-standard target format and must be defined before running the pipeline."
         )
 
-        column_mapping = result.get("column_mapping", {})
-        gaps = result.get("gaps", [])
+    logger.info("Unified schema found — diffing against source")
 
-        # Derive and save unified schema
-        df = state["source_df"]
-        unified = derive_unified_schema_from_source(df, column_mapping, domain)
-        save_unified_schema(unified)
-        logger.info(f"Unified schema derived and saved with {len(unified['columns'])} columns")
+    mappable_cols = {
+        name: spec
+        for name, spec in unified["columns"].items()
+        if not spec.get("computed") and not spec.get("enrichment")
+    }
+    unified_for_prompt = {"columns": mappable_cols}
 
-        return {
-            "unified_schema": unified,
-            "unified_schema_existed": False,
-            "column_mapping": column_mapping,
-            "gaps": gaps,
-        }
-    else:
-        # Subsequent run — diff against unified schema
-        logger.info("Unified schema found — diffing against source")
-
-        # Filter out computed and enrichment columns for the prompt
-        mappable_cols = {
-            name: spec for name, spec in unified["columns"].items()
-            if not spec.get("computed") and not spec.get("enrichment")
-        }
-        unified_for_prompt = {"columns": mappable_cols}
-
-        result = call_llm_json(
-            model=model,
-            messages=[{
+    result = call_llm_json(
+        model=model,
+        messages=[
+            {
                 "role": "user",
                 "content": SCHEMA_ANALYSIS_PROMPT.format(
                     source_schema=json.dumps(source_schema, indent=2),
                     unified_schema=json.dumps(unified_for_prompt, indent=2),
                 ),
-            }],
+            }
+        ],
+    )
+
+    column_mapping = result.get("column_mapping", {})
+    gaps = result.get("gaps", [])
+
+    logger.info(
+        f"Schema analysis: {len(column_mapping)} mappings, {len(gaps)} gaps"
+    )
+
+    required_mappable = {
+        name
+        for name, spec in unified["columns"].items()
+        if spec.get("required")
+        and not spec.get("computed")
+        and not spec.get("enrichment")
+    }
+    covered = set(column_mapping.values()) | {g["target_column"] for g in gaps}
+    mapping_warnings = [
+        f"Required unified column '{col}' not covered by mapping or gaps"
+        for col in sorted(required_mappable - covered)
+    ]
+    for w in mapping_warnings:
+        logger.warning(w)
+
+    enrichment_to_generate = _detect_enrichment_columns(unified, source_schema)
+    if enrichment_to_generate:
+        logger.info(
+            f"Enrichment columns absent from source (will be generated by blocks): "
+            f"{enrichment_to_generate}"
         )
 
-        column_mapping = result.get("column_mapping", {})
-        gaps = result.get("gaps", [])
-
-        logger.info(f"Schema analysis: {len(column_mapping)} mappings, {len(gaps)} gaps")
-
-        return {
-            "unified_schema": unified,
-            "unified_schema_existed": True,
-            "column_mapping": column_mapping,
-            "gaps": gaps,
-        }
+    return {
+        "unified_schema": unified,
+        "unified_schema_existed": True,
+        "column_mapping": column_mapping,
+        "gaps": gaps,
+        "enrichment_columns_to_generate": enrichment_to_generate,
+        "mapping_warnings": mapping_warnings,
+    }
 
 
 def check_registry_node(state: PipelineState) -> dict:
     """
-    Check function registry for existing transforms that cover the gaps.
+    Check BlockRegistry for existing transformation blocks that cover the gaps.
 
-    Splits gaps into registry_hits (reusable) and registry_misses (need Agent 2).
+    Gaps are split into:
+    - block_registry_hits: existing blocks found for the gap
+    - registry_misses: no existing block, Agent 2 must generate new block
     """
+    if "block_registry_hits" in state:
+        return {}
     gaps = state.get("gaps", [])
-    registry = FunctionRegistry(REGISTRY_DIR)
+    block_reg = BlockRegistry.instance()
 
-    hits = {}
+    block_hits: dict[str, str] = {}  # target_col -> block_name
     misses = []
 
     for gap in gaps:
-        source_type = gap.get("source_type", "string") or "string"
-        target_type = gap.get("target_type", "string")
+        source_col = gap.get("source_column")
         target_col = gap.get("target_column", "")
+        source_type = gap.get("source_type") or "string"
+        target_type = gap.get("target_type", "string")
 
-        # Look up by type signature
-        match = registry.lookup(
-            source_type=source_type,
-            target_type=target_type,
-            tags=[target_col],
+        if source_col is None:
+            block_name = _BLOCK_COLUMN_PROVIDERS.get(target_col)
+            if block_name and block_name in block_reg.blocks:
+                logger.info(
+                    f"Block registry hit for creation gap '{target_col}': {block_name}"
+                )
+                block_hits[target_col] = block_name
+            else:
+                logger.info(f"Registry miss for creation gap '{target_col}'")
+                misses.append(gap)
+            continue
+
+        generated_block_prefixes = (
+            "TYPE_CONVERSION_",
+            "COLUMN_RENAME_",
+            "COLUMN_DROP_",
+            "COLUMN_CREATE_",
+            "FORMAT_TRANSFORM_",
         )
 
-        if match:
-            logger.info(f"Registry hit for gap '{target_col}': {match['key']}")
-            hits[match["key"]] = str(REGISTRY_DIR / match["file"])
+        found_existing = False
+        for block_name in block_reg.blocks.keys():
+            if block_name.startswith(generated_block_prefixes):
+                if target_col in block_name or block_name.endswith(f"_{target_col}"):
+                    logger.info(
+                        f"Generated block found for gap '{target_col}': {block_name}"
+                    )
+                    block_hits[target_col] = block_name
+                    found_existing = True
+                    break
+
+        if found_existing:
+            continue
+
+        block_name = _BLOCK_COLUMN_PROVIDERS.get(target_col)
+        if block_name and block_name in block_reg.blocks:
+            logger.info(f"Block registry hit for gap '{target_col}': {block_name}")
+            block_hits[target_col] = block_name
         else:
             logger.info(f"Registry miss for gap '{target_col}'")
             misses.append(gap)
 
     return {
-        "registry_hits": hits,
+        "block_registry_hits": block_hits,
         "registry_misses": misses,
         "retry_count": 0,
         "max_retries": 2,

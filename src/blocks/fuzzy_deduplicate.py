@@ -38,6 +38,9 @@ class UnionFind:
 class FuzzyDeduplicateBlock(Block):
     name = "fuzzy_deduplicate"
     domain = "all"
+    description = "Cluster near-duplicate rows using blocking + rapidfuzz scoring"
+    inputs = ["product_name", "brand_name"]
+    outputs = ["duplicate_group_id", "canonical"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         config = config or {}

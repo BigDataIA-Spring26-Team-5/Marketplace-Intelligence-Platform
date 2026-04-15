@@ -67,12 +67,14 @@ st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
 # ── Session state init ───────────────────────────────────────────────
 
+
 def init_state():
     defaults = {
         "step": 0,
         "pipeline_state": {},
         "source_file": None,
         "domain": "nutrition",
+        "enable_enrichment": True,
         "runs": [],  # persists across dataset resets — never cleared by "Run Another Dataset"
     }
     for k, v in defaults.items():
@@ -84,22 +86,24 @@ def _save_run_summary(state: dict) -> None:
     """Append a summary of the current run to st.session_state['runs'], once per run."""
     if state.get("_run_saved"):
         return
-    generated = state.get("generated_functions", [])
+    generated = state.get("generated_blocks", [])
     n_gen = len([f for f in generated if f.get("validation_passed")])
     working_df = state.get("working_df")
-    st.session_state["runs"].append({
-        "run_num": len(st.session_state["runs"]) + 1,
-        "source": Path(state.get("source_path", "?")).name,
-        "domain": state.get("domain", "?"),
-        "rows": len(working_df) if working_df is not None else 0,
-        "dq_pre": state.get("dq_score_pre", 0),
-        "dq_post": state.get("dq_score_post", 0),
-        "dq_delta": state.get("dq_score_post", 0) - state.get("dq_score_pre", 0),
-        "gaps": len(state.get("gaps", [])),
-        "registry_hits": len(state.get("registry_hits", {})),
-        "functions_generated": n_gen,
-        "schema_existed": state.get("unified_schema_existed", False),
-    })
+    st.session_state["runs"].append(
+        {
+            "run_num": len(st.session_state["runs"]) + 1,
+            "source": Path(state.get("source_path", "?")).name,
+            "domain": state.get("domain", "?"),
+            "rows": len(working_df) if working_df is not None else 0,
+            "dq_pre": state.get("dq_score_pre", 0),
+            "dq_post": state.get("dq_score_post", 0),
+            "dq_delta": state.get("dq_score_post", 0) - state.get("dq_score_pre", 0),
+            "gaps": len(state.get("gaps", [])),
+            "registry_hits": len(state.get("block_registry_hits", {})),
+            "functions_generated": n_gen,
+            "schema_existed": state.get("unified_schema_existed", False),
+        }
+    )
     state["_run_saved"] = True
     st.session_state["pipeline_state"] = state
 
@@ -123,8 +127,11 @@ st.markdown(
 
 # ── Step 0: Select Source ────────────────────────────────────────────
 
+
 def step_select_source():
-    st.markdown('<div class="section-header">Select Data Source</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-header">Select Data Source</div>', unsafe_allow_html=True
+    )
 
     # Find CSV files in data/
     csv_files = sorted(DATA_DIR.glob("*.csv"))
@@ -135,16 +142,28 @@ def step_select_source():
         selected = st.selectbox("Data source", csv_names, index=0)
     with col2:
         domain = st.selectbox("Domain", ["nutrition", "safety", "pricing"], index=0)
+        enable_enrichment = st.checkbox(
+            "Enable enrichment",
+            value=True,
+            help="Uncheck to skip allergen extraction and LLM enrichment blocks.",
+        )
 
     if selected:
         source_path = str(DATA_DIR / selected)
         preview_df = pd.read_csv(source_path, nrows=5)
-        st.markdown('<div class="section-header">Preview (first 5 rows)</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-header">Preview (first 5 rows)</div>',
+            unsafe_allow_html=True,
+        )
         st.dataframe(preview_df, width="stretch", height=220)
 
     if st.session_state["runs"]:
-        st.markdown('<div class="section-header">Run History</div>', unsafe_allow_html=True)
-        st.markdown(render_run_history(st.session_state["runs"]), unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-header">Run History</div>', unsafe_allow_html=True
+        )
+        st.markdown(
+            render_run_history(st.session_state["runs"]), unsafe_allow_html=True
+        )
 
     if st.button("Analyze Schema", type="primary", width="stretch"):
         st.session_state["source_file"] = str(DATA_DIR / selected)
@@ -152,6 +171,7 @@ def step_select_source():
         st.session_state["pipeline_state"] = {
             "source_path": str(DATA_DIR / selected),
             "domain": domain,
+            "enable_enrichment": enable_enrichment,
         }
         st.session_state["step"] = 1
         st.rerun()
@@ -159,12 +179,18 @@ def step_select_source():
 
 # ── Step 1: Schema Analysis + HITL Mapping Approval ─────────────────
 
+
 def step_schema_analysis():
     state = st.session_state["pipeline_state"]
 
     with st.spinner("Loading source data..."):
         state = run_step("load_source", state)
-        logger.info(f"Loaded {len(state['source_df'])} rows, {len(state['source_schema'])} columns")
+        source_df = state.get("source_df")
+        source_schema = state.get("source_schema", {})
+        if source_df is None or not source_schema:
+            st.error("Failed to load source data — source_df or source_schema missing.")
+            return
+        logger.info(f"Loaded {len(source_df)} rows, {len(source_schema)} columns")
 
     with st.spinner("Analyzing schema (LLM call)..."):
         state = run_step("analyze_schema", state)
@@ -172,13 +198,19 @@ def step_schema_analysis():
     st.session_state["pipeline_state"] = state
 
     # Display source profile
-    st.markdown('<div class="section-header">Source Schema Profile</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-header">Source Schema Profile</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(render_source_profile(state["source_schema"]), unsafe_allow_html=True)
 
     # Schema delta
     schema_existed = state.get("unified_schema_existed", False)
     if schema_existed:
-        st.markdown('<div class="section-header">Schema Delta — Source vs. Unified</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-header">Schema Delta — Source vs. Unified</div>',
+            unsafe_allow_html=True,
+        )
     else:
         st.markdown(
             '<div class="section-header">Derived Unified Schema (First Run)</div>',
@@ -203,14 +235,24 @@ def step_schema_analysis():
         f'<div class="metric-card">'
         f'<div class="metric-label">Columns Mapped</div>'
         f'<div class="metric-value val-good">{n_mapped}</div>'
-        f'</div>'
+        f"</div>"
         f'<div class="metric-card">'
         f'<div class="metric-label">Gaps Detected</div>'
         f'<div class="metric-value {"val-warn" if n_gaps > 0 else "val-good"}">{n_gaps}</div>'
-        f'</div>'
-        f'</div>',
+        f"</div>"
+        f"</div>",
         unsafe_allow_html=True,
     )
+
+    # Enrichment info and mapping warnings
+    enrichment_cols = state.get("enrichment_columns_to_generate", [])
+    if enrichment_cols:
+        st.info(
+            f"{len(enrichment_cols)} enrichment column(s) absent from source will be "
+            f"generated by pipeline blocks: {', '.join(enrichment_cols)}"
+        )
+    for w in state.get("mapping_warnings", []):
+        st.warning(w)
 
     # HITL Gate 1: Approve mapping
     st.markdown("---")
@@ -227,6 +269,7 @@ def step_schema_analysis():
 
 # ── Step 2: Registry Check + Code Generation + HITL Code Review ─────
 
+
 def step_code_generation():
     state = st.session_state["pipeline_state"]
 
@@ -235,14 +278,20 @@ def step_code_generation():
 
     st.session_state["pipeline_state"] = state
 
-    hits = state.get("registry_hits", {})
+    hits = state.get("block_registry_hits", {})
     misses = state.get("registry_misses", [])
 
-    st.markdown('<div class="section-header">Function Registry Lookup</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-header">Block Registry Lookup</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(render_registry_results(hits, misses), unsafe_allow_html=True)
 
     if misses:
-        st.markdown('<div class="section-header">Code Generation (Agent 2)</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-header">Code Generation (Agent 2)</div>',
+            unsafe_allow_html=True,
+        )
 
         with st.spinner(f"Generating {len(misses)} transform function(s) via LLM..."):
             state = run_step("generate_code", state)
@@ -252,7 +301,7 @@ def step_code_generation():
         st.session_state["pipeline_state"] = state
 
         # HITL Gate 2: Review each generated function
-        generated = state.get("generated_functions", [])
+        generated = state.get("generated_blocks", [])
         for func in generated:
             st.markdown(render_code_review(func), unsafe_allow_html=True)
 
@@ -261,13 +310,19 @@ def step_code_generation():
         # Check if any failed
         failed = [f for f in generated if not f.get("validation_passed")]
         if failed:
-            st.warning(f"{len(failed)} function(s) failed validation. You can approve the passing ones or regenerate.")
+            st.warning(
+                f"{len(failed)} function(s) failed validation. You can approve the passing ones or regenerate."
+            )
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("Approve & Register Functions", type="primary", width="stretch"):
+            if st.button(
+                "Approve & Register Functions", type="primary", width="stretch"
+            ):
                 with st.spinner("Registering functions..."):
-                    state = run_step("register_functions", state)
+                    state = run_step("register_blocks", state)
+                with st.spinner("Agent 3: Planning execution sequence..."):
+                    state = run_step("plan_sequence", state)
                 st.session_state["pipeline_state"] = state
                 st.session_state["step"] = 3
                 st.rerun()
@@ -280,16 +335,55 @@ def step_code_generation():
                 st.rerun()
         with col3:
             if st.button("Skip Code Gen & Run Pipeline", width="stretch"):
-                state["generated_functions"] = []
+                state["generated_blocks"] = []
+                with st.spinner("Agent 3: Planning execution sequence..."):
+                    state = run_step("plan_sequence", state)
                 st.session_state["pipeline_state"] = state
                 st.session_state["step"] = 3
                 st.rerun()
     else:
         # No misses — all gaps covered by registry (or no gaps)
-        if hits:
+        pipeline_state = st.session_state["pipeline_state"]
+        enrichment_cols = pipeline_state.get("enrichment_columns_to_generate", [])
+        block_hits_map = pipeline_state.get("block_registry_hits", {})
+        mapping_warnings = pipeline_state.get("mapping_warnings", [])
+
+        for warning in mapping_warnings:
+            st.warning(warning)
+
+        if hits or block_hits_map:
             st.markdown(render_pipeline_remembered(hits), unsafe_allow_html=True)
-        else:
+            if block_hits_map:
+                st.info(
+                    "Pipeline blocks will handle: "
+                    + ", ".join(
+                        f"`{col}` via `{blk}`" for col, blk in block_hits_map.items()
+                    )
+                )
+
+        if enrichment_cols:
+            st.info(
+                f"{len(enrichment_cols)} enrichment column(s) will be generated by pipeline "
+                f"blocks: {', '.join(f'`{c}`' for c in enrichment_cols)}"
+            )
+        elif not hits and not block_hits_map:
             st.info("No schema gaps detected. Proceeding to pipeline execution.")
+
+        # Agent 3: plan the execution sequence
+        with st.spinner("Agent 3: Planning execution sequence..."):
+            state = run_step("plan_sequence", state)
+        st.session_state["pipeline_state"] = state
+
+        sequence = state.get("block_sequence", [])
+        if sequence:
+            st.markdown(
+                '<div class="section-header">Planned Execution Sequence (Agent 3)</div>',
+                unsafe_allow_html=True,
+            )
+            reasoning = state.get("sequence_reasoning", "")
+            if reasoning:
+                st.caption(f"Reasoning: {reasoning}")
+            st.markdown(" → ".join(f"`{b}`" for b in sequence))
 
         if st.button("Run Pipeline", type="primary", width="stretch"):
             st.session_state["step"] = 3
@@ -298,10 +392,20 @@ def step_code_generation():
 
 # ── Step 3: Pipeline Execution ───────────────────────────────────────
 
+
 def step_pipeline_execution():
     state = st.session_state["pipeline_state"]
 
-    st.markdown('<div class="section-header">Pipeline Execution</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-header">Pipeline Execution</div>', unsafe_allow_html=True
+    )
+
+    sequence = state.get("block_sequence", [])
+    if sequence:
+        st.markdown("**Execution sequence:** " + " → ".join(f"`{b}`" for b in sequence))
+        reasoning = state.get("sequence_reasoning", "")
+        if reasoning:
+            st.caption(f"Agent 3 reasoning: {reasoning}")
 
     with st.spinner("Running transformation pipeline..."):
         state = run_step("run_pipeline", state)
@@ -316,6 +420,7 @@ def step_pipeline_execution():
 
 # ── Step 4: Results & Analytics ──────────────────────────────────────
 
+
 def step_results():
     state = st.session_state["pipeline_state"]
 
@@ -329,42 +434,57 @@ def step_results():
         return
 
     # DQ Cards
-    st.markdown('<div class="section-header">Data Quality Scores</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-header">Data Quality Scores</div>', unsafe_allow_html=True
+    )
     st.markdown(
         render_dq_cards(state.get("dq_score_pre", 0), state.get("dq_score_post", 0)),
         unsafe_allow_html=True,
     )
 
     # Summary cards
-    st.markdown('<div class="section-header">Pipeline Summary</div>', unsafe_allow_html=True)
-    generated = state.get("generated_functions", [])
+    st.markdown(
+        '<div class="section-header">Pipeline Summary</div>', unsafe_allow_html=True
+    )
+    generated = state.get("generated_blocks", [])
     n_generated = len([f for f in generated if f.get("validation_passed")])
     st.markdown(
         render_summary_cards(
             rows=len(working_df),
-            clusters=working_df["duplicate_group_id"].nunique() if "duplicate_group_id" in working_df.columns else len(working_df),
-            registry_hits=len(state.get("registry_hits", {})),
+            clusters=working_df["duplicate_group_id"].nunique()
+            if "duplicate_group_id" in working_df.columns
+            else len(working_df),
+            registry_hits=len(state.get("block_registry_hits", {})),
             functions_generated=n_generated,
         ),
         unsafe_allow_html=True,
     )
 
     # Block waterfall
-    st.markdown('<div class="section-header">Block Execution Trace</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-header">Block Execution Trace</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(
         render_block_waterfall(state.get("audit_log", [])),
         unsafe_allow_html=True,
     )
 
     # Enrichment breakdown
-    st.markdown('<div class="section-header">Enrichment Tier Breakdown</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-header">Enrichment Tier Breakdown</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(
         render_enrichment_breakdown(state.get("enrichment_stats", {})),
         unsafe_allow_html=True,
     )
 
     # Quarantine — HITL Gate 3
-    st.markdown('<div class="section-header">Post-Enrichment Quarantine</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-header">Post-Enrichment Quarantine</div>',
+        unsafe_allow_html=True,
+    )
     quarantine_reasons = state.get("quarantine_reasons", [])
     quarantined_df = state.get("quarantined_df")
     st.markdown(
@@ -376,12 +496,16 @@ def step_results():
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Accept Quarantine (exclude from output)", width="stretch"):
-                st.success(f"{len(quarantine_reasons)} rows excluded from final output.")
+                st.success(
+                    f"{len(quarantine_reasons)} rows excluded from final output."
+                )
         with col2:
             if st.button("Override: Include All Rows", width="stretch"):
                 # Merge quarantined rows back
                 if quarantined_df is not None and len(quarantined_df) > 0:
-                    state["working_df"] = pd.concat([working_df, quarantined_df], ignore_index=True)
+                    state["working_df"] = pd.concat(
+                        [working_df, quarantined_df], ignore_index=True
+                    )
                     state["quarantine_reasons"] = []
                     state["quarantined_df"] = pd.DataFrame()
                     st.session_state["pipeline_state"] = state
@@ -389,7 +513,9 @@ def step_results():
                     st.rerun()
 
     # Output preview
-    st.markdown('<div class="section-header">Output Preview</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-header">Output Preview</div>', unsafe_allow_html=True
+    )
     st.dataframe(working_df.head(100), width="stretch", height=400)
 
     # Download
@@ -407,8 +533,13 @@ def step_results():
 
     # Cross-run comparison — shown when more than one run is complete
     if len(st.session_state["runs"]) > 1:
-        st.markdown('<div class="section-header">Cross-Run Comparison</div>', unsafe_allow_html=True)
-        st.markdown(render_run_history(st.session_state["runs"]), unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-header">Cross-Run Comparison</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            render_run_history(st.session_state["runs"]), unsafe_allow_html=True
+        )
 
     if st.button("Run Another Dataset", type="primary", width="stretch"):
         st.session_state["step"] = 0

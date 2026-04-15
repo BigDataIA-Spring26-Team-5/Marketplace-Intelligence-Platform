@@ -26,9 +26,6 @@ BANNED_PATTERNS = [
     r"\bcompile\s*\(",
     r"\bglobals\s*\(",
     r"\bgetattr\s*\(",
-    r"\bnull\b",  # JavaScript null - not valid in Python
-    r"\btrue\b",  # JavaScript true - not valid in Python
-    r"\bfalse\b",  # JavaScript false - not valid in Python
 ]
 
 BANNED_RE = re.compile("|".join(BANNED_PATTERNS))
@@ -38,9 +35,14 @@ def is_code_safe(code: str) -> tuple[bool, str]:
     """
     Static analysis: check for banned patterns in generated code.
 
+    Strips single-line comments before scanning so that LLM-generated
+    comments containing words like 'null' don't trip patterns that are
+    only meaningful as actual code tokens.
+
     Returns (is_safe, reason).
     """
-    match = BANNED_RE.search(code)
+    scannable = re.sub(r"#[^\n]*", "", code)
+    match = BANNED_RE.search(scannable)
     if match:
         return False, f"Banned pattern found: {match.group()}"
     return True, "OK"

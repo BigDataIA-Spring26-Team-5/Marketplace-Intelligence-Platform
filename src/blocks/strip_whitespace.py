@@ -7,6 +7,9 @@ from src.blocks.base import Block
 class StripWhitespaceBlock(Block):
     name = "strip_whitespace"
     domain = "all"
+    description = "Strip leading/trailing whitespace from all string columns"
+    inputs = ["string columns"]
+    outputs = ["string columns (cleaned)"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()

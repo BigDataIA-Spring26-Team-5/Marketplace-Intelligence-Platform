@@ -70,6 +70,7 @@ Rules:
 - Rename columns to clean, standardized names (e.g., "brand_owner" -> "brand_name", "description" -> "product_name")
 - Drop columns that are metadata/IDs not useful for the product catalog (e.g., "fdc_id", "gtin_upc")
 - Keep columns relevant to product identity: name, brand, category, ingredients, serving info
+- NEVER map nutrient/nutrition measurement columns (e.g., "foodNutrients", "nutrients") to "ingredients". Nutrient arrays contain lab measurements (Protein, Fat, Vitamins), not ingredient lists. If no true ingredients text column exists, leave "ingredients" unmapped.
 
 Return ONLY a JSON object:
 {{
@@ -78,11 +79,54 @@ Return ONLY a JSON object:
     ...
   }},
   "dropped_columns": ["col1", "col2"],
-  "gaps": []
+  "gaps": [
+    // Leave empty on first run unless a source column requires type coercion to fit the unified name
+  ]
 }}"""
 
 
-CODEGEN_PROMPT = """You are a code generation agent. Generate a Python transformation function.
+SEQUENCE_PLANNING_PROMPT = """You are a pipeline sequence planner for a data enrichment ETL system.
+
+You are given a set of pipeline blocks that MUST ALL run. Your task is to determine the optimal execution order.
+
+## Domain
+{domain}
+
+## Source Schema (column names and types)
+{source_schema}
+
+## Schema Gaps and Registry Results
+{gap_summary}
+
+## Available Blocks (all must appear exactly once in your output)
+{blocks_metadata}
+
+## Ordering Rules
+- dq_score_pre MUST be first
+- dq_score_post MUST be last
+- Normalization blocks (strip_whitespace, lowercase_brand, remove_noise_words, strip_punctuation) must run before deduplication
+- extract_allergens must run before llm_enrich
+- Deduplication blocks (fuzzy_deduplicate, column_wise_merge, golden_record_select) must run after normalization
+- llm_enrich must run after deduplication
+- __generated__ (dynamically generated schema transformation blocks) should run after dq_score_pre but before normalization blocks
+- Use stage names: "dedup_stage" expands to [fuzzy_deduplicate, column_wise_merge, golden_record_select]
+- Use stage names: "enrich_stage" expands to [extract_allergens, llm_enrich]
+
+## Stage Expansion
+- dedup_stage = ["fuzzy_deduplicate", "column_wise_merge", "golden_record_select"]
+- enrich_stage = ["extract_allergens", "llm_enrich"]
+
+Return ONLY a JSON object with this exact structure:
+{{
+  "block_sequence": ["block_name_1", "block_name_2", ...],
+  "reasoning": "One sentence explaining the key ordering decision made"
+}}
+
+Include every block from the input list exactly once. Do not add or remove any blocks.
+You may use stage names (dedup_stage, enrich_stage) or expand them — either is valid."""
+
+
+CODEGEN_PROMPT = """You are a code generation agent. Generate a Python Block class for schema transformation.
 
 ## Gap to fill
 - Target column: {target_column}
@@ -90,21 +134,56 @@ CODEGEN_PROMPT = """You are a code generation agent. Generate a Python transform
 - Source column: {source_column}
 - Source type: {source_type}
 - Sample source values: {sample_values}
+- Domain: {domain}
+- Dataset name: {dataset_name}
+
+## Block Template to Follow
+```python
+import pandas as pd
+from src.blocks.base import Block
+
+
+class {block_name}Block(Block):
+    name = "{block_name}"
+    domain = "{domain}"
+    description = "Auto-generated: {description}"
+    inputs = {input_cols}
+    outputs = {output_cols}
+    
+    def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
+        df = df.copy()
+        # TODO: Implement transformation logic based on gap type
+        return df
+```
+
+## Gap Types (choose appropriate transformation):
+1. TYPE_CONVERSION: Cast source column to target type (e.g., object -> string, int64 -> date string)
+2. COLUMN_RENAME: Rename source column to target column name
+3. COLUMN_DROP: Drop a column not in output schema
+4. COLUMN_CREATE: Create new column with default/null value
+5. FORMAT_TRANSFORM: Transform format (e.g., date parsing, number parsing)
+
+## Safe NA Patterns (required — these prevent runtime TypeErrors)
+- Float/int COLUMN_CREATE: `df['col'] = float('nan')` — NEVER `pd.NA` then `.astype('float64')`
+- Float/int TYPE_CONVERSION: `pd.to_numeric(df['src'], errors='coerce')` — NEVER `.astype('float64')` directly
+- String cast: `.astype(str)` is safe
+- Boolean COLUMN_CREATE: `df['col'] = None`
 
 ## Constraints
-- Function must be self-contained (no external dependencies beyond: re, pandas, datetime, math, json)
-- Function signature: def transform_{target_column}(value):
-- Return Python's None (NOT JavaScript's null) on failure or empty input
-- Handle None/empty string inputs only
-- Output type must match target_type: {target_type}
+- Block must inherit from src.blocks.base.Block
+- Must implement run(self, df, config=None) -> pd.DataFrame
+- Use df.copy() to avoid modifying original
+- Handle None/NA values gracefully
 - Do NOT use: os, sys, subprocess, open, eval, exec, __import__
-- Do NOT use JavaScript 'null'. Only Python's None is valid.
-- Do NOT use bare except:. Use except Exception: instead.
 
-## Return ONLY the Python function code, nothing else. No markdown, no explanation."""
+## Naming Convention
+Block name format: {{Action}}_{{TargetColumn}}_{{DatasetName}}
+Example: CastToString_product_name_acme_data
+
+## Return ONLY the Python Block class code, nothing else. No markdown, no explanation."""
 
 
-CODEGEN_RETRY_PROMPT = """The previous function failed validation.
+CODEGEN_RETRY_PROMPT = """The previous Block class failed validation.
 
 ## Error
 {error}
@@ -115,6 +194,9 @@ CODEGEN_RETRY_PROMPT = """The previous function failed validation.
 ## Original requirements
 - Target column: {target_column}
 - Target type: {target_type}
+- Source column: {source_column}
+- Source type: {source_type}
 - Sample values: {sample_values}
+- Domain: {domain}
 
-Fix the function. Return ONLY the corrected Python function code."""
+## Fix the Block class. Return ONLY the corrected Python Block class code."""

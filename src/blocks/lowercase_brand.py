@@ -7,6 +7,9 @@ from src.blocks.base import Block
 class LowercaseBrandBlock(Block):
     name = "lowercase_brand"
     domain = "all"
+    description = "Normalize brand_name to lowercase"
+    inputs = ["brand_name"]
+    outputs = ["brand_name"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()

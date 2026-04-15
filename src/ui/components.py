@@ -142,8 +142,8 @@ def render_registry_results(hits: dict, misses: list[dict]) -> str:
 
 def render_code_review(func: dict) -> str:
     """Render a generated function for HITL code review."""
-    fn_name = func.get("function_name", "?")
-    code = html.escape(func.get("function_code", ""))
+    fn_name = func.get("block_name", "?")
+    code = html.escape(func.get("block_code", ""))
     passed = func.get("validation_passed", False)
     badge = '<span class="badge badge-pass">PASSED</span>' if passed else '<span class="badge badge-fail">FAILED</span>'
     sample_outputs = func.get("sample_outputs", {})

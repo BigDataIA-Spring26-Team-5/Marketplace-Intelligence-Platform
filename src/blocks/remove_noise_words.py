@@ -18,6 +18,9 @@ NOISE_PATTERNS = re.compile(
 class RemoveNoiseWordsBlock(Block):
     name = "remove_noise_words"
     domain = "all"
+    description = "Remove legal suffixes and noise words from product_name and brand_name"
+    inputs = ["product_name", "brand_name"]
+    outputs = ["product_name", "brand_name"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()

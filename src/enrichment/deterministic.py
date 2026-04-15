@@ -54,18 +54,20 @@ def deterministic_enrich(
     df: pd.DataFrame,
     enrich_cols: list[str],
     needs_enrichment: pd.Series,
-) -> tuple[pd.DataFrame, pd.Series]:
+) -> tuple[pd.DataFrame, pd.Series, dict]:
     """
     Apply rule-based enrichment.
 
-    Returns (modified_df, updated_needs_enrichment_mask).
+    Returns (modified_df, updated_needs_enrichment_mask, stats).
     """
     # Build a text field to scan against (for primary_category, is_organic, allergens)
     text_cols = ["product_name", "ingredients", "category"]
     existing_text_cols = [c for c in text_cols if c in df.columns]
 
     if not existing_text_cols:
-        return df, needs_enrichment
+        return df, needs_enrichment, {"resolved": 0}
+
+    before_count = int(needs_enrichment.sum())
 
     combined_text = df[existing_text_cols].fillna("").astype(str).agg(" ".join, axis=1)
 
@@ -98,6 +100,8 @@ def deterministic_enrich(
                     tags.append(tag)
             if tags:
                 df.at[idx, "dietary_tags"] = ", ".join(tags)
+            else:
+                df.at[idx, "dietary_tags"] = ""
 
     # is_organic
     if "is_organic" in enrich_cols:
@@ -108,4 +112,5 @@ def deterministic_enrich(
 
     # Recalculate needs_enrichment
     needs_enrichment = df[enrich_cols].isna().any(axis=1)
-    return df, needs_enrichment
+    resolved = before_count - int(needs_enrichment.sum())
+    return df, needs_enrichment, {"resolved": resolved}
