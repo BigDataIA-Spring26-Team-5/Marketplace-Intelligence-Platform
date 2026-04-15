@@ -68,9 +68,10 @@ Thumbs.db
 .idea/
 
 # =========================
-# Notebooks (if you add later)
+# Claude files
 # =========================
-.ipynb_checkpoints/
+.claude/
+CLAUDE.MD
 
 # =========================
 # Misc
