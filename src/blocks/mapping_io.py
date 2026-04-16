@@ -12,8 +12,60 @@ logger = logging.getLogger(__name__)
 
 _GENERATED_DIR = Path(__file__).resolve().parent / "generated"
 
-VALID_ACTIONS = {"set_null", "set_default", "type_cast", "format_transform"}
-REQUIRED_FIELDS = {"target", "type", "action"}
+# All actions supported by DynamicMappingBlock
+VALID_ACTIONS = {
+    # Scalar creation
+    "set_null",
+    "set_default",
+    # Type ops
+    "type_cast",
+    "rename",
+    "drop_column",
+    # Format ops
+    "format_transform",
+    "parse_date",
+    "to_lowercase",
+    "to_uppercase",
+    "strip_whitespace",
+    "regex_replace",
+    "regex_extract",
+    "truncate_string",
+    "pad_string",
+    "unit_normalize",
+    # Split ops
+    "json_array_extract_multi",
+    "split_column",
+    "xml_extract",
+    # Unify ops
+    "coalesce",
+    "concat_columns",
+    "string_template",
+    # Derive ops
+    "extract_json_field",
+    "conditional_map",
+    "expression",
+    "contains_flag",
+}
+
+# Actions that require a 'source' field (single source column)
+_REQUIRE_SOURCE = {
+    "type_cast", "rename", "format_transform",
+    "parse_date", "to_lowercase", "to_uppercase", "strip_whitespace",
+    "regex_replace", "regex_extract", "truncate_string", "pad_string",
+    "unit_normalize", "xml_extract", "extract_json_field",
+    "conditional_map", "contains_flag",
+}
+
+# Actions that require a 'sources' field (list of source columns)
+_REQUIRE_SOURCES_LIST = {"coalesce", "concat_columns"}
+
+# Actions that require 'target_columns' dict (SPLIT multi-output)
+_REQUIRE_TARGET_COLUMNS = {"json_array_extract_multi"}
+
+# Actions that have no target column (structural)
+_NO_TARGET_REQUIRED = {"drop_column"}
+
+REQUIRED_FIELDS = {"action"}  # minimal — 'target' checked per-action below
 
 
 def write_mapping_yaml(
@@ -27,8 +79,7 @@ def write_mapping_yaml(
         domain: Pipeline domain (e.g., "nutrition").
         dataset_name: Source dataset stem (e.g., "usda_sample_raw").
         operations: List of operation dicts, each with at least
-            {target, type, action} and optionally {source, source_type,
-            status, reason, default_value, transform}.
+            {action} and contextual fields depending on the action type.
 
     Returns:
         Path to the written YAML file.
@@ -65,20 +116,34 @@ def read_mapping_yaml(yaml_path: str | Path) -> list[dict[str, Any]]:
         raise ValueError(f"Invalid mapping YAML: 'column_operations' must be a list in {path}")
 
     for i, op in enumerate(operations):
-        missing = REQUIRED_FIELDS - set(op.keys())
-        if missing:
+        if "action" not in op:
+            raise ValueError(f"Operation {i} in {path} missing required field: 'action'")
+
+        action = op["action"]
+        if action not in VALID_ACTIONS:
             raise ValueError(
-                f"Operation {i} in {path} missing required fields: {missing}"
+                f"Operation {i} in {path} has invalid action '{action}'. "
+                f"Valid actions: {sorted(VALID_ACTIONS)}"
             )
-        if op["action"] not in VALID_ACTIONS:
+
+        # Per-action required field checks
+        if action in _REQUIRE_SOURCE and "source" not in op:
             raise ValueError(
-                f"Operation {i} in {path} has invalid action '{op['action']}'. "
-                f"Valid actions: {VALID_ACTIONS}"
+                f"Operation {i} in {path}: action '{action}' requires a 'source' field"
             )
-        if op["action"] == "type_cast" and "source" not in op:
+        if action in _REQUIRE_SOURCES_LIST and "sources" not in op:
             raise ValueError(
-                f"Operation {i} in {path}: type_cast requires a 'source' field"
+                f"Operation {i} in {path}: action '{action}' requires a 'sources' list"
             )
+        if action in _REQUIRE_TARGET_COLUMNS and "target_columns" not in op:
+            raise ValueError(
+                f"Operation {i} in {path}: action '{action}' requires a 'target_columns' dict"
+            )
+        if action not in _NO_TARGET_REQUIRED and action not in _REQUIRE_TARGET_COLUMNS:
+            if "target" not in op:
+                raise ValueError(
+                    f"Operation {i} in {path}: action '{action}' requires a 'target' field"
+                )
 
     return operations
 
@@ -101,8 +166,8 @@ def merge_hitl_decisions(
     """
     updated = []
     for op in operations:
-        target = op["target"]
-        decision = decisions.get(target)
+        target = op.get("target")
+        decision = decisions.get(target) if target else None
         if decision is None:
             updated.append(op)
             continue

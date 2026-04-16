@@ -1,70 +1,106 @@
-"""Prompt templates for Agent 1 (Orchestrator) and Agent 2 (Code Generator)."""
+"""Prompt templates for Agent 1 (Orchestrator) and Agent 3 (Sequence Planner)."""
 
 SCHEMA_ANALYSIS_PROMPT = """You are a schema analysis agent for a data enrichment pipeline.
 
 You are given:
-1. An incoming data source's schema (column names, types, sample values, null rates)
-2. A unified output schema that all data sources must conform to
+1. An incoming data source's schema — column names, types, null rates, sample values, AND structural metadata (detected_structure, inferred_keys, inferred_value_types, parsed_sample).
+2. Optional dataset-level metadata (__meta__) with numeric_columns, structured_columns, candidate_unify_groups.
+3. A unified output schema that all data sources must conform to.
 
-Your task: For each column in the unified schema, determine how to map it from the incoming source.
+Your task: For each column in the unified schema, determine how to map it from the incoming source using the 8-primitive taxonomy below.
 
 ## Incoming Source Schema
 {source_schema}
+
+## Dataset Metadata
+{source_meta}
 
 ## Unified Output Schema
 {unified_schema}
 
 ## Semantic Mapping Examples
 Map source columns to unified columns based on SEMANTIC meaning, not just name:
-- "product_description" → "product_name" (both describe product name)
-- "item_name" → "product_name"
-- "name" → "product_name"
-- "recalling_firm" → "brand_owner" (firm that owns/recalls the product)
-- "manufacturer" → "brand_owner"
+- "product_description" / "item_name" / "name" → "product_name"
+- "recalling_firm" / "manufacturer" → "brand_owner"
 - "brand" → "brand_name"
-- "category" → "category" (same meaning)
-- "product_type" → "category" (type is a category)
-- "recall_initiation_date" → "published_date" (date field)
-- "report_date" → "published_date" (date field)
-- "code_info" → "data_source" (code/source info)
-- "event_id" → "data_source" (ID as source reference)
+- "product_type" → "category"
+- "recall_initiation_date" / "report_date" → "published_date"
+- "event_id" / "code_info" → "data_source"
 
-## Instructions
-For each unified schema column (excluding "computed" and "enrichment" columns), classify into one of four categories:
+## 8-Primitive Taxonomy
 
-1. **MAP**: A source column maps semantically with no transformation needed. Include in column_mapping.
-2. **TYPE_CAST**: A source column maps semantically but needs a type conversion (e.g., int64 → string, object → float). Include in derivable_gaps with action "TYPE_CAST".
-3. **DERIVE**: The unified column can be computed from one or more existing source columns via transformation logic (e.g., parsing a description, combining fields). Include in derivable_gaps with action "DERIVE".
-4. **MISSING**: No source column exists and the column CANNOT be derived from any combination of source columns. The data simply does not exist in this source. Include in missing_columns with a reason explaining why.
+Use EXACTLY these primitive names. Each unified column must appear in exactly one output list.
 
-CRITICAL: If a unified column has no plausible source column AND cannot be derived from any combination of source columns, classify it as MISSING — do NOT classify it as a gap with a null source_column. The pipeline cannot invent data that does not exist.
+| Primitive | When to use | Required fields |
+|-----------|-------------|-----------------|
+| RENAME    | Source col maps semantically, same data, no type change needed | source_column, target_column |
+| CAST      | Source col maps semantically but needs type conversion (e.g. int64→string) | source_column, target_column, target_type, source_type, action (one of: type_cast) |
+| FORMAT    | Source col needs value transformation (date parsing, case change, regex, etc.) | source_column, target_column, target_type, action (one of: parse_date, to_lowercase, to_uppercase, strip_whitespace, regex_replace, regex_extract, truncate_string, pad_string, unit_normalize, format_transform) |
+| DELETE    | Source col has no place in unified schema — drop it | source_column |
+| ADD       | No source data exists — create null or constant column | target_column, target_type, action (one of: set_null, set_default), optional: default_value |
+| SPLIT     | 1 source col → N target cols (JSON array, delimited string) | source_column, action (one of: json_array_extract_multi, split_column, xml_extract), target_columns dict |
+| UNIFY     | N source cols → 1 target col (first-non-null, concatenate, template) | sources list, target_column, action (one of: coalesce, concat_columns, string_template) |
+| DERIVE    | Complex extraction or conditional logic (keyword→bool, JSON field extract, arithmetic) | source_column (or sources list), target_column, target_type, action (one of: extract_json_field, conditional_map, expression, contains_flag) |
 
-Return ONLY a JSON object with this exact structure:
+## SPLIT action details
+For json_array_extract_multi, target_columns is a dict:
+  "target_columns": {{
+    "col_name": {{"key": "field_in_array", "filter": {{"name": "Energy"}}, "type": "float"}},
+    "col_name2": {{"key": "other_field", "join_all": true, "type": "string"}}
+  }}
+
+## Important rules
+- RENAME goes in column_mapping (not operations[]).
+- Everything else goes in operations[].
+- If a unified column truly has no source data and cannot be derived → put it in unresolvable[] with a reason and fallback: "set_null".
+- Do NOT classify as unresolvable if any source column could produce the data with a SPLIT/DERIVE action.
+- NEVER map nutrient arrays (foodNutrients) to "ingredients" — nutrients are lab measurements, not ingredient lists.
+- For enrichment/computed columns (allergens, primary_category, dietary_tags, is_organic, dq_score_*, dq_delta) — skip entirely.
+
+## Return ONLY a JSON object with this exact structure:
 {{
   "column_mapping": {{
-    "source_col_name": "unified_col_name",
+    "source_col": "unified_col",
     ...
   }},
-  "derivable_gaps": [
+  "operations": [
     {{
-      "target_column": "unified_col_name",
+      "primitive": "CAST",
+      "source_column": "fdcId",
+      "target_column": "data_source",
       "target_type": "string",
-      "source_column": "source_col_name",
-      "source_type": "source_type",
-      "action": "TYPE_CAST",
-      "sample_values": ["val1", "val2"]
+      "source_type": "int64",
+      "action": "type_cast"
+    }},
+    {{
+      "primitive": "ADD",
+      "target_column": "brand_name",
+      "target_type": "string",
+      "action": "set_null"
+    }},
+    {{
+      "primitive": "SPLIT",
+      "source_column": "foodNutrients",
+      "action": "json_array_extract_multi",
+      "target_columns": {{
+        "serving_size": {{"key": "amount", "filter": {{"name": "Energy"}}, "type": "float"}},
+        "serving_size_unit": {{"key": "unitName", "filter": {{"name": "Energy"}}, "type": "string"}}
+      }}
+    }},
+    {{
+      "primitive": "DELETE",
+      "source_column": "gtinUpc"
     }}
   ],
-  "missing_columns": [
+  "unresolvable": [
     {{
-      "target_column": "unified_col_name",
-      "target_type": "string",
-      "reason": "Source dataset does not contain this information"
+      "target_column": "ingredients",
+      "reason": "No ingredient text exists in source — nutrient array is not a substitute",
+      "fallback": "set_null"
     }}
   ]
-}}
-
-For enrichment/computed columns (allergens, primary_category, dietary_tags, is_organic, dq_score_*, dq_delta), skip entirely — they are handled downstream."""
+}}\
+"""
 
 
 FIRST_RUN_SCHEMA_PROMPT = """You are a schema analysis agent. This is the FIRST data source for this pipeline.
@@ -138,72 +174,3 @@ Include every block from the input list exactly once. Do not add or remove any b
 You may use stage names (dedup_stage, enrich_stage) or expand them — either is valid."""
 
 
-CODEGEN_PROMPT = """You are a code generation agent. Generate a Python Block class for a complex schema transformation.
-
-NOTE: Simple operations (type casts, null column creation, format transforms) are handled declaratively via YAML.
-You are only called for DERIVE gaps — columns that must be computed from one or more existing source columns using non-trivial logic.
-
-## Gap to fill
-- Target column: {target_column}
-- Target type: {target_type}
-- Source column(s): {source_column}
-- Source type: {source_type}
-- Sample source values: {sample_values}
-- Domain: {domain}
-- Dataset name: {dataset_name}
-
-## Block Template to Follow
-```python
-import pandas as pd
-from src.blocks.base import Block
-
-
-class {block_name}Block(Block):
-    name = "{block_name}"
-    domain = "{domain}"
-    description = "Auto-generated: {description}"
-    inputs = {input_cols}
-    outputs = {output_cols}
-
-    def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
-        df = df.copy()
-        # TODO: Implement derivation logic
-        return df
-```
-
-## Safe NA Patterns (required — these prevent runtime TypeErrors)
-- Float/int creation: `df['col'] = float('nan')` — NEVER `pd.NA` then `.astype('float64')`
-- Numeric conversion: `pd.to_numeric(df['src'], errors='coerce')` — NEVER `.astype('float64')` directly
-- String cast: `.astype(str)` is safe but NEVER cast None to str (produces literal "None")
-- Boolean: `df['col'] = None`
-
-## Constraints
-- Block must inherit from src.blocks.base.Block
-- Must implement run(self, df, config=None) -> pd.DataFrame
-- Use df.copy() to avoid modifying original
-- Handle None/NA values gracefully
-- Do NOT use: os, sys, subprocess, open, eval, exec, __import__
-
-## Naming Convention
-Block name format: DERIVE_{{TargetColumn}}_{{DatasetName}}
-
-## Return ONLY the Python Block class code, nothing else. No markdown, no explanation."""
-
-
-CODEGEN_RETRY_PROMPT = """The previous Block class failed validation.
-
-## Error
-{error}
-
-## Previous code
-{previous_code}
-
-## Original requirements
-- Target column: {target_column}
-- Target type: {target_type}
-- Source column: {source_column}
-- Source type: {source_type}
-- Sample values: {sample_values}
-- Domain: {domain}
-
-## Fix the Block class. Return ONLY the corrected Python Block class code."""

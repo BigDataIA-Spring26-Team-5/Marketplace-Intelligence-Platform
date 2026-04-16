@@ -1,0 +1,40 @@
+column_operations:
+- target: brand_name
+  type: string
+  action: set_null
+  status: missing
+  reason: Source dataset does not contain brand name information; only has recalling
+    firm (owner) and product description
+- target: ingredients
+  type: string
+  action: set_null
+  status: missing
+  reason: Source dataset does not contain structured ingredient lists; only has product
+    descriptions and recall reasons that may mention some ingredients
+- target: serving_size
+  type: float
+  action: set_null
+  status: missing
+  reason: Source dataset does not contain serving size information; product descriptions
+    mention net weights but not standardized serving sizes
+- target: serving_size_unit
+  type: string
+  action: set_null
+  status: missing
+  reason: Source dataset does not contain serving size unit information; product descriptions
+    mention net weight units but not serving-specific units
+- target: published_date
+  type: string
+  action: type_cast
+  source: recall_initiation_date
+  source_type: int64
+- target: data_source
+  type: string
+  action: type_cast
+  source: event_id
+  source_type: int64
+- target: category
+  type: string
+  action: type_cast
+  source: product_type
+  source_type: object

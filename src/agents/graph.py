@@ -17,11 +17,6 @@ from src.agents.orchestrator import (
 )
 from src.agents.prompts import SEQUENCE_PLANNING_PROMPT
 from src.models.llm import call_llm_json, get_orchestrator_llm
-from src.agents.code_generator import (
-    generate_code_node,
-    validate_code_node,
-    register_blocks_node,
-)
 from src.registry.block_registry import BlockRegistry
 from src.pipeline.runner import PipelineRunner
 
@@ -62,10 +57,8 @@ def plan_sequence_node(state: PipelineState) -> dict:
     blocks_metadata = block_reg.get_blocks_with_metadata(pool)
 
     generated_block_prefixes = (
-        "TYPE_CONVERSION_",
         "COLUMN_RENAME_",
         "COLUMN_DROP_",
-        "COLUMN_CREATE_",
         "FORMAT_TRANSFORM_",
         "DYNAMIC_MAPPING_",
         "DERIVE_",
@@ -262,42 +255,6 @@ def save_output_node(state: PipelineState) -> dict:
     return {"output_path": str(output_path)}
 
 
-# ── Routing functions ────────────────────────────────────────────────
-
-
-def route_after_registry_check(state: PipelineState) -> str:
-    misses = state.get("registry_misses", [])
-    # Only route to Agent 2 if there are DERIVE gaps (complex derivations).
-    # Simple TYPE_CAST/FORMAT_TRANSFORM/MISSING are handled by YAML.
-    derive_misses = [m for m in misses if m.get("action") == "DERIVE"]
-    if derive_misses:
-        logger.info(f"{len(derive_misses)} DERIVE misses — routing to code generator")
-        return "generate_code"
-    if misses:
-        logger.info(
-            f"{len(misses)} non-DERIVE misses remaining (will be handled by YAML) "
-            "— routing to sequence planner"
-        )
-    else:
-        logger.info("All gaps covered by registry/YAML — routing to sequence planner")
-    return "plan_sequence"
-
-
-def route_after_validation(state: PipelineState) -> str:
-    generated = state.get("generated_blocks", [])
-    retry_count = state.get("retry_count", 0)
-    max_retries = state.get("max_retries", 2)
-
-    all_passed = all(b.get("validation_passed", False) for b in generated)
-
-    if all_passed:
-        return "register_blocks"
-    if retry_count < max_retries:
-        logger.info(f"Validation failed, retrying ({retry_count}/{max_retries})")
-        return "generate_code"
-    logger.warning("Max retries reached — registering partial results")
-    return "register_blocks"
-
 
 # ── Step-by-step runner (for Streamlit UI) ───────────────────────────
 
@@ -305,9 +262,6 @@ NODE_MAP = {
     "load_source": load_source_node,
     "analyze_schema": analyze_schema_node,
     "check_registry": check_registry_node,
-    "generate_code": generate_code_node,
-    "validate_code": validate_code_node,
-    "register_blocks": register_blocks_node,
     "plan_sequence": plan_sequence_node,
     "run_pipeline": run_pipeline_node,
     "save_output": save_output_node,
@@ -337,31 +291,13 @@ def build_graph() -> StateGraph:
     graph.add_node("load_source", load_source_node)
     graph.add_node("analyze_schema", analyze_schema_node)
     graph.add_node("check_registry", check_registry_node)
-    graph.add_node("generate_code", generate_code_node)
-    graph.add_node("validate_code", validate_code_node)
-    graph.add_node("register_blocks", register_blocks_node)
     graph.add_node("plan_sequence", plan_sequence_node)
     graph.add_node("run_pipeline", run_pipeline_node)
     graph.add_node("save_output", save_output_node)
 
     graph.add_edge("load_source", "analyze_schema")
     graph.add_edge("analyze_schema", "check_registry")
-
-    graph.add_conditional_edges(
-        "check_registry",
-        route_after_registry_check,
-        {"generate_code": "generate_code", "plan_sequence": "plan_sequence"},
-    )
-
-    graph.add_edge("generate_code", "validate_code")
-
-    graph.add_conditional_edges(
-        "validate_code",
-        route_after_validation,
-        {"register_blocks": "register_blocks", "generate_code": "generate_code"},
-    )
-
-    graph.add_edge("register_blocks", "plan_sequence")
+    graph.add_edge("check_registry", "plan_sequence")
     graph.add_edge("plan_sequence", "run_pipeline")
     graph.add_edge("run_pipeline", "save_output")
     graph.add_edge("save_output", END)

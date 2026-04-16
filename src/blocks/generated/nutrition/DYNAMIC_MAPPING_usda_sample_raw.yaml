@@ -3,29 +3,31 @@ column_operations:
   type: string
   action: set_null
   status: missing
-  reason: Source dataset contains brand owner but not specific brand name; cannot
-    be reliably derived from existing columns
+  reason: not in source
 - target: ingredients
   type: string
   action: set_null
   status: missing
-  reason: Source dataset contains nutrient information but not ingredient lists; cannot
-    be derived from nutrient data
+  reason: no ingredients
 - target: category
   type: string
   action: set_null
   status: missing
-  reason: Source dataset does not contain product category classification; cannot
-    be reliably derived from description alone
+  reason: not in source
 - target: serving_size
   type: float
   action: set_null
   status: missing
-  reason: Source dataset contains nutrient amounts per 100g/serving but not explicit
-    serving size values; cannot be derived without standardization
+  reason: not in source
 - target: serving_size_unit
   type: string
   action: set_null
   status: missing
-  reason: Source dataset contains nutrient units but not serving size units; cannot
-    be derived without standardization
+  reason: not in source
+- target: data_source
+  type: string
+  action: type_cast
+  source: fdcId
+  source_type: int64
+- source: gtinUpc
+  action: drop_column

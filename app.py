@@ -34,7 +34,6 @@ from src.ui.components import (
     render_missing_columns,
     render_yaml_review,
     render_registry_results,
-    render_code_review,
     render_dq_cards,
     render_summary_cards,
     render_block_waterfall,
@@ -50,7 +49,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 STEP_LABELS = [
     "Select Source",
     "Schema Analysis",
-    "Code Generation",
+    "Schema Mapping",
     "Pipeline Execution",
     "Results",
 ]
@@ -88,8 +87,6 @@ def _save_run_summary(state: dict) -> None:
     """Append a summary of the current run to st.session_state['runs'], once per run."""
     if state.get("_run_saved"):
         return
-    generated = state.get("generated_blocks", [])
-    n_gen = len([f for f in generated if f.get("validation_passed")])
     working_df = state.get("working_df")
     st.session_state["runs"].append(
         {
@@ -102,7 +99,7 @@ def _save_run_summary(state: dict) -> None:
             "dq_delta": state.get("dq_score_post", 0) - state.get("dq_score_pre", 0),
             "gaps": len(state.get("gaps", [])),
             "registry_hits": len(state.get("block_registry_hits", {})),
-            "functions_generated": n_gen,
+            "functions_generated": len(state.get("operations", [])),
             "schema_existed": state.get("unified_schema_existed", False),
         }
     )
@@ -331,26 +328,27 @@ def step_schema_analysis():
                 st.rerun()
 
 
-# ── Step 2: Registry Check + Code Generation + HITL Code Review ─────
+# ── Step 2: Registry Check + Schema Mapping Review ───────────────────
 
 
 def step_code_generation():
+    """Step 2: Schema Mapping — registry check, YAML generation, sequence planning."""
     state = st.session_state["pipeline_state"]
 
-    with st.spinner("Checking function registry..."):
+    with st.spinner("Checking block registry and building schema mapping..."):
         state = run_step("check_registry", state)
 
     st.session_state["pipeline_state"] = state
 
     hits = state.get("block_registry_hits", {})
-    misses = state.get("registry_misses", [])
-    derive_misses = [m for m in misses if m.get("action") == "DERIVE"]
+    unresolvable = state.get("unresolvable_gaps", [])
+    mapping_warnings = state.get("mapping_warnings", [])
 
     st.markdown(
         '<div class="section-header">Block Registry Lookup</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(render_registry_results(hits, derive_misses), unsafe_allow_html=True)
+    st.markdown(render_registry_results(hits, []), unsafe_allow_html=True)
 
     # Show YAML mapping review if a YAML was generated
     yaml_path = state.get("mapping_yaml_path")
@@ -366,107 +364,57 @@ def step_code_generation():
         except Exception as e:
             st.warning(f"Could not read YAML mapping: {e}")
 
-    if derive_misses:
-        st.markdown(
-            '<div class="section-header">Code Generation (Agent 2)</div>',
-            unsafe_allow_html=True,
+    # Show any unresolvable gaps as informational warnings
+    for ur in unresolvable:
+        st.warning(
+            f"Column `{ur.get('target_column', '?')}` is unresolvable: "
+            f"{ur.get('reason', 'no source data')} — will be set to null."
         )
 
-        with st.spinner(f"Generating {len(derive_misses)} transform function(s) via LLM..."):
-            state = run_step("generate_code", state)
-            # Run validation pass-through
-            state = run_step("validate_code", state)
+    for warning in mapping_warnings:
+        st.warning(warning)
 
-        st.session_state["pipeline_state"] = state
+    # Show registry hits and enrichment info
+    enrichment_cols = state.get("enrichment_columns_to_generate", [])
+    block_hits_map = state.get("block_registry_hits", {})
 
-        # HITL Gate 2: Review each generated function
-        generated = state.get("generated_blocks", [])
-        for func in generated:
-            st.markdown(render_code_review(func), unsafe_allow_html=True)
-
-        st.markdown("---")
-
-        # Check if any failed
-        failed = [f for f in generated if not f.get("validation_passed")]
-        if failed:
-            st.warning(
-                f"{len(failed)} function(s) failed validation. You can approve the passing ones or regenerate."
-            )
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if st.button(
-                "Approve & Register Functions", type="primary", width="stretch"
-            ):
-                with st.spinner("Registering functions..."):
-                    state = run_step("register_blocks", state)
-                with st.spinner("Agent 3: Planning execution sequence..."):
-                    state = run_step("plan_sequence", state)
-                st.session_state["pipeline_state"] = state
-                st.session_state["step"] = 3
-                st.rerun()
-        with col2:
-            if st.button("Regenerate Failed", width="stretch"):
-                with st.spinner("Regenerating..."):
-                    state = run_step("generate_code", state)
-                    state = run_step("validate_code", state)
-                st.session_state["pipeline_state"] = state
-                st.rerun()
-        with col3:
-            if st.button("Skip Code Gen & Run Pipeline", width="stretch"):
-                state["generated_blocks"] = []
-                with st.spinner("Agent 3: Planning execution sequence..."):
-                    state = run_step("plan_sequence", state)
-                st.session_state["pipeline_state"] = state
-                st.session_state["step"] = 3
-                st.rerun()
-    else:
-        # No misses — all gaps covered by registry (or no gaps)
-        pipeline_state = st.session_state["pipeline_state"]
-        enrichment_cols = pipeline_state.get("enrichment_columns_to_generate", [])
-        block_hits_map = pipeline_state.get("block_registry_hits", {})
-        mapping_warnings = pipeline_state.get("mapping_warnings", [])
-
-        for warning in mapping_warnings:
-            st.warning(warning)
-
-        if hits or block_hits_map:
-            st.markdown(render_pipeline_remembered(hits), unsafe_allow_html=True)
-            if block_hits_map:
-                st.info(
-                    "Pipeline blocks will handle: "
-                    + ", ".join(
-                        f"`{col}` via `{blk}`" for col, blk in block_hits_map.items()
-                    )
-                )
-
-        if enrichment_cols:
+    if hits or block_hits_map:
+        st.markdown(render_pipeline_remembered(hits), unsafe_allow_html=True)
+        if block_hits_map:
             st.info(
-                f"{len(enrichment_cols)} enrichment column(s) will be generated by pipeline "
-                f"blocks: {', '.join(f'`{c}`' for c in enrichment_cols)}"
+                "Pipeline blocks will handle: "
+                + ", ".join(
+                    f"`{col}` via `{blk}`" for col, blk in block_hits_map.items()
+                )
             )
-        elif not hits and not block_hits_map:
-            st.info("No schema gaps detected. Proceeding to pipeline execution.")
 
-        # Agent 3: plan the execution sequence
-        with st.spinner("Agent 3: Planning execution sequence..."):
-            state = run_step("plan_sequence", state)
-        st.session_state["pipeline_state"] = state
+    if enrichment_cols:
+        st.info(
+            f"{len(enrichment_cols)} enrichment column(s) will be generated by pipeline "
+            f"blocks: {', '.join(f'`{c}`' for c in enrichment_cols)}"
+        )
+    elif not hits and not block_hits_map and not yaml_path:
+        st.info("No schema gaps detected. Proceeding to pipeline execution.")
 
-        sequence = state.get("block_sequence", [])
-        if sequence:
-            st.markdown(
-                '<div class="section-header">Planned Execution Sequence (Agent 3)</div>',
-                unsafe_allow_html=True,
-            )
-            reasoning = state.get("sequence_reasoning", "")
-            if reasoning:
-                st.caption(f"Reasoning: {reasoning}")
-            st.markdown(" → ".join(f"`{b}`" for b in sequence))
+    # Agent 3: plan the execution sequence
+    with st.spinner("Agent 3: Planning execution sequence..."):
+        state = run_step("plan_sequence", state)
+    st.session_state["pipeline_state"] = state
 
-        if st.button("Run Pipeline", type="primary", width="stretch"):
-            st.session_state["step"] = 3
-            st.rerun()
+    sequence = state.get("block_sequence", [])
+    if sequence:
+        st.markdown(
+            '<div class="section-header">Planned Execution Sequence (Agent 3)</div>',
+            unsafe_allow_html=True,
+        )
+        reasoning = state.get("sequence_reasoning", "")
+        if reasoning:
+            st.caption(f"Reasoning: {reasoning}")
+        st.markdown(" → ".join(f"`{b}`" for b in sequence))
+
+    if st.button("Run Pipeline", type="primary", width="stretch"):
+        st.session_state["step"] = 3
+        st.rerun()
 
 
 # ── Step 3: Pipeline Execution ───────────────────────────────────────
@@ -525,8 +473,14 @@ def step_results():
     st.markdown(
         '<div class="section-header">Pipeline Summary</div>', unsafe_allow_html=True
     )
-    generated = state.get("generated_blocks", [])
-    n_generated = len([f for f in generated if f.get("validation_passed")])
+    yaml_op_count = 0
+    yaml_path = state.get("mapping_yaml_path")
+    if yaml_path:
+        try:
+            from src.blocks.mapping_io import read_mapping_yaml
+            yaml_op_count = len(read_mapping_yaml(yaml_path))
+        except Exception:
+            pass
     st.markdown(
         render_summary_cards(
             rows=len(working_df),
@@ -534,7 +488,7 @@ def step_results():
             if "duplicate_group_id" in working_df.columns
             else len(working_df),
             registry_hits=len(state.get("block_registry_hits", {})),
-            functions_generated=n_generated,
+            functions_generated=yaml_op_count,
         ),
         unsafe_allow_html=True,
     )

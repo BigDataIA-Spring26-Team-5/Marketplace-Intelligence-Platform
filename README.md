@@ -1,6 +1,6 @@
 # Schema-Driven Self-Extending ETL Pipeline
 
-A two-agent, LangGraph-orchestrated ETL pipeline that ingests heterogeneous food product data sources, automatically detects schema gaps, generates transformation code via LLM, and produces a unified product catalog enriched with categories, allergens, dietary tags, and data quality scores.
+A three-agent, LangGraph-orchestrated ETL pipeline that ingests heterogeneous food product data sources, automatically detects schema gaps, resolves simple gaps declaratively via YAML mappings, generates Python transformation code via LLM for complex derivations, and produces a unified product catalog enriched with categories, allergens, dietary tags, and data quality scores.
 
 ---
 
@@ -54,7 +54,7 @@ A two-agent, LangGraph-orchestrated ETL pipeline that ingests heterogeneous food
 
 ## Architecture Overview
 
-The pipeline follows a **two-agent architecture** built on [LangGraph](https://github.com/langchain-ai/langgraph):
+The pipeline follows a **three-agent architecture** built on [LangGraph](https://github.com/langchain-ai/langgraph):
 
 ```
                          +-------------------+
@@ -69,37 +69,45 @@ The pipeline follows a **two-agent architecture** built on [LangGraph](https://g
                     |   Gap Detection)           |
                     +-------------+-------------+
                                   |
-                         +--------+--------+
-                         | Function        |
-                         | Registry Check  |
-                         +--------+--------+
+                    +-------------+-------------+
+                    |  Registry Check +          |
+                    |  YAML Mapping Build        |
+                    |  (simple gaps → YAML;      |
+                    |   DERIVE gaps → misses)    |
+                    +-------------+-------------+
                                   |
                      +------------+------------+
                      |                         |
-               All gaps covered          Gaps remain
+               No DERIVE gaps          DERIVE gaps remain
                      |                         |
                      |            +------------+------------+
                      |            |  Agent 2 — Code Gen     |
-                     |            |  (LLM generates         |
-                     |            |   transform functions)   |
+                     |            |  (LLM generates Python  |
+                     |            |   blocks for DERIVE gaps)|
                      |            +------------+------------+
                      |                         |
                      |            +------------+------------+
                      |            |  Sandbox Validation     |
-                     |            |  (static analysis +     |
-                     |            |   subprocess execution) |
+                     |            |  (static + subprocess)  |
                      |            +------------+------------+
                      |                         |
                      |            +------------+------------+
-                     |            |  Register Functions     |
+                     |            |  Register Blocks        |
                      |            +------------+------------+
                      |                         |
                      +------------+------------+
                                   |
                     +-------------+-------------+
+                    |  Agent 3 — Sequence        |
+                    |  Planner (LLM orders       |
+                    |  block execution)          |
+                    +-------------+-------------+
+                                  |
+                    +-------------+-------------+
                     |  Pipeline Execution        |
-                    |  (13 transformation blocks  |
-                    |   + generated functions)    |
+                    |  (pre-built blocks +       |
+                    |   YAML mapping block +     |
+                    |   generated DERIVE blocks) |
                     +-------------+-------------+
                                   |
                     +-------------+-------------+
@@ -117,10 +125,10 @@ The pipeline follows a **two-agent architecture** built on [LangGraph](https://g
 
 **Key design principles:**
 
-1. **Self-extending**: When a new data source has columns the pipeline hasn't seen before, Agent 2 generates Python transform functions on-the-fly and saves them to a persistent registry. On subsequent runs with the same source, those functions are reloaded from the registry — zero LLM cost.
+1. **Self-extending**: When a new data source has schema gaps, simple type/format operations are resolved declaratively via a generated YAML mapping file (zero LLM cost). Only complex derivations that require custom logic trigger LLM code generation. Both artifacts are persisted and reused on subsequent runs.
 2. **Schema-driven**: A unified schema (`config/unified_schema.json`) defines the target output format. Every incoming source is diffed against this schema, and gaps are addressed automatically.
 3. **Cascading enrichment**: Enrichment proceeds through three strategies of increasing cost. Cheap deterministic extraction handles safety-critical fields; KNN corpus search handles category via product-to-product comparison; the LLM is only called as a last resort with RAG context from real examples.
-4. **Human-in-the-loop (HITL)**: The Streamlit UI exposes approval gates at schema mapping, code review, and quarantine stages.
+4. **Human-in-the-loop (HITL)**: The Streamlit UI exposes approval gates at schema mapping, code review, and quarantine stages. Missing columns can be individually accepted as null, given a default value, or excluded from schema requirements.
 
 ---
 
@@ -146,9 +154,10 @@ ETL/
 |   +-- off_latest_delta.json.gz     # Open Food Facts delta feed (compressed)
 |   +-- USDA/                        # Raw USDA download directory
 |   +-- usda_raw/                    # USDA pre-processing staging
-+-- function_registry/
-|   +-- registry.json                # Index of all generated functions
-|   +-- functions/                   # Stored .py transform functions
++-- src/blocks/generated/
+|   +-- nutrition/
+|   |   +-- DYNAMIC_MAPPING_*.yaml   # Declarative column ops (type_cast, set_null, format_transform)
+|   |   +-- DERIVE_*.py              # Python Block classes for complex derivations (DERIVE gaps only)
 +-- output/                          # Pipeline output CSVs
 +-- src/
 |   +-- agents/
@@ -160,6 +169,8 @@ ETL/
 |   |   +-- prompts.py               # All LLM prompt templates
 |   +-- blocks/
 |   |   +-- base.py                  # Abstract Block base class
+|   |   +-- dynamic_mapping.py       # DynamicMappingBlock — YAML-driven declarative transforms
+|   |   +-- mapping_io.py            # YAML read/write utilities + HITL decision merging
 |   |   +-- strip_whitespace.py      # Strip whitespace from string columns
 |   |   +-- lowercase_brand.py       # Normalize brand names to lowercase
 |   |   +-- remove_noise_words.py    # Remove legal suffixes (Inc, LLC, etc.)
@@ -182,8 +193,7 @@ ETL/
 |   +-- pipeline/
 |   |   +-- runner.py                # Sequential block executor with audit logging
 |   +-- registry/
-|   |   +-- block_registry.py        # Discovers and serves pre-built blocks
-|   |   +-- function_registry.py     # Persistent store for generated functions
+|   |   +-- block_registry.py        # Discovers and serves pre-built blocks; supports runtime registration
 |   +-- schema/
 |   |   +-- analyzer.py              # DataFrame profiler + schema diff logic
 |   +-- ui/
@@ -200,9 +210,9 @@ ETL/
 
 | Run | Data Source | Purpose |
 |-----|------------|---------|
-| **Run 1** | `data/usda_fooddata_sample.csv` | First run — no unified schema exists. Agent 1 derives the schema from the USDA data, establishes column mappings, and saves the unified schema to `config/unified_schema.json`. Some column type gaps exist (USDA `object` columns need `string` conversions); Agent 2 generates 3 transform functions (`transform_product_name`, `transform_category`, `transform_data_source`) and registers them. The full block sequence executes including deduplication, enrichment, and DQ scoring. |
-| **Run 2** | `data/fda_recalls_sample.csv` | Second run — unified schema now exists. Agent 1 diffs the FDA source against the unified schema, detects 3 registry hits from Run 1 and 1 new gap (`published_date` is `int64` rather than `string`). Agent 2 generates 1 function (`transform_published_date`) for the remaining gap, validates it in the sandbox, and registers it. |
-| **Run 3** | `data/fda_recalls_sample.csv` | Replay run — identical source as Run 2. All 4 schema gaps now have registry hits. Agent 2 is never called. This demonstrates the "pipeline remembered" behavior — zero LLM cost for known transforms. |
+| **Run 1** | `data/usda_fooddata_sample.csv` | First run — Agent 1 diffs USDA columns against the unified schema, detects column mappings and type gaps. `check_registry_node` resolves all gaps as YAML `type_cast` operations and writes `DYNAMIC_MAPPING_usda_fooddata_sample.yaml`. Agent 2 is skipped. Full block sequence executes including deduplication, enrichment, and DQ scoring. |
+| **Run 2** | `data/usda_sample_raw.csv` | Second source — different raw USDA format. Agent 1 detects its own set of gaps; `check_registry_node` writes a separate `DYNAMIC_MAPPING_usda_sample_raw.yaml`. Each source gets its own declarative mapping file. |
+| **Replay** | Either source | Re-running with a known source: `BlockRegistry` auto-discovers the existing `DYNAMIC_MAPPING_` YAML, `check_registry_node` finds it as a registry hit — zero LLM cost. Demonstrates the "pipeline remembered" behavior. |
 
 ### Execution Flow
 
@@ -267,16 +277,17 @@ Defines `PipelineState` as a `TypedDict(total=False)` that flows through every L
 
 | Field Group | Fields | Set By |
 |-------------|--------|--------|
-| **Input** | `source_path`, `source_df`, `source_schema`, `domain` | `load_source_node` |
-| **Schema Analysis** | `unified_schema`, `unified_schema_existed`, `gaps`, `column_mapping` | `analyze_schema_node` |
-| **Registry** | `registry_hits`, `registry_misses` | `check_registry_node` |
-| **Code Generation** | `generated_functions`, `retry_count`, `max_retries` | `generate_code_node` |
-| **Execution** | `block_sequence`, `working_df`, `dq_score_pre`, `dq_score_post` | `run_pipeline_node` |
+| **Input** | `source_path`, `source_df`, `source_schema`, `domain`, `enable_enrichment` | `load_source_node` |
+| **Schema Analysis** | `unified_schema`, `unified_schema_existed`, `gaps`, `derivable_gaps`, `missing_columns`, `column_mapping`, `mapping_warnings`, `enrichment_columns_to_generate` | `analyze_schema_node` |
+| **HITL** | `missing_column_decisions` | Streamlit UI (before `check_registry_node`) |
+| **Registry** | `block_registry_hits`, `registry_misses`, `mapping_yaml_path` | `check_registry_node` |
+| **Code Generation** | `generated_blocks`, `retry_count`, `max_retries` | `generate_code_node` |
+| **Execution** | `block_sequence`, `sequence_reasoning`, `working_df`, `dq_score_pre`, `dq_score_post` | `plan_sequence_node`, `run_pipeline_node` |
 | **Enrichment** | `enrichment_stats` (`s1_extraction`, `s2_knn`, `s3_rag_llm`, `unresolved`) | `run_pipeline_node` (via `LLMEnrichBlock`) |
 | **Quarantine** | `quarantined_df`, `quarantine_reasons` | `run_pipeline_node` |
 | **Audit** | `audit_log`, `errors` | `run_pipeline_node` |
 
-Also defines `GapItem` (a single schema gap between source and unified schema) and `GeneratedFunction` (a function generated by Agent 2 with its validation status and sample outputs).
+Also defines `GapItem`, `DerivedGap`, `MissingColumn` (gap classification types), and `GeneratedBlock` (a Python Block generated by Agent 2 with its validation status).
 
 ---
 
@@ -290,39 +301,49 @@ Agent 1 handles schema intelligence. It exposes three LangGraph node functions:
 - Returns `{source_df, source_schema}`
 
 ### `analyze_schema_node(state)`
-- Loads the unified schema from `config/unified_schema.json` via `load_unified_schema()`
-- **First run (no unified schema):** Sends the source schema to the LLM with `FIRST_RUN_SCHEMA_PROMPT`, asking it to derive clean unified column names. Then calls `derive_unified_schema_from_source()` to build and save the schema, including enrichment columns (`allergens`, `primary_category`, `dietary_tags`, `is_organic`) and computed columns (`dq_score_pre`, `dq_score_post`, `dq_delta`)
-- **Subsequent runs (unified schema exists):** Filters out computed/enrichment columns, then sends both the source profile and the mappable unified schema to the LLM with `SCHEMA_ANALYSIS_PROMPT`. The LLM returns a column mapping and a list of gaps (type mismatches, format differences, semantic remappings)
-- Returns `{unified_schema, unified_schema_existed, column_mapping, gaps}`
+- Loads the unified schema from `config/unified_schema.json` via `load_unified_schema()`; raises `FileNotFoundError` if absent (the unified schema must be defined before running the pipeline)
+- Filters out computed/enrichment columns, then sends both the source profile and the mappable unified schema to the LLM with `SCHEMA_ANALYSIS_PROMPT`
+- The LLM returns a richer classification than before:
+  - `column_mapping` — direct renames (MAP)
+  - `derivable_gaps` — gaps resolvable by transforming source data: actions `TYPE_CAST`, `FORMAT_TRANSFORM`, or `DERIVE`
+  - `missing_columns` — unified schema columns with no source data and no derivation path
+- A backward-compat `gaps` list (union of derivable_gaps + missing_columns) is also written to state
+- Returns `{unified_schema, unified_schema_existed, column_mapping, gaps, derivable_gaps, missing_columns, enrichment_columns_to_generate, mapping_warnings}`
 
 ### `check_registry_node(state)`
-- Iterates over each gap from the schema analysis
-- For each gap, calls `FunctionRegistry.lookup(source_type, target_type, tags=[target_col])` to check if a matching transform function already exists
-- Splits gaps into `registry_hits` (reusable — function file path found) and `registry_misses` (need Agent 2)
-- Returns `{registry_hits, registry_misses, retry_count: 0, max_retries: 2}`
+Three-phase gap resolution:
+
+**Phase A — Missing columns → YAML `set_null`**: For each `missing_column` not serviced by an enrichment block provider, adds a `set_null` operation (typed null column) to the pending YAML operations list.
+
+**Phase B — Derivable gaps → registry or YAML**: For each `derivable_gap`, checks `BlockRegistry` for an enrichment provider or previously generated block. Gaps without a hit are routed by action type:
+- `TYPE_CAST` / `FORMAT_TRANSFORM` → added to YAML operations as `type_cast` / `format_transform`
+- `DERIVE` → added to `registry_misses` for Agent 2 code generation
+
+**Phase C — Register DynamicMappingBlock**: If any YAML operations were collected, writes them to `src/blocks/generated/<domain>/DYNAMIC_MAPPING_<dataset>.yaml` and instantiates + registers a `DynamicMappingBlock`. HITL decisions from `missing_column_decisions` are merged in before writing.
+
+Returns `{block_registry_hits, registry_misses, mapping_yaml_path, retry_count: 0, max_retries: 2}`
 
 ---
 
 ## Agent 2 — Code Generator: `src/agents/code_generator.py`
 
-Agent 2 handles autonomous code generation for schema gaps that have no registry match. It exposes three node functions:
+Agent 2 handles Python Block generation for **`DERIVE` gaps only** — transformations too complex to express declaratively. Simple `TYPE_CAST`, `FORMAT_TRANSFORM`, and `MISSING` gaps are handled upstream by `DynamicMappingBlock` via YAML. If `registry_misses` contains no `DERIVE` gaps, Agent 2 is skipped entirely.
 
 ### `generate_code_node(state)`
-- Iterates over `registry_misses` (or only failed functions on retry)
-- For each gap, constructs a prompt using `CODEGEN_PROMPT` (or `CODEGEN_RETRY_PROMPT` on retry with the previous error and code)
-- Calls the DeepSeek LLM via `call_llm()` to generate a self-contained Python function named `transform_{target_column}(value)`
+- Filters `registry_misses` to `DERIVE` gaps only; returns immediately if none remain
+- For each DERIVE gap, constructs a prompt using `CODEGEN_PROMPT` (or `CODEGEN_RETRY_PROMPT` on retry with previous error and code)
+- Calls the DeepSeek LLM via `call_llm()` to generate a Python `Block` subclass
 - Strips markdown fences from the response via `_clean_code_response()`
-- Validates the function in a subprocess sandbox via `execute_in_sandbox()`
-- Returns `{generated_functions: [...], retry_count: N+1}`
+- Validates inline via `_validate_block_code()` (syntax → safety → runtime)
+- Returns `{generated_blocks: [...], retry_count: N+1}`
 
 ### `validate_code_node(state)`
-- Pass-through node — exists solely for the conditional edge to inspect `generated_functions` and decide whether to retry, register, or skip
+- Pass-through node — exists solely for the conditional edge to inspect `generated_blocks` and decide whether to retry, register, or skip
 
-### `register_functions_node(state)`
-- For each function that passed validation, calls `FunctionRegistry.save()` which:
-  - Writes the Python code to `function_registry/functions/{key}.py`
-  - Adds/updates an entry in `function_registry/registry.json` with metadata (domain, source/target types, tags, timestamps, usage count)
-- Returns the updated `generated_functions` list with `file_path` populated
+### `register_blocks_node(state)`
+- For each block that passed validation, writes the Python code to `src/blocks/generated/<domain>/<block_name>.py`
+- Calls `BlockRegistry.instance().refresh()` to reload generated blocks via importlib discovery
+- Returns the updated `generated_blocks` list with `file_path` populated
 
 ---
 
@@ -350,8 +371,8 @@ Four prompt templates used by the agents:
 |----------|---------|---------|
 | `SCHEMA_ANALYSIS_PROMPT` | Agent 1 (subsequent runs) | Diffs incoming source schema against the unified schema. Returns JSON with `column_mapping` and `gaps` (type mismatches, ADD/MAP actions). Explicitly excludes enrichment and computed columns. |
 | `FIRST_RUN_SCHEMA_PROMPT` | Agent 1 (first run) | Derives clean unified column names from the first data source. Instructs the LLM to rename columns to standardized names, drop metadata/ID columns, and keep product-identity columns. |
-| `CODEGEN_PROMPT` | Agent 2 (first attempt) | Generates a self-contained Python function `transform_{target_column}(value)` that converts `source_type` to `target_type`. Constrains allowed imports to `re, pandas, datetime, math, json`. |
-| `CODEGEN_RETRY_PROMPT` | Agent 2 (retry after validation failure) | Provides the previous code and the error message, asking the LLM to fix the function. |
+| `CODEGEN_PROMPT` | Agent 2 (first attempt) | Generates a Python `Block` subclass for a `DERIVE` gap. Includes the block template, gap details, safe NA patterns, and banned import constraints. Only invoked when `TYPE_CAST`/`FORMAT_TRANSFORM` YAML handling is insufficient. |
+| `CODEGEN_RETRY_PROMPT` | Agent 2 (retry after validation failure) | Provides the previous code and the error message, asking the LLM to fix the block. |
 
 ---
 
@@ -391,23 +412,38 @@ The `BlockRegistry` class serves as the catalog of all pre-built transformation 
 
 ---
 
-## Function Registry: `src/registry/function_registry.py`
+## DynamicMappingBlock: `src/blocks/dynamic_mapping.py`
 
-The `FunctionRegistry` is the persistent store for LLM-generated transformation functions. It enables the "pipeline remembered" behavior — once a transform is generated and validated, it is never regenerated.
+`DynamicMappingBlock` is a declarative, YAML-driven block that handles all simple schema operations — replacing what was previously done via LLM-generated Python for type casts, format transforms, and missing columns. It is instantiated and registered at runtime by `check_registry_node` after writing the YAML file.
 
-**Storage:**
-- `function_registry/registry.json` — JSON array of entries, each with: `key`, `function_name`, `file` path, `created_for_domain`, `source_type`, `target_type`, `tags`, `used_count`, `last_used`, `validation_passed`, `created_at`
-- `function_registry/functions/*.py` — the actual Python source files
+**YAML format** (`src/blocks/generated/<domain>/DYNAMIC_MAPPING_<dataset>.yaml`):
+```yaml
+column_operations:
+  - target: product_name
+    type: string
+    action: type_cast
+    source: description
+    source_type: object
+  - target: published_date
+    type: string
+    action: format_transform
+    source: date_int
+    transform: to_string
+  - target: serving_size
+    type: float
+    action: set_null
+```
 
-**Currently registered functions (0):**
+**Supported actions:**
 
-The registry is populated dynamically when the pipeline runs and encounters schema gaps. Functions are generated on first use and persisted for reuse on subsequent runs.
+| Action | Description |
+|--------|-------------|
+| `set_null` | Creates a typed null column (no source data) |
+| `set_default` | Creates a column with a user-specified default value (HITL override) |
+| `type_cast` | Converts source column to target type (string, integer, float, boolean) |
+| `format_transform` | Applies named transforms: `to_string`, `parse_date`, `to_lowercase` |
 
-**Key methods:**
-- **`lookup(source_type, target_type, tags)`**: Finds a registered function matching the type signature. First filters by exact source_type + target_type match, then ranks candidates by tag overlap. Returns the best match or `None`.
-- **`save(key, function_name, function_code, metadata)`**: Writes the `.py` file, adds/updates the registry index entry. Preserves usage count on updates.
-- **`load_function(file_path, function_name)`**: Dynamically loads a saved function via `importlib.util.spec_from_file_location()`.
-- **`increment_usage(key)`**: Bumps `used_count` and updates `last_used` timestamp after a function is applied during pipeline execution.
+YAML I/O is handled by `src/blocks/mapping_io.py`. HITL decisions from `missing_column_decisions` state field (set by the Streamlit UI before `check_registry_node`) are merged into operations via `merge_hitl_decisions()` before the file is written, allowing users to override `set_null` with `set_default` or mark a column as excluded from schema requirements.
 
 ---
 
@@ -416,11 +452,11 @@ The registry is populated dynamically when the pipeline runs and encounters sche
 The `PipelineRunner` class executes blocks in sequence on a DataFrame, producing an audit log of every step:
 
 1. **Column mapping** is applied first — renames source columns to unified names
-2. Iterates through the `block_sequence` list:
-   - For regular blocks: looks up the block by name in the `BlockRegistry`, calls `block.run(df, config)`, and records an audit entry
-   - For the `"__generated__"` sentinel: calls `_apply_generated()` which loads each generated/registry function via `FunctionRegistry.load_function()` and applies it. If the target column exists, applies the function to that column via `.apply()`. If the column doesn't exist, creates it by passing the entire row dict to the function.
-3. After applying a function, calls `increment_usage()` to track registry utilization
+2. Expands the `__generated__` sentinel — replaced by all blocks in `BlockRegistry` whose names match generated prefixes (`DYNAMIC_MAPPING_`, `DERIVE_`, `TYPE_CONVERSION_`, etc.)
+3. Iterates through the expanded `block_sequence` list — looks up each block by name in `BlockRegistry`, calls `block.run(df, config)`, and records an audit entry
 4. Returns `(result_df, audit_log)` where each audit entry contains `{block, rows_in, rows_out, ...}`
+
+The `DynamicMappingBlock` (registered at runtime, named `DYNAMIC_MAPPING_<domain>`) is picked up by the `__generated__` expansion and runs its YAML-defined column operations before the standard normalization blocks.
 
 ---
 
@@ -714,20 +750,17 @@ poetry run streamlit run app.py
 ## Demo Walkthrough
 
 **Run 1 — USDA FoodData (`nutrition` domain):**
-- No unified schema exists. Agent 1 calls the LLM to derive column mappings (e.g., `brand_owner` -> `brand_name`, `description` -> `product_name`)
-- Unified schema is saved with 17 columns (9 mapped + 4 enrichment + 3 computed + `data_source`)
-- 3 type-coercion gaps detected (`object` → `string` for `product_name`, `category`, `data_source`); Agent 2 generates and registers 3 functions: `transform_product_name`, `transform_category`, `transform_data_source`
-- Full pipeline executes: DQ scoring, cleaning, quantity extraction, allergen scan, fuzzy dedup, merge, golden record selection, 3-strategy enrichment (S1 extraction seeds the FAISS corpus; S2 KNN resolves most remaining categories; S3 RAG-LLM handles stragglers), post-DQ scoring
+- Agent 1 diffs USDA columns against `config/unified_schema.json` — detects column mappings (e.g., `description` → `product_name`) and type gaps (`object` → `string`)
+- `check_registry_node` classifies the type gaps as `TYPE_CAST` operations and writes them to `src/blocks/generated/nutrition/DYNAMIC_MAPPING_usda_fooddata_sample.yaml`; a `DynamicMappingBlock` is instantiated and registered — **no LLM code generation needed**
+- Agent 2 is skipped (no DERIVE gaps)
+- Full pipeline executes: DQ scoring, YAML mapping block (type casts), cleaning, quantity extraction, allergen scan, fuzzy dedup, merge, golden record selection, 3-strategy enrichment (S1 extraction seeds the FAISS corpus; S2 KNN resolves most remaining categories; S3 RAG-LLM handles stragglers), post-DQ scoring
 - Output saved to `output/usda_fooddata_sample_unified.csv`
 
-**Run 2 — FDA Recalls (`safety` domain):**
-- Unified schema exists. Agent 1 diffs FDA columns against it — 3 registry hits from Run 1's functions, 1 new gap: `published_date` is `int64` (YYYYMMDD integer) but the unified schema expects `string`
-- Agent 2 generates 1 function (`transform_published_date`), validates it in the sandbox, and registers it (4 total registered functions)
-- Pipeline runs with both pre-built blocks and the newly generated function
-- Output saved to `output/fda_recalls_sample_unified.csv`
+**Run 2 — USDA Raw (`nutrition` domain, different source):**
+- Agent 1 diffs the raw USDA source against the unified schema — different column names and type gaps
+- `check_registry_node` writes a new YAML file `DYNAMIC_MAPPING_usda_sample_raw.yaml` for this source's gaps
+- Pipeline runs with its own `DynamicMappingBlock` — the YAML for Run 1's source is untouched
 
-**Run 3 — FDA Recalls (replay):**
-- Same source as Run 2. Agent 1 detects the same 4 gaps
-- Function registry now has 4 hits (3 from Run 1 + 1 from Run 2) — **zero LLM cost**
-- Agent 2 is never called. Pipeline runs using cached transforms
-- Demonstrates the self-extending "pipeline remembered" behavior
+**Replay runs:**
+- On subsequent runs with the same source, the YAML file already exists in `src/blocks/generated/`; `BlockRegistry` auto-discovers it, and `check_registry_node` finds the existing `DYNAMIC_MAPPING_` block as a registry hit — **zero LLM cost**
+- Demonstrates the self-extending "pipeline remembered" behavior: declarative YAML for simple gaps, generated Python only for complex `DERIVE` gaps

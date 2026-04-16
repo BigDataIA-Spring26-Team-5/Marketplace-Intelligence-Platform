@@ -56,7 +56,7 @@ def run_pipeline(source_path: str, domain: str, run_label: str) -> dict:
     schema_existed = result.get("unified_schema_existed", False)
     gaps = result.get("gaps", [])
     registry_hits = result.get("block_registry_hits", {})
-    generated = result.get("generated_blocks", [])
+    unresolvable = result.get("unresolvable_gaps", [])
     audit_log = result.get("audit_log", [])
 
     logger.info(f"\n--- {run_label} Results ---")
@@ -67,9 +67,7 @@ def run_pipeline(source_path: str, domain: str, run_label: str) -> dict:
     logger.info(f"  Schema existed:       {schema_existed}")
     logger.info(f"  Gaps detected:        {len(gaps)}")
     logger.info(f"  Registry hits:        {len(registry_hits)}")
-    logger.info(
-        f"  Functions generated:  {len([f for f in generated if f.get('validation_passed')])}"
-    )
+    logger.info(f"  Unresolvable gaps:    {len(unresolvable)}")
 
     if audit_log:
         logger.info(f"\n  Block execution trace:")
@@ -109,20 +107,17 @@ def main():
     logger.info(f"\n{'=' * 60}")
     logger.info("  DEMO COMPLETE")
     logger.info(f"{'=' * 60}")
-    gen2 = [
-        f for f in result_2.get("generated_blocks", []) if f.get("validation_passed")
-    ]
-    gen3 = [
-        f for f in result_3.get("generated_blocks", []) if f.get("validation_passed")
-    ]
     logger.info(
         f"  Run 1 (USDA):  {result_1.get('dq_score_post', 0)}% DQ — schema established"
     )
     logger.info(
-        f"  Run 2 (FDA):   {result_2.get('dq_score_post', 0)}% DQ — {len(gen2)} functions generated"
+        f"  Run 2 (FDA):   {result_2.get('dq_score_post', 0)}% DQ — "
+        f"{len(result_2.get('block_registry_hits', {}))} registry hits, "
+        f"{len(result_2.get('unresolvable_gaps', []))} unresolvable"
     )
     logger.info(
-        f"  Run 3 (FDA):   {result_3.get('dq_score_post', 0)}% DQ — {len(result_3.get('block_registry_hits', {}))} registry hits, pipeline remembered"
+        f"  Run 3 (FDA):   {result_3.get('dq_score_post', 0)}% DQ — "
+        f"{len(result_3.get('block_registry_hits', {}))} registry hits, pipeline remembered"
     )
 
 

@@ -1,6 +1,17 @@
 column_operations:
-- target: product_name
+- target: brand_owner
   type: string
-  action: type_cast
-  source: description
-  source_type: object
+  action: strip_whitespace
+  source: brand_owner
+- target: serving_size_unit
+  type: string
+  action: to_lowercase
+  source: serving_size_unit
+- source: fdc_id
+  action: drop_column
+- source: gtin_upc
+  action: drop_column
+- source: market_country
+  action: drop_column
+- source: search_term
+  action: drop_column

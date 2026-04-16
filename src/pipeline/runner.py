@@ -58,7 +58,8 @@ class PipelineRunner:
                 }
             )
 
-        expanded_sequence = self._expand_sequence(block_sequence)
+        domain = config.get("domain")
+        expanded_sequence = self._expand_sequence(block_sequence, domain=domain)
         logger.info(f"Expanded sequence: {expanded_sequence}")
 
         coverage_warnings = self._validate_schema_coverage(
@@ -121,7 +122,7 @@ class PipelineRunner:
             warnings.append(msg)
         return warnings
 
-    def _expand_sequence(self, sequence: list[str]) -> list[str]:
+    def _expand_sequence(self, sequence: list[str], domain: str | None = None) -> list[str]:
         """Expand stages and __generated__ sentinel in the sequence."""
         expanded = []
 
@@ -129,14 +130,18 @@ class PipelineRunner:
             if item == "__generated__":
                 generated_blocks = [
                     name
-                    for name in self.block_registry.blocks.keys()
-                    if name.startswith("TYPE_CONVERSION_")
-                    or name.startswith("COLUMN_RENAME_")
-                    or name.startswith("COLUMN_DROP_")
-                    or name.startswith("COLUMN_CREATE_")
-                    or name.startswith("FORMAT_TRANSFORM_")
-                    or name.startswith("DYNAMIC_MAPPING_")
-                    or name.startswith("DERIVE_")
+                    for name, block in self.block_registry.blocks.items()
+                    if (
+                        name.startswith("COLUMN_RENAME_")
+                        or name.startswith("COLUMN_DROP_")
+                        or name.startswith("FORMAT_TRANSFORM_")
+                        or name.startswith("DYNAMIC_MAPPING_")
+                        or name.startswith("DERIVE_")
+                    )
+                    and (
+                        domain is None
+                        or getattr(block, "domain", "all") in ("all", domain)
+                    )
                 ]
                 expanded.extend(generated_blocks)
             elif self.block_registry.is_stage(item):

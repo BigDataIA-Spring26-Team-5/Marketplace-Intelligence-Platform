@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from pathlib import Path
@@ -30,10 +31,17 @@ _BLOCK_COLUMN_PROVIDERS: dict[str, str] = {
     "is_organic": "llm_enrich",
 }
 
+# Primitives that map 1-source → N-target (no single 'target' key)
+_SPLIT_PRIMITIVES = {"SPLIT"}
+# Primitives that map N-source → 1-target
+_UNIFY_PRIMITIVES = {"UNIFY"}
+# Primitive that drops the source col entirely
+_DELETE_PRIMITIVES = {"DELETE"}
+
 
 def _detect_enrichment_columns(unified_schema: dict, source_schema: dict) -> list[str]:
     """Return names of enrichment columns in the unified schema absent from source data."""
-    source_cols = set(source_schema.keys())
+    source_cols = {k for k in source_schema.keys() if k != "__meta__"}
     return [
         name
         for name, spec in unified_schema.get("columns", {}).items()
@@ -57,54 +65,55 @@ def load_source_node(state: PipelineState) -> dict:
     }
 
 
-def _parse_llm_response(result: dict) -> tuple[dict, list, list]:
-    """Parse LLM schema analysis response, handling both old and new formats.
+def _parse_llm_response(result: dict) -> tuple[dict, list, list, list]:
+    """Parse LLM schema analysis response.
+
+    Supports:
+    - New format: column_mapping + operations[] + unresolvable[]
+    - Legacy format: column_mapping + derivable_gaps + missing_columns
 
     Returns:
-        (column_mapping, derivable_gaps, missing_columns)
+        (column_mapping, operations, unresolvable, legacy_gaps)
+        - operations: new-style list with 'primitive' field
+        - unresolvable: list of {target_column, reason, fallback}
+        - legacy_gaps: non-empty only when parsing old format (for backward compat)
     """
     column_mapping = result.get("column_mapping", {})
 
-    # New format: derivable_gaps + missing_columns
+    # New format — operations[] list
+    if "operations" in result:
+        operations = result.get("operations", [])
+        unresolvable = result.get("unresolvable", [])
+        return column_mapping, operations, unresolvable, []
+
+    # Legacy format — derivable_gaps + missing_columns
     if "derivable_gaps" in result or "missing_columns" in result:
         derivable_gaps = result.get("derivable_gaps", [])
         missing_columns = result.get("missing_columns", [])
-        return column_mapping, derivable_gaps, missing_columns
-
-    # Fallback: old format with flat "gaps" list.
-    # Heuristically split: source_column is None → MISSING, else derivable.
-    gaps = result.get("gaps", [])
-    derivable_gaps = []
-    missing_columns = []
-    for gap in gaps:
-        if gap.get("source_column") is None:
-            missing_columns.append({
-                "target_column": gap.get("target_column", ""),
-                "target_type": gap.get("target_type", "string"),
-                "reason": "No source column available (auto-classified from legacy format)",
+        # Convert to legacy_gaps for the old check_registry path
+        gaps = list(derivable_gaps)
+        for mc in missing_columns:
+            gaps.append({
+                "target_column": mc["target_column"],
+                "target_type": mc.get("target_type", "string"),
+                "source_column": None,
+                "source_type": None,
+                "action": "MISSING",
+                "sample_values": [],
             })
-        else:
-            # Re-classify action based on gap characteristics
-            action = gap.get("action", "GAP")
-            if action == "GAP":
-                src_type = gap.get("source_type", "")
-                tgt_type = gap.get("target_type", "")
-                action = "TYPE_CAST" if src_type != tgt_type else "FORMAT_TRANSFORM"
-            gap = dict(gap, action=action)
-            derivable_gaps.append(gap)
+        return column_mapping, [], [], gaps
 
-    return column_mapping, derivable_gaps, missing_columns
+    # Oldest fallback: flat "gaps" list
+    gaps = result.get("gaps", [])
+    return column_mapping, [], [], gaps
 
 
 def analyze_schema_node(state: PipelineState) -> dict:
     """
     Agent 1 LLM call: analyze source schema against the gold-standard unified schema.
 
-    Classifies each unified column into one of four categories:
-    - MAP: direct rename (column_mapping)
-    - TYPE_CAST / FORMAT_TRANSFORM: derivable from source (derivable_gaps)
-    - DERIVE: computable from source columns (derivable_gaps)
-    - MISSING: no source data, no derivation path (missing_columns)
+    Classifies each unified column using the 8-primitive taxonomy:
+    RENAME, CAST, FORMAT, DELETE, ADD, SPLIT, UNIFY, DERIVE
 
     Raises FileNotFoundError if config/unified_schema.json is absent.
     """
@@ -131,33 +140,101 @@ def analyze_schema_node(state: PipelineState) -> dict:
     }
     unified_for_prompt = {"columns": mappable_cols}
 
+    # Separate __meta__ from per-column profile before sending to LLM
+    meta_block = source_schema.get("__meta__", {})
+    columns_only = {k: v for k, v in source_schema.items() if k != "__meta__"}
+
     result = call_llm_json(
         model=model,
         messages=[
             {
                 "role": "user",
                 "content": SCHEMA_ANALYSIS_PROMPT.format(
-                    source_schema=json.dumps(source_schema, indent=2),
+                    source_schema=json.dumps(columns_only, indent=2),
+                    source_meta=json.dumps(meta_block, indent=2),
                     unified_schema=json.dumps(unified_for_prompt, indent=2),
                 ),
             }
         ],
     )
 
-    column_mapping, derivable_gaps, missing_columns = _parse_llm_response(result)
+    column_mapping, operations, unresolvable, legacy_gaps = _parse_llm_response(result)
+
+    # ── Derive backward-compat derivable_gaps / missing_columns from operations ──
+    derivable_gaps = []
+    missing_columns = []
+
+    if operations:
+        # New format path
+        for op in operations:
+            primitive = op.get("primitive", "")
+            target_col = op.get("target_column") or ""
+            target_type = op.get("target_type", "string")
+
+            if primitive == "ADD":
+                missing_columns.append({
+                    "target_column": target_col,
+                    "target_type": target_type,
+                    "reason": op.get("reason", "No source data available"),
+                    "_op": op,  # carry full op for registry processing
+                })
+            elif primitive in ("CAST", "FORMAT", "DERIVE", "SPLIT", "UNIFY"):
+                derivable_gaps.append({
+                    "target_column": target_col,
+                    "target_type": target_type,
+                    "source_column": op.get("source_column") or op.get("sources"),
+                    "source_type": op.get("source_type", "string"),
+                    "action": primitive,
+                    "sample_values": op.get("sample_values", []),
+                    "_op": op,  # carry full op
+                })
+            elif primitive == "DELETE":
+                # DELETE ops tracked separately — they produce a drop_column YAML op
+                derivable_gaps.append({
+                    "target_column": op.get("source_column", ""),
+                    "target_type": "string",
+                    "source_column": op.get("source_column"),
+                    "action": "DELETE",
+                    "_op": op,
+                })
+        # Map unresolvable → missing_columns
+        for ur in unresolvable:
+            target_col = ur.get("target_column", "")
+            missing_columns.append({
+                "target_column": target_col,
+                "target_type": "string",
+                "reason": ur.get("reason", "Unresolvable — no source data"),
+                "_unresolvable": True,
+            })
+    else:
+        # Legacy format: split flat gaps list into derivable vs missing
+        for gap in legacy_gaps:
+            if gap.get("source_column") is None or gap.get("action") == "MISSING":
+                missing_columns.append({
+                    "target_column": gap.get("target_column", ""),
+                    "target_type": gap.get("target_type", "string"),
+                    "reason": gap.get("reason", "No source data available"),
+                })
+            else:
+                derivable_gaps.append(gap)
 
     logger.info(
         f"Schema analysis: {len(column_mapping)} mappings, "
         f"{len(derivable_gaps)} derivable gaps, "
         f"{len(missing_columns)} missing columns"
     )
+    if unresolvable:
+        logger.warning(
+            f"Unresolvable gaps (will be set_null): "
+            f"{[u['target_column'] for u in unresolvable]}"
+        )
 
-    # Synthesize backward-compat gaps list (union of derivable + missing)
+    # Backward-compat gaps list (union)
     gaps = list(derivable_gaps)
     for mc in missing_columns:
         gaps.append({
             "target_column": mc["target_column"],
-            "target_type": mc["target_type"],
+            "target_type": mc.get("target_type", "string"),
             "source_column": None,
             "source_type": None,
             "action": "MISSING",
@@ -171,11 +248,17 @@ def analyze_schema_node(state: PipelineState) -> dict:
         and not spec.get("computed")
         and not spec.get("enrichment")
     }
-    covered = (
-        set(column_mapping.values())
-        | {g["target_column"] for g in derivable_gaps}
-        | {mc["target_column"] for mc in missing_columns}
-    )
+    # Covered = mapped + all target columns from operations
+    op_targets: set[str] = set()
+    for op in operations:
+        if op.get("primitive") == "SPLIT":
+            op_targets.update((op.get("target_columns") or {}).keys())
+        elif op.get("target_column"):
+            op_targets.add(op["target_column"])
+    for mc in missing_columns:
+        op_targets.add(mc["target_column"])
+
+    covered = set(column_mapping.values()) | op_targets
     mapping_warnings = [
         f"Required unified column '{col}' not covered by mapping or gaps"
         for col in sorted(required_mappable - covered)
@@ -203,6 +286,8 @@ def analyze_schema_node(state: PipelineState) -> dict:
         "gaps": gaps,
         "derivable_gaps": derivable_gaps,
         "missing_columns": missing_columns,
+        "operations": operations,          # new-style full ops list
+        "unresolvable_gaps": unresolvable, # audit trail
         "enrichment_columns_to_generate": enrichment_to_generate,
         "mapping_warnings": mapping_warnings,
     }
@@ -211,16 +296,17 @@ def analyze_schema_node(state: PipelineState) -> dict:
 def check_registry_node(state: PipelineState) -> dict:
     """
     Check BlockRegistry for existing blocks, then build a YAML mapping file
-    for simple operations (missing columns, type casts, format transforms).
+    for all schema operations.
 
-    Only genuinely complex DERIVE gaps without existing blocks remain as
-    registry_misses for Agent 2 code generation.
+    All 8 primitives are handled declaratively via YAML. There is no Agent 2 —
+    any gap the LLM cannot express as a known YAML action falls back to set_null
+    with a warning.
 
     Three phases:
-    A. Missing columns → write as set_null operations to YAML
-    B. Derivable gaps → check registry; simple TYPE_CAST/FORMAT_TRANSFORM
-       without hits go to YAML; DERIVE gaps without hits go to registry_misses
-    C. If YAML operations exist, create and register DynamicMappingBlock
+    A. ADD / unresolvable → set_null or set_default YAML operations
+    B. CAST / FORMAT / DERIVE / SPLIT / UNIFY / DELETE → YAML operations
+       (check registry first for pre-built blocks)
+    C. Write YAML and register DynamicMappingBlock
     """
     if "block_registry_hits" in state:
         return {}
@@ -232,15 +318,15 @@ def check_registry_node(state: PipelineState) -> dict:
     missing_columns = state.get("missing_columns", [])
     derivable_gaps = state.get("derivable_gaps", [])
     decisions = state.get("missing_column_decisions", {})
+    operations = state.get("operations", [])  # new-style ops from LLM
 
-    block_hits: dict[str, str] = {}  # target_col -> block_name
-    misses = []  # only DERIVE gaps without registry hits
+    block_hits: dict[str, str] = {}
     yaml_operations: list[dict] = []
 
-    # ── Phase A: Missing columns → YAML set_null ────────────────────
+    # ── Phase A: ADD / unresolvable → YAML set_null ──────────────────
     for mc in missing_columns:
         target_col = mc["target_column"]
-        target_type = mc["target_type"]
+        target_type = mc.get("target_type", "string")
 
         # Check if an enrichment block handles this
         provider = _BLOCK_COLUMN_PROVIDERS.get(target_col)
@@ -248,6 +334,15 @@ def check_registry_node(state: PipelineState) -> dict:
             logger.info(f"Block provider for missing column '{target_col}': {provider}")
             block_hits[target_col] = provider
             continue
+
+        # If the LLM provided a full op for this missing column, use it directly
+        full_op = mc.get("_op")
+        if full_op:
+            yaml_op = _llm_op_to_yaml(full_op, column_mapping)
+            if yaml_op:
+                yaml_operations.append(yaml_op)
+                logger.info(f"ADD op for '{target_col}' → YAML {yaml_op['action']}")
+                continue
 
         yaml_operations.append({
             "target": target_col,
@@ -260,21 +355,28 @@ def check_registry_node(state: PipelineState) -> dict:
 
     # ── Phase B: Derivable gaps → registry check or YAML ────────────
     generated_block_prefixes = (
-        "TYPE_CONVERSION_",
         "COLUMN_RENAME_",
         "COLUMN_DROP_",
-        "COLUMN_CREATE_",
         "FORMAT_TRANSFORM_",
         "DYNAMIC_MAPPING_",
         "DERIVE_",
     )
 
     for gap in derivable_gaps:
-        source_col = gap.get("source_column")
         target_col = gap.get("target_column", "")
-        target_type = gap.get("target_type", "string")
-        source_type = gap.get("source_type") or "string"
-        action = gap.get("action", "TYPE_CAST")
+        action = gap.get("action", "")
+        full_op = gap.get("_op")
+
+        # Skip DELETE — handled separately below
+        if action == "DELETE":
+            source_col = gap.get("source_column")
+            if source_col:
+                yaml_operations.append({
+                    "source": source_col,
+                    "action": "drop_column",
+                })
+                logger.info(f"DELETE '{source_col}' → YAML drop_column")
+            continue
 
         # Check enrichment providers first
         provider = _BLOCK_COLUMN_PROVIDERS.get(target_col)
@@ -296,35 +398,54 @@ def check_registry_node(state: PipelineState) -> dict:
         if found_existing:
             continue
 
-        # No existing block — route based on gap action
-        if action == "DERIVE":
-            # Complex derivation → Agent 2 must generate code
-            logger.info(f"DERIVE gap '{target_col}' → registry miss (Agent 2)")
-            misses.append(gap)
-        elif action in ("TYPE_CAST", "FORMAT_TRANSFORM"):
-            # Simple operation → handle via YAML
-            # Resolve source column through column_mapping (runner renames first)
+        # Convert LLM op to YAML operation
+        if full_op:
+            yaml_op = _llm_op_to_yaml(full_op, column_mapping)
+            if yaml_op:
+                yaml_operations.append(yaml_op)
+                logger.info(f"{action} gap '{target_col}' → YAML {yaml_op.get('action')}")
+                continue
+
+        # Legacy fallback for old-format gaps
+        source_col = gap.get("source_column")
+        target_type = gap.get("target_type", "string")
+        source_type = gap.get("source_type") or "string"
+
+        if action in ("CAST", "TYPE_CAST"):
             effective_source = column_mapping.get(source_col, source_col) if source_col else None
-            op = {
+            yaml_operations.append({
                 "target": target_col,
                 "type": target_type,
-                "action": "type_cast" if action == "TYPE_CAST" else "format_transform",
+                "action": "type_cast",
                 "source": effective_source,
                 "source_type": source_type,
-            }
-            if action == "FORMAT_TRANSFORM":
-                op["transform"] = "to_string"  # default; could be enhanced
-            yaml_operations.append(op)
-            logger.info(f"{action} gap '{target_col}' → YAML")
+            })
+            logger.info(f"CAST gap '{target_col}' → YAML type_cast")
+        elif action in ("FORMAT", "FORMAT_TRANSFORM"):
+            effective_source = column_mapping.get(source_col, source_col) if source_col else None
+            yaml_operations.append({
+                "target": target_col,
+                "type": target_type,
+                "action": "format_transform",
+                "source": effective_source,
+                "transform": "to_string",
+            })
+            logger.info(f"FORMAT gap '{target_col}' → YAML format_transform")
         else:
-            # Unknown action type → fall back to Agent 2
-            misses.append(gap)
+            # DERIVE / SPLIT / UNIFY without a full op — fall back to set_null + warning
+            logger.warning(
+                f"Gap '{target_col}' (primitive={action}) has no expressible YAML action "
+                "— falling back to set_null. Consider adding a YAML action or pre-built block."
+            )
+            yaml_operations.append({
+                "target": target_col,
+                "type": gap.get("target_type", "string"),
+                "action": "set_null",
+                "status": "unresolvable",
+                "reason": f"No YAML handler for primitive '{action}'",
+            })
 
     # ── Phase C: Apply HITL decisions, patch schema, and write YAML ──
-    # For "exclude" decisions: mark the column as not required in the
-    # unified schema so it won't trigger quarantine downstream.
-    import copy
-
     unified_schema = copy.deepcopy(state.get("unified_schema", {}))
     excluded_columns = []
     for col_name, decision in decisions.items():
@@ -350,14 +471,214 @@ def check_registry_node(state: PipelineState) -> dict:
 
     result = {
         "block_registry_hits": block_hits,
-        "registry_misses": misses,
+        "registry_misses": [],  # Always empty — no Agent 2
         "mapping_yaml_path": mapping_yaml_path,
-        "retry_count": 0,
-        "max_retries": 2,
     }
 
-    # Only update unified_schema in state if we actually excluded columns
     if excluded_columns:
         result["unified_schema"] = unified_schema
 
     return result
+
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+
+def _llm_op_to_yaml(op: dict, column_mapping: dict) -> dict | None:
+    """
+    Convert a new-style LLM operation dict to a DynamicMappingBlock YAML op dict.
+
+    Returns None if the operation cannot be converted.
+    """
+    primitive = op.get("primitive", "")
+    action = op.get("action", "")
+    target_col = op.get("target_column", "")
+    target_type = op.get("target_type", "string")
+    source_col = op.get("source_column")
+
+    # Resolve source through column_mapping (runner renames first)
+    if source_col:
+        source_col = column_mapping.get(source_col, source_col)
+
+    if primitive == "ADD":
+        if action == "set_default":
+            return {
+                "target": target_col,
+                "type": target_type,
+                "action": "set_default",
+                "default_value": op.get("default_value"),
+            }
+        return {
+            "target": target_col,
+            "type": target_type,
+            "action": "set_null",
+            "status": "missing",
+            "reason": op.get("reason", "No source data available"),
+        }
+
+    if primitive == "CAST":
+        if not source_col:
+            return None
+        return {
+            "target": target_col,
+            "type": target_type,
+            "action": "type_cast",
+            "source": source_col,
+            "source_type": op.get("source_type", "string"),
+        }
+
+    if primitive == "FORMAT":
+        if not source_col:
+            return None
+        yaml_action = action if action in (
+            "parse_date", "to_lowercase", "to_uppercase", "strip_whitespace",
+            "regex_replace", "regex_extract", "truncate_string", "pad_string",
+            "unit_normalize", "format_transform",
+        ) else "format_transform"
+        result: dict = {
+            "target": target_col,
+            "type": target_type,
+            "action": yaml_action,
+            "source": source_col,
+        }
+        # Pass through extra params
+        for k in ("pattern", "replacement", "transform", "format", "max_length",
+                   "min_length", "fill_char", "side", "group"):
+            if k in op:
+                result[k] = op[k]
+        return result
+
+    if primitive == "RENAME":
+        if not source_col:
+            return None
+        return {
+            "target": target_col,
+            "type": target_type,
+            "action": "rename",
+            "source": source_col,
+        }
+
+    if primitive == "DELETE":
+        src = op.get("source_column")
+        if not src:
+            return None
+        return {"source": src, "action": "drop_column"}
+
+    if primitive == "SPLIT":
+        if action == "json_array_extract_multi":
+            target_columns = op.get("target_columns", {})
+            if not source_col or not target_columns:
+                return None
+            return {
+                "source": source_col,
+                "action": "json_array_extract_multi",
+                "target_columns": target_columns,
+            }
+        if action == "split_column":
+            column_names = op.get("column_names") or list(op.get("target_columns", {}).keys())
+            if not source_col or not column_names:
+                return None
+            return {
+                "source": source_col,
+                "action": "split_column",
+                "column_names": column_names,
+                "delimiter": op.get("delimiter", ","),
+            }
+        if action == "xml_extract":
+            if not source_col:
+                return None
+            return {
+                "target": target_col,
+                "type": target_type,
+                "action": "xml_extract",
+                "source": source_col,
+                "tag": op.get("tag", ""),
+            }
+        return None
+
+    if primitive == "UNIFY":
+        sources = op.get("sources", [])
+        # Resolve each source through column_mapping
+        sources = [column_mapping.get(s, s) for s in sources]
+        if action == "coalesce":
+            return {
+                "target": target_col,
+                "type": target_type,
+                "action": "coalesce",
+                "sources": sources,
+            }
+        if action == "concat_columns":
+            return {
+                "target": target_col,
+                "type": target_type,
+                "action": "concat_columns",
+                "sources": sources,
+                "separator": op.get("separator", " "),
+                "exclude_nulls": op.get("exclude_nulls", True),
+            }
+        if action == "string_template":
+            return {
+                "target": target_col,
+                "type": target_type,
+                "action": "string_template",
+                "template": op.get("template", ""),
+            }
+        return None
+
+    if primitive == "DERIVE":
+        if not source_col and not op.get("sources"):
+            return None
+        sources_list = op.get("sources", [source_col] if source_col else [])
+        sources_list = [column_mapping.get(s, s) for s in sources_list]
+        primary_source = sources_list[0] if sources_list else None
+
+        if action == "extract_json_field":
+            if not primary_source:
+                return None
+            result = {
+                "target": target_col,
+                "type": target_type,
+                "action": "extract_json_field",
+                "source": primary_source,
+                "key": op.get("key", ""),
+            }
+            if "filter" in op:
+                result["filter"] = op["filter"]
+            return result
+
+        if action == "conditional_map":
+            if not primary_source:
+                return None
+            return {
+                "target": target_col,
+                "type": target_type,
+                "action": "conditional_map",
+                "source": primary_source,
+                "mapping": op.get("mapping", {}),
+                "default": op.get("default"),
+            }
+
+        if action == "expression":
+            return {
+                "target": target_col,
+                "type": target_type,
+                "action": "expression",
+                "expression": op.get("expression", ""),
+            }
+
+        if action == "contains_flag":
+            if not primary_source:
+                return None
+            return {
+                "target": target_col,
+                "type": target_type,
+                "action": "contains_flag",
+                "source": primary_source,
+                "keywords": op.get("keywords", []),
+            }
+
+        # Unknown DERIVE action → warn + None (caller will fall back to set_null)
+        logger.warning(f"Unknown DERIVE action '{action}' for '{target_col}' — cannot convert to YAML")
+        return None
+
+    return None
