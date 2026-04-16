@@ -533,7 +533,7 @@ def _llm_op_to_yaml(op: dict, column_mapping: dict) -> dict | None:
         yaml_action = action if action in (
             "parse_date", "to_lowercase", "to_uppercase", "strip_whitespace",
             "regex_replace", "regex_extract", "truncate_string", "pad_string",
-            "unit_normalize", "format_transform",
+            "value_map", "format_transform",
         ) else "format_transform"
         result: dict = {
             "target": target_col,
@@ -543,9 +543,12 @@ def _llm_op_to_yaml(op: dict, column_mapping: dict) -> dict | None:
         }
         # Pass through extra params
         for k in ("pattern", "replacement", "transform", "format", "max_length",
-                   "min_length", "fill_char", "side", "group"):
+                   "min_length", "fill_char", "side", "group", "mapping", "default"):
             if k in op:
                 result[k] = op[k]
+        # Pass through normalize_before_dedup annotation
+        if "normalize_before_dedup" in op:
+            result["normalize_before_dedup"] = op["normalize_before_dedup"]
         return result
 
     if primitive == "RENAME":

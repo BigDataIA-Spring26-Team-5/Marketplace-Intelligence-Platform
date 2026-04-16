@@ -31,7 +31,7 @@ VALID_ACTIONS = {
     "regex_extract",
     "truncate_string",
     "pad_string",
-    "unit_normalize",
+    "value_map",
     # Split ops
     "json_array_extract_multi",
     "split_column",
@@ -52,7 +52,7 @@ _REQUIRE_SOURCE = {
     "type_cast", "rename", "format_transform",
     "parse_date", "to_lowercase", "to_uppercase", "strip_whitespace",
     "regex_replace", "regex_extract", "truncate_string", "pad_string",
-    "unit_normalize", "xml_extract", "extract_json_field",
+    "value_map", "xml_extract", "extract_json_field",
     "conditional_map", "contains_flag",
 }
 

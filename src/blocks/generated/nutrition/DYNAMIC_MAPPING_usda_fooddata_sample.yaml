@@ -3,10 +3,24 @@ column_operations:
   type: string
   action: strip_whitespace
   source: brand_owner
+  normalize_before_dedup: true
+- target: brand_name
+  type: string
+  action: strip_whitespace
+  source: brand_name
+  normalize_before_dedup: true
+- target: product_name
+  type: string
+  action: strip_whitespace
+  source: product_name
+  normalize_before_dedup: true
 - target: serving_size_unit
   type: string
-  action: to_lowercase
+  action: value_map
   source: serving_size_unit
+  mapping:
+    GRM: g
+    g: g
 - source: fdc_id
   action: drop_column
 - source: gtin_upc

@@ -9,7 +9,7 @@ Supported actions:
   Type ops:         type_cast, rename, drop_column
   Format ops:       format_transform, parse_date, to_lowercase, to_uppercase,
                     strip_whitespace, regex_replace, regex_extract,
-                    truncate_string, pad_string, unit_normalize
+                    truncate_string, pad_string, value_map
   Split ops:        json_array_extract_multi, split_column, xml_extract
   Unify ops:        coalesce, concat_columns, string_template
   Derive ops:       extract_json_field, conditional_map, expression, contains_flag
@@ -353,15 +353,44 @@ def _handle_pad_string(df: pd.DataFrame, op: dict) -> pd.DataFrame:
     return df
 
 
-def _handle_unit_normalize(df: pd.DataFrame, op: dict) -> pd.DataFrame:
-    """Normalize a unit string to lowercase stripped form (e.g., ' G ' → 'g')."""
+def _handle_value_map(df: pd.DataFrame, op: dict) -> pd.DataFrame:
+    """Map source values to target values via explicit mapping dict.
+
+    Unmapped values pass through unchanged by default.
+
+    op parameters:
+        source: str
+        target: str
+        mapping: dict — {source_value: target_value}
+        default: optional fallback (if None, unmapped pass through)
+        type: target type
+    """
     source = op.get("source", op["target"])
     target = op["target"]
+    mapping = op.get("mapping", {})
+    default = op.get("default")
+    col_type = op.get("type", "string")
+
     if source not in df.columns:
         return _handle_set_null(df, op)
-    df[target] = df[source].astype("string").str.strip().str.lower()
+
+    lower_map = {str(k).lower(): v for k, v in mapping.items()}
+
+    def apply_map(v):
+        if pd.isna(v):
+            return default if default is not None else pd.NA
+        key = str(v).strip().lower()
+        if key in lower_map:
+            return lower_map[key]
+        return default if default is not None else v
+
+    df[target] = df[source].apply(apply_map)
+    dtype = _NULL_DTYPE_MAP.get(col_type, "string")
+    df[target] = df[target].astype(dtype)
+
     if source != target and source in df.columns:
         df = df.drop(columns=[source])
+    logger.debug(f"value_map: '{source}' → '{target}' with {len(mapping)} mappings")
     return df
 
 
@@ -752,7 +781,7 @@ _ACTION_HANDLERS: dict[str, Any] = {
     "regex_extract": _handle_regex_extract,
     "truncate_string": _handle_truncate_string,
     "pad_string": _handle_pad_string,
-    "unit_normalize": _handle_unit_normalize,
+    "value_map": _handle_value_map,
     # Split ops
     "json_array_extract_multi": _handle_json_array_extract_multi,
     "split_column": _handle_split_column,

@@ -27,6 +27,34 @@ Map source columns to unified columns based on SEMANTIC meaning, not just name:
 - "recall_initiation_date" / "report_date" → "published_date"
 - "event_id" / "code_info" → "data_source"
 
+## Special Cases
+
+### Data source columns
+When a source column exists but its values represent INTERNAL SYSTEM CODES
+(e.g., "GDSN", "LI", "API", submission system identifiers) rather than the
+semantic meaning of the unified schema column, prefer:
+  - primitive: ADD
+  - action: set_default
+  - default_value: "<dataset_name>" (e.g., "USDA", "FDA", "OpenFoodFacts")
+
+Do NOT map these as RENAME — the source values are metadata, not the data provider.
+
+### Value-variant columns (units, codes, categories)
+When sample_values show variant spellings that should map to canonical values
+(e.g., "GRM"/"g"/"gram" → "g", or "USA"/"US"/"United States" → "US"):
+  - primitive: FORMAT
+  - action: value_map
+  - mapping: {{<variant>: <canonical>, ...}}  (generate from sample_values)
+
+Analyze sample_values to detect variants and build the mapping dict.
+Unmapped values pass through unchanged.
+
+### Identity-bearing columns
+Columns that identify the product (product_name, brand_owner, brand_name) require
+normalization before deduplication. Add annotation:
+  "normalize_before_dedup": true
+This signals the sequence planner to apply strip_whitespace/lowercase before dedup.
+
 ## 8-Primitive Taxonomy
 
 Use EXACTLY these primitive names. Each unified column must appear in exactly one output list.
@@ -35,7 +63,7 @@ Use EXACTLY these primitive names. Each unified column must appear in exactly on
 |-----------|-------------|-----------------|
 | RENAME    | Source col maps semantically, same data, no type change needed | source_column, target_column |
 | CAST      | Source col maps semantically but needs type conversion (e.g. int64→string) | source_column, target_column, target_type, source_type, action (one of: type_cast) |
-| FORMAT    | Source col needs value transformation (date parsing, case change, regex, etc.) | source_column, target_column, target_type, action (one of: parse_date, to_lowercase, to_uppercase, strip_whitespace, regex_replace, regex_extract, truncate_string, pad_string, unit_normalize, format_transform) |
+| FORMAT    | Source col needs value transformation (date parsing, case change, regex, value mapping, etc.) | source_column, target_column, target_type, action (one of: parse_date, to_lowercase, to_uppercase, strip_whitespace, regex_replace, regex_extract, truncate_string, pad_string, value_map, format_transform), optional: mapping dict for value_map |
 | DELETE    | Source col has no place in unified schema — drop it | source_column |
 | ADD       | No source data exists — create null or constant column | target_column, target_type, action (one of: set_null, set_default), optional: default_value |
 | SPLIT     | 1 source col → N target cols (JSON array, delimited string) | source_column, action (one of: json_array_extract_multi, split_column, xml_extract), target_columns dict |
@@ -77,6 +105,29 @@ For json_array_extract_multi, target_columns is a dict:
       "target_column": "brand_name",
       "target_type": "string",
       "action": "set_null"
+    }},
+    {{
+      "primitive": "ADD",
+      "target_column": "data_source",
+      "target_type": "string",
+      "action": "set_default",
+      "default_value": "USDA"
+    }},
+    {{
+      "primitive": "FORMAT",
+      "source_column": "serving_size_unit",
+      "target_column": "serving_size_unit",
+      "target_type": "string",
+      "action": "value_map",
+      "mapping": {{"grm": "g", "gram": "g", "mlt": "ml", "mg": "mg"}}
+    }},
+    {{
+      "primitive": "FORMAT",
+      "source_column": "brand_owner",
+      "target_column": "brand_owner",
+      "target_type": "string",
+      "action": "strip_whitespace",
+      "normalize_before_dedup": true
     }},
     {{
       "primitive": "SPLIT",
