@@ -1,0 +1,6 @@
+column_operations:
+- target: product_name
+  type: string
+  action: type_cast
+  source: description
+  source_type: object
