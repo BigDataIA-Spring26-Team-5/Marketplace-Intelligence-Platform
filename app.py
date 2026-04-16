@@ -457,12 +457,13 @@ def step_code_generation():
 
     if hits or block_hits_map:
         st.markdown(render_pipeline_remembered(hits), unsafe_allow_html=True)
-        if block_hits_map:
+        # Exclude enrichment columns — they're shown in the enrichment section below
+        enrichment_col_set = set(state.get("enrichment_columns_to_generate", []))
+        gap_hits = {col: blk for col, blk in block_hits_map.items() if col not in enrichment_col_set}
+        if gap_hits:
             st.info(
                 "Pipeline blocks will handle: "
-                + ", ".join(
-                    f"`{col}` via `{blk}`" for col, blk in block_hits_map.items()
-                )
+                + ", ".join(f"`{col}` via `{blk}`" for col, blk in gap_hits.items())
             )
 
     if enrichment_cols:

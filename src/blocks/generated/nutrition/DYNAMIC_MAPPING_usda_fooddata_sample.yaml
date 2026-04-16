@@ -19,16 +19,6 @@ column_operations:
   action: strip_whitespace
   source: brand_name
   normalize_before_dedup: true
-- target: ingredients
-  type: string
-  action: strip_whitespace
-  source: ingredients
-  normalize_before_dedup: false
-- target: serving_size
-  type: float
-  action: type_cast
-  source: serving_size
-  source_type: string
 - target: serving_size_unit
   type: string
   action: value_map
@@ -36,12 +26,6 @@ column_operations:
   mapping:
     GRM: g
     g: g
-  normalize_before_dedup: false
-- target: published_date
-  type: string
-  action: strip_whitespace
-  source: published_date
-  normalize_before_dedup: false
 - target: data_source
   type: string
   action: set_default

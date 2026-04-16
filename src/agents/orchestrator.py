@@ -56,7 +56,7 @@ def load_source_node(state: PipelineState) -> dict:
     source_path = state["source_path"]
     logger.info(f"Loading source: {source_path}")
 
-    df = pd.read_csv(source_path)
+    df = pd.read_csv(source_path, na_values=["na", "Na", "n.a.", "not available", "not applicable", "-"], keep_default_na=True)
     schema = profile_dataframe(df)
 
     return {
@@ -233,10 +233,22 @@ def analyze_schema_node(state: PipelineState) -> dict:
         f"{len(missing_columns)} missing columns"
     )
     if unresolvable:
-        logger.warning(
-            f"Unresolvable gaps (will be set_null): "
-            f"{[u['target_column'] for u in unresolvable]}"
-        )
+        provider_cols = set(_BLOCK_COLUMN_PROVIDERS.keys())
+        alias_targets = {a["target"] for a in enrich_alias_ops}
+        truly_unresolvable = [
+            u for u in unresolvable
+            if u["target_column"] not in provider_cols and u["target_column"] not in alias_targets
+        ]
+        if truly_unresolvable:
+            logger.info(
+                f"Agent 1 unresolved columns (preliminary — Agent 1.5 may correct): "
+                f"{[u['target_column'] for u in truly_unresolvable]}"
+            )
+        intercepted = [u["target_column"] for u in unresolvable if u["target_column"] in provider_cols]
+        if intercepted:
+            logger.info(
+                f"Unresolvable gaps intercepted by enrichment blocks (NOT set_null): {intercepted}"
+            )
 
     # Backward-compat gaps list (union)
     gaps = list(derivable_gaps)
@@ -288,10 +300,18 @@ def analyze_schema_node(state: PipelineState) -> dict:
         )
 
     if missing_columns:
-        logger.warning(
-            f"Missing columns (no source data): "
-            f"{[mc['target_column'] for mc in missing_columns]}"
-        )
+        provider_cols = set(_BLOCK_COLUMN_PROVIDERS.keys())
+        alias_targets = {a["target"] for a in enrich_alias_ops}
+        truly_missing = [
+            mc for mc in missing_columns
+            if mc["target_column"] not in provider_cols
+            and mc["target_column"] not in alias_targets
+        ]
+        if truly_missing:
+            logger.info(
+                f"Agent 1 unresolved columns (preliminary — Agent 1.5 may correct): "
+                f"{[mc['target_column'] for mc in truly_missing]}"
+            )
 
     return {
         "unified_schema": unified,
@@ -547,6 +567,22 @@ def check_registry_node(state: PipelineState) -> dict:
         mapping_yaml_path = str(yaml_path)
     else:
         mapping_yaml_path = None
+
+    # Accurate final coverage check — fires after Agent 1.5 corrections and alias resolution
+    yaml_covered = {op["target"] for op in yaml_operations if "target" in op}
+    block_covered = set(block_hits.keys())
+    aliased_col_targets = {a["target"] for a in enrich_alias_ops}
+    final_missing = [
+        mc["target_column"]
+        for mc in state.get("missing_columns", [])
+        if mc["target_column"] not in aliased_col_targets
+        and mc["target_column"] not in block_covered
+        and mc["target_column"] not in yaml_covered
+    ]
+    if final_missing:
+        logger.warning(f"Columns with no coverage (will be set_null): {final_missing}")
+    else:
+        logger.info("All missing columns have coverage (alias, block, or YAML)")
 
     result = {
         "block_registry_hits": block_hits,
