@@ -57,6 +57,7 @@ def run_pipeline(source_path: str, domain: str, run_label: str) -> dict:
     gaps = result.get("gaps", [])
     registry_hits = result.get("block_registry_hits", {})
     unresolvable = result.get("unresolvable_gaps", [])
+    critique_notes = result.get("critique_notes", [])
     audit_log = result.get("audit_log", [])
 
     logger.info(f"\n--- {run_label} Results ---")
@@ -68,6 +69,14 @@ def run_pipeline(source_path: str, domain: str, run_label: str) -> dict:
     logger.info(f"  Gaps detected:        {len(gaps)}")
     logger.info(f"  Registry hits:        {len(registry_hits)}")
     logger.info(f"  Unresolvable gaps:    {len(unresolvable)}")
+    logger.info(f"  Agent 1.5 corrections: {len(critique_notes)}")
+
+    if critique_notes:
+        logger.info(f"\n  Agent 1.5 critique notes:")
+        for note in critique_notes:
+            rule = note.get("rule", "?")
+            col = note.get("column", "?")
+            logger.info(f"    [{rule}] {col}: {note.get('correction', '')[:80]}")
 
     if audit_log:
         logger.info(f"\n  Block execution trace:")

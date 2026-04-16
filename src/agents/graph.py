@@ -15,6 +15,7 @@ from src.agents.orchestrator import (
     analyze_schema_node,
     check_registry_node,
 )
+from src.agents.critic import critique_schema_node
 from src.agents.prompts import SEQUENCE_PLANNING_PROMPT
 from src.models.llm import call_llm_json, get_orchestrator_llm
 from src.registry.block_registry import BlockRegistry
@@ -261,6 +262,7 @@ def save_output_node(state: PipelineState) -> dict:
 NODE_MAP = {
     "load_source": load_source_node,
     "analyze_schema": analyze_schema_node,
+    "critique_schema": critique_schema_node,
     "check_registry": check_registry_node,
     "plan_sequence": plan_sequence_node,
     "run_pipeline": run_pipeline_node,
@@ -290,13 +292,15 @@ def build_graph() -> StateGraph:
 
     graph.add_node("load_source", load_source_node)
     graph.add_node("analyze_schema", analyze_schema_node)
+    graph.add_node("critique_schema", critique_schema_node)
     graph.add_node("check_registry", check_registry_node)
     graph.add_node("plan_sequence", plan_sequence_node)
     graph.add_node("run_pipeline", run_pipeline_node)
     graph.add_node("save_output", save_output_node)
 
     graph.add_edge("load_source", "analyze_schema")
-    graph.add_edge("analyze_schema", "check_registry")
+    graph.add_edge("analyze_schema", "critique_schema")
+    graph.add_edge("critique_schema", "check_registry")
     graph.add_edge("check_registry", "plan_sequence")
     graph.add_edge("plan_sequence", "run_pipeline")
     graph.add_edge("run_pipeline", "save_output")

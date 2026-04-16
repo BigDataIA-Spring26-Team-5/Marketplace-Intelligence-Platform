@@ -68,6 +68,10 @@ class PipelineState(TypedDict, total=False):
     operations: list[dict]           # full operations[] list from analyze_schema_node
     unresolvable_gaps: list[dict]    # gaps LLM flagged as unresolvable (audit trail)
 
+    # Agent 1.5 critic output
+    revised_operations: list[dict]   # Agent 1.5's corrected operations list
+    critique_notes: list[dict]       # Agent 1.5's audit notes, one entry per correction
+
     # Registry results (set by registry_check node)
     block_registry_hits: dict  # target_col -> block_name
     registry_misses: list[GapItem]   # always empty — no Agent 2

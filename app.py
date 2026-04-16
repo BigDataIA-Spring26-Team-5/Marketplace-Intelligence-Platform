@@ -332,8 +332,12 @@ def step_schema_analysis():
 
 
 def step_code_generation():
-    """Step 2: Schema Mapping — registry check, YAML generation, sequence planning."""
+    """Step 2: Schema Mapping — critique, registry check, YAML generation, sequence planning."""
     state = st.session_state["pipeline_state"]
+
+    # Agent 1.5: critique Agent 1's operations
+    with st.spinner("Agent 1.5: Critiquing schema analysis..."):
+        state = run_step("critique_schema", state)
 
     with st.spinner("Checking block registry and building schema mapping..."):
         state = run_step("check_registry", state)
@@ -349,6 +353,24 @@ def step_code_generation():
         unsafe_allow_html=True,
     )
     st.markdown(render_registry_results(hits, []), unsafe_allow_html=True)
+
+    # Agent 1.5 Critique section
+    critique_notes = state.get("critique_notes", [])
+    with st.expander("Agent 1.5 Critique", expanded=bool(critique_notes)):
+        if critique_notes:
+            for note in critique_notes:
+                rule = note.get("rule", "Unknown rule")
+                column = note.get("column", "?")
+                original = note.get("original", "—")
+                correction = note.get("correction", "—")
+                st.markdown(
+                    f"**{rule}** — `{column}`\n\n"
+                    f"- **Original:** {original}\n"
+                    f"- **Correction:** {correction}",
+                )
+                st.markdown("---")
+        else:
+            st.info("No corrections needed.")
 
     # Show YAML mapping review if a YAML was generated
     yaml_path = state.get("mapping_yaml_path")

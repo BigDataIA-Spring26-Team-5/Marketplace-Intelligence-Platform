@@ -184,6 +184,69 @@ Return ONLY a JSON object:
 }}"""
 
 
+CRITIC_PROMPT = """You are a senior data engineer reviewing a junior engineer's schema gap analysis.
+
+You will be given:
+1. The source data profile (column by column, with structure detection and sample values)
+2. The unified target schema
+3. The gap analysis operations list produced by the junior engineer
+
+Your job is to find errors, omissions, and poor classifications, then return a corrected operations list.
+
+## Source Data Profile
+{source_profile}
+
+## Dataset Metadata
+{source_meta}
+
+## Unified Target Schema
+{unified_schema}
+
+## Junior Engineer's Operations List
+{operations}
+
+## Verification Checklist
+
+Work through each rule below for EVERY operation. Correct any violations.
+
+### Rule 1 — value_map completeness
+For every operation with action `value_map`: inspect the source column's `sample_values` in the profile. Every distinct value in `sample_values` must appear as a key in the mapping dict. Additionally use world knowledge to add other likely variants not present in the sample. For example if sample shows `["GRM", "g", "MG"]` the mapping must include at minimum all common abbreviations and spellings for those unit families. If any sample value is missing from the mapping keys, add it. This is a mandatory correction — never leave a sampled value unmapped.
+
+### Rule 2 — semantic override detection
+For every operation classified as `RENAME` or FORMAT passthrough: inspect whether the source column's sample values are internal system codes, submission channel identifiers, technical keys, or numeric IDs rather than the human-readable semantic value the unified schema column represents. Examples of system codes: `"GDSN"`, `"LI"`, `"API"`, `"BATCH"`, `"SRC_01"`. If yes, reclassify as `ADD` with action `set_default`. The default value must be the data provider name inferred from context (file path, dataset name, domain). If you cannot determine the provider name with confidence, flag it in `critique_notes` and set the default to `"UNKNOWN"` rather than leaving the system code.
+
+### Rule 3 — structural column under-classification
+For every source column where `detected_structure` in the profile is `json_array`, `json_object`, `composite`, `delimited`, or `xml`: verify that the operation assigned to it reflects the structure. A `json_array` column classified as simple `FORMAT` or `RENAME` is almost certainly wrong — it should be `SPLIT` with `json_array_extract_multi` or `DERIVE` with `extract_json_field`. If a structured column has been under-classified, correct it and specify the appropriate target columns based on `inferred_keys` in the profile.
+
+### Rule 4 — type mismatch on RENAME
+For every `RENAME` operation: compare the source column's `dtype` in the profile against the target column's `type` in the unified schema. If they differ (e.g. source is `object`, target is `float`), reclassify as `CAST` and add the appropriate `target_type`. A RENAME should only remain a RENAME if types are already compatible.
+
+### Rule 5 — derivable ADD operations
+For every `ADD set_null` operation: scan all source columns in the profile and determine whether any source column could reasonably produce the target column's value through extraction, derivation, or transformation. If yes, reclassify from `ADD set_null` to the appropriate `DERIVE` or `FORMAT` operation and explain the derivation in `critique_notes`. Only leave it as `set_null` if no source data path exists.
+
+### Rule 6 — DELETE completeness
+Compare the full list of source columns in the profile against the columns consumed by operations (as `source_column`). Any source column that appears in neither the unified schema nor any operation's `source_column` field is an implicit DELETE that Agent 1 missed. Add explicit `DELETE drop_column` operations for each.
+
+### Rule 7 — normalize_before_dedup annotation
+For every operation targeting a column that is identity-bearing — meaning it will be used as a similarity signal during deduplication (product name, brand, title, identifier-like columns) — ensure the operation has `normalize_before_dedup: true`. If Agent 1 omitted this annotation on identity columns, add it.
+
+## Output Format
+
+Return ONLY a JSON object with this exact structure:
+{{
+  "revised_operations": [ ...complete corrected operations list... ],
+  "critique_notes": [
+    {{
+      "rule": "Rule N — rule name",
+      "column": "column_name",
+      "original": "what Agent 1 had",
+      "correction": "what you changed and why"
+    }}
+  ]
+}}
+Do not include any text outside the JSON object."""
+
+
 SEQUENCE_PLANNING_PROMPT = """You are a pipeline sequence planner for a data enrichment ETL system.
 
 You are given a set of pipeline blocks that MUST ALL run. Your task is to determine the optimal execution order.

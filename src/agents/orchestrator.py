@@ -318,7 +318,8 @@ def check_registry_node(state: PipelineState) -> dict:
     missing_columns = state.get("missing_columns", [])
     derivable_gaps = state.get("derivable_gaps", [])
     decisions = state.get("missing_column_decisions", {})
-    operations = state.get("operations", [])  # new-style ops from LLM
+    # Use revised_operations from Agent 1.5 if present, else fall back to Agent 1's raw operations
+    operations = state.get("revised_operations") or state.get("operations", [])
 
     block_hits: dict[str, str] = {}
     yaml_operations: list[dict] = []

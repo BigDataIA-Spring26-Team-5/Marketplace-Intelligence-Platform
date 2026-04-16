@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 # Suppress litellm's verbose logging — our own orchestrator logs are sufficient
 litellm.set_verbose = False
 litellm.suppress_debug_info = True
@@ -28,6 +30,21 @@ def get_codegen_llm() -> str:
 def get_enrichment_llm() -> str:
     """Model string for Tier 4 enrichment."""
     return "deepseek/deepseek-chat"
+
+
+def get_critic_llm() -> str:
+    """Model string for Agent 1.5 — gap analysis critic.
+
+    Uses a reasoning model for higher accuracy on verification tasks.
+    Falls back to orchestrator model if reasoning model unavailable.
+    """
+    try:
+        return "deepseek/deepseek-reasoner"
+    except Exception:
+        logger.warning(
+            "deepseek-reasoner unavailable — critic running on non-reasoning model"
+        )
+        return get_orchestrator_llm()
 
 
 def call_llm(model: str, messages: list[dict], temperature: float = 0.0) -> str:
