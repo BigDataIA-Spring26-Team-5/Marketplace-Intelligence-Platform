@@ -41,6 +41,7 @@ def critique_schema_node(state: PipelineState) -> dict:
 
     source_schema = state.get("source_schema", {})
     unified_schema = state.get("unified_schema", {})
+    column_mapping = state.get("column_mapping", {})
 
     meta_block = source_schema.get("__meta__", {})
     columns_only = {k: v for k, v in source_schema.items() if k != "__meta__"}
@@ -63,6 +64,7 @@ def critique_schema_node(state: PipelineState) -> dict:
                     source_profile=json.dumps(columns_only, indent=2),
                     source_meta=json.dumps(meta_block, indent=2),
                     unified_schema=json.dumps({"columns": mappable_cols}, indent=2),
+                    column_mapping=json.dumps(column_mapping, indent=2),
                     operations=json.dumps(operations, indent=2),
                 ),
             }

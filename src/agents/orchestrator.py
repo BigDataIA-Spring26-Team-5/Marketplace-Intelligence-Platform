@@ -56,7 +56,17 @@ def load_source_node(state: PipelineState) -> dict:
     source_path = state["source_path"]
     logger.info(f"Loading source: {source_path}")
 
-    df = pd.read_csv(source_path, na_values=["na", "Na", "n.a.", "not available", "not applicable", "-"], keep_default_na=True)
+    _NULL_SENTINELS = [
+        "na", "Na", "NA", "n/a", "N/A",
+        "n.a.", "N.A.",
+        "none", "None", "NONE",
+        "null", "Null", "NULL",
+        "nan", "NaN", "NAN",
+        "-", "--",
+        "not available", "not applicable",
+        "unknown", "Unknown", "UNKNOWN",
+    ]
+    df = pd.read_csv(source_path, na_values=_NULL_SENTINELS, keep_default_na=True)
     schema = profile_dataframe(df)
 
     return {
@@ -294,6 +304,18 @@ def analyze_schema_node(state: PipelineState) -> dict:
             f"{enrichment_to_generate}"
         )
 
+    # Hard fallback: ensure schema-declared enrichment_alias columns are always in enrich_alias_ops
+    # This is LLM-proof — if both Agent 1 and 1.5 miss/revert ENRICH_ALIAS, schema wins.
+    alias_targets_set = {a["target"] for a in enrich_alias_ops}
+    for col_name, col_spec in unified.get("columns", {}).items():
+        schema_alias = col_spec.get("enrichment_alias")
+        if schema_alias and col_name not in alias_targets_set:
+            enrich_alias_ops.append({"target": col_name, "source": schema_alias})
+            alias_targets_set.add(col_name)
+            logger.info(
+                f"Schema fallback: added ENRICH_ALIAS '{col_name}' ← '{schema_alias}'"
+            )
+
     if enrich_alias_ops:
         logger.info(
             f"Enrichment aliases: {[(a['target'], '←', a['source']) for a in enrich_alias_ops]}"
@@ -328,6 +350,91 @@ def analyze_schema_node(state: PipelineState) -> dict:
     }
 
 
+# Identity columns that must carry normalize_before_dedup=true for fuzzy dedup
+_IDENTITY_COLUMNS = {"product_name", "brand_owner", "brand_name"}
+
+# Dtype families for type-compatibility checks (Rule 4)
+_STRING_DTYPES = {"object", "string", "str"}
+_FLOAT_DTYPES = {"float64", "float32", "float", "Float64"}
+_INT_DTYPES = {"int64", "int32", "int", "Int64"}
+
+_DTYPE_FAMILY = {
+    **{d: "string" for d in _STRING_DTYPES},
+    **{d: "float" for d in _FLOAT_DTYPES},
+    **{d: "integer" for d in _INT_DTYPES},
+}
+
+
+def _deterministic_corrections(
+    operations: list[dict],
+    column_mapping: dict,
+    source_schema: dict,
+    unified_schema: dict,
+) -> list[dict]:
+    """Apply Rules 4, 6, 7 deterministically — no LLM needed.
+
+    Rule 4: RENAME with incompatible types → CAST.
+    Rule 6: Source columns not consumed anywhere → DELETE drop_column.
+    Rule 7: Operations targeting identity columns missing normalize_before_dedup → add it.
+    """
+    unified_cols = unified_schema.get("columns", {})
+    source_cols = {k: v for k, v in source_schema.items() if k != "__meta__"}
+
+    # --- Rule 4: type mismatch on RENAME ---
+    corrected = []
+    for op in operations:
+        if op.get("primitive") == "RENAME":
+            src = op.get("source_column", "")
+            tgt = op.get("target_column", "")
+            src_dtype = source_cols.get(src, {}).get("dtype", "object")
+            tgt_type = unified_cols.get(tgt, {}).get("type", "string")
+            src_family = _DTYPE_FAMILY.get(src_dtype, "string")
+            if src_family != tgt_type:
+                op = {
+                    **op,
+                    "primitive": "CAST",
+                    "action": "type_cast",
+                    "source_type": src_dtype,
+                    "target_type": tgt_type,
+                }
+                logger.info(
+                    f"Deterministic Rule 4: RENAME '{src}'→'{tgt}' reclassified as CAST "
+                    f"({src_dtype} → {tgt_type})"
+                )
+        corrected.append(op)
+    operations = corrected
+
+    # --- Rule 6: DELETE completeness ---
+    consumed_sources: set[str] = set(column_mapping.keys())
+    for op in operations:
+        src = op.get("source_column")
+        if src:
+            consumed_sources.add(src)
+        for src in op.get("sources", []):
+            consumed_sources.add(src)
+        # SPLIT ops use target_columns dict, source_column already captured above
+    existing_deletes = {
+        op.get("source_column") for op in operations if op.get("primitive") == "DELETE"
+    }
+    for col in sorted(source_cols.keys()):
+        if col not in consumed_sources and col not in existing_deletes:
+            operations.append({
+                "primitive": "DELETE",
+                "source_column": col,
+                "action": "drop_column",
+            })
+            logger.info(f"Deterministic Rule 6: added DELETE for uncovered source col '{col}'")
+
+    # --- Rule 7: normalize_before_dedup annotation ---
+    for op in operations:
+        tgt = op.get("target_column", "")
+        if tgt in _IDENTITY_COLUMNS and not op.get("normalize_before_dedup"):
+            op["normalize_before_dedup"] = True
+            logger.debug(f"Deterministic Rule 7: normalize_before_dedup added to '{tgt}'")
+
+    return operations
+
+
 def check_registry_node(state: PipelineState) -> dict:
     """
     Check BlockRegistry for existing blocks, then build a YAML mapping file
@@ -356,6 +463,13 @@ def check_registry_node(state: PipelineState) -> dict:
     # Use revised_operations from Agent 1.5 if present, else fall back to Agent 1's raw operations
     revised_operations = state.get("revised_operations")
     operations = revised_operations or state.get("operations", [])
+
+    # Apply deterministic corrections (Rules 4, 6, 7) regardless of which agent produced operations
+    source_schema = state.get("source_schema", {})
+    unified_schema_state = state.get("unified_schema", {})
+    operations = _deterministic_corrections(
+        operations, column_mapping, source_schema, unified_schema_state
+    )
 
     block_hits: dict[str, str] = {}
     yaml_operations: list[dict] = []
@@ -421,6 +535,25 @@ def check_registry_node(state: PipelineState) -> dict:
 
         # Merge in order: drops first, transforms, then adds
         yaml_operations = drop_ops + transform_ops + add_ops
+
+        # Hard fallback: ensure schema-declared enrichment_alias columns are always in enrich_alias_ops
+        # Catches cases where Agent 1.5 reverted ENRICH_ALIAS → ADD set_null
+        alias_targets_set = {a["target"] for a in enrich_alias_ops}
+        unified_schema_cols = state.get("unified_schema", {}).get("columns", {})
+        for col_name, col_spec in unified_schema_cols.items():
+            schema_alias = col_spec.get("enrichment_alias")
+            if schema_alias and col_name not in alias_targets_set:
+                enrich_alias_ops.append({"target": col_name, "source": schema_alias})
+                alias_targets_set.add(col_name)
+                logger.info(
+                    f"Schema fallback: restored ENRICH_ALIAS '{col_name}' ← '{schema_alias}' "
+                    f"(Agent 1.5 reverted it)"
+                )
+                # Remove any ADD set_null that Agent 1.5 may have emitted for this column
+                yaml_operations = [
+                    op for op in yaml_operations
+                    if not (op.get("target") == col_name and op.get("action") in ("set_null", "set_default"))
+                ]
 
         # Skip legacy gap processing — revised_operations is authoritative
 

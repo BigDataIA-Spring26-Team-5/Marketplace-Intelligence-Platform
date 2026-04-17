@@ -307,18 +307,20 @@ def step_schema_analysis():
 
     # Missing columns HITL decision
     missing_cols = state.get("missing_columns", [])
+    aliased_targets = {a["target"] for a in state.get("enrich_alias_ops", [])}
+    truly_missing_cols = [mc for mc in missing_cols if mc["target_column"] not in aliased_targets]
     if missing_cols:
         st.markdown(
             '<div class="section-header">Missing Columns — No Source Data</div>',
             unsafe_allow_html=True,
         )
         st.markdown(
-            render_missing_columns(missing_cols), unsafe_allow_html=True
+            render_missing_columns(truly_missing_cols), unsafe_allow_html=True
         )
         st.markdown(
             '<p style="color:#bc4c00; font-size:0.85em; margin:8px 0 4px 0;">'
-            'The following required columns have no source data and cannot be derived. '
-            'Rows with null values in required columns will be quarantined.</p>',
+            'Preliminary list (Agent 1.5 in Step 2 may detect semantic aliases to enrichment columns). '
+            'Rows with null values in truly unresolvable required columns will be quarantined.</p>',
             unsafe_allow_html=True,
         )
         st.markdown(
@@ -328,7 +330,6 @@ def step_schema_analysis():
             unsafe_allow_html=True,
         )
 
-        aliased_targets = {a["target"] for a in state.get("enrich_alias_ops", [])}
         decisions = {}
         for mc in missing_cols:
             col_name = mc["target_column"]
@@ -354,8 +355,7 @@ def step_schema_analysis():
 
     # HITL Gate 1
     # Determine if there are truly unresolvable missing cols (not covered by enrichment alias)
-    aliased_targets = {a["target"] for a in state.get("enrich_alias_ops", [])}
-    truly_missing = [mc for mc in state.get("missing_columns", []) if mc["target_column"] not in aliased_targets]
+    truly_missing = truly_missing_cols  # Already computed above
     st.markdown("---")
     if truly_missing:
         col1, col2, col3 = st.columns(3)

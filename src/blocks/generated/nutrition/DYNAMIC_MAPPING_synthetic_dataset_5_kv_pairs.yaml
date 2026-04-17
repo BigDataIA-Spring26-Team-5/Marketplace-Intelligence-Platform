@@ -1,0 +1,27 @@
+column_operations:
+- source: entity_id
+  action: drop_column
+- source: field_1_name
+  action: drop_column
+- source: field_2_name
+  action: drop_column
+- source: field_3_name
+  action: drop_column
+- source: field_4_name
+  action: drop_column
+- source: version
+  action: drop_column
+- target: data_source
+  type: string
+  action: set_default
+  default_value: USDA
+- target: serving_size
+  type: float
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: serving_size_unit
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available

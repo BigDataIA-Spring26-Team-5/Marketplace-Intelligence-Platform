@@ -53,7 +53,7 @@ Unmapped values pass through unchanged.
 Columns that identify the product (product_name, brand_owner, brand_name) require
 normalization before deduplication. Add annotation:
   "normalize_before_dedup": true
-This signals the sequence planner to apply strip_whitespace/lowercase before dedup.
+This signals the sequence planner that fixed cleaning blocks (whitespace, lowercase) will run before dedup.
 
 ## 8-Primitive Taxonomy
 
@@ -63,7 +63,7 @@ Use EXACTLY these primitive names. Each unified column must appear in exactly on
 |-----------|-------------|-----------------|
 | RENAME       | Source col maps semantically, same data, no type change needed | source_column, target_column |
 | CAST         | Source col maps semantically but needs type conversion (e.g. int64→string) | source_column, target_column, target_type, source_type, action (one of: type_cast) |
-| FORMAT       | Source col needs value transformation (date parsing, case change, regex, value mapping, etc.) | source_column, target_column, target_type, action (one of: parse_date, to_lowercase, to_uppercase, strip_whitespace, regex_replace, regex_extract, truncate_string, pad_string, value_map, format_transform), optional: mapping dict for value_map |
+| FORMAT       | Source col needs value transformation (date parsing, regex, value mapping, etc.) | source_column, target_column, target_type, action (one of: parse_date, regex_replace, regex_extract, truncate_string, pad_string, value_map, format_transform), optional: mapping dict for value_map |
 | DELETE       | Source col has no place in unified schema — drop it | source_column |
 | ADD          | No source data exists — create null or constant column | target_column, target_type, action (one of: set_null, set_default), optional: default_value |
 | SPLIT        | 1 source col → N target cols (JSON array, delimited string) | source_column, action (one of: json_array_extract_multi, split_column, xml_extract), target_columns dict |
@@ -78,9 +78,22 @@ For json_array_extract_multi, target_columns is a dict:
     "col_name2": {{"key": "other_field", "join_all": true, "type": "string"}}
   }}
 
+## Schema-Defined Enrichment Aliases
+
+Some unified schema columns have an `enrichment_alias` field that explicitly declares which enrichment column will fill them downstream. These are **mandatory ENRICH_ALIAS** — do not use ADD, RENAME, or any other primitive for these columns.
+
+Scan unified schema for columns with `"enrichment_alias"`: any such column MUST be output as `ENRICH_ALIAS` with `source_enrichment` set to the value of `enrichment_alias`. Do not attempt to map source data to these columns.
+
+Additionally, for any required column with no source data path, check if an enrichment column (`"enrichment": true`) covers the same concept → output ENRICH_ALIAS.
+
 ## Important rules
 - RENAME goes in column_mapping (not operations[]).
 - Everything else goes in operations[].
+- Do NOT generate these FORMAT actions (handled by fixed cleaning blocks post-transformation):
+  - strip_whitespace
+  - to_lowercase
+  - to_uppercase
+  These run automatically on ALL datasets after DynamicMappingBlock. Only use FORMAT for dataset-specific transformations like parse_date, value_map, regex_replace.
 - If a unified column truly has no source data and cannot be derived → put it in unresolvable[] with a reason and fallback: "set_null".
 - Do NOT classify as unresolvable if any source column could produce the data with a SPLIT/DERIVE action.
 - NEVER map nutrient arrays (foodNutrients) to "ingredients" — nutrients are lab measurements, not ingredient lists.
@@ -126,14 +139,6 @@ For json_array_extract_multi, target_columns is a dict:
       "mapping": {{"grm": "g", "gram": "g", "mlt": "ml", "mg": "mg"}}
     }},
     {{
-      "primitive": "FORMAT",
-      "source_column": "brand_owner",
-      "target_column": "brand_owner",
-      "target_type": "string",
-      "action": "strip_whitespace",
-      "normalize_before_dedup": true
-    }},
-    {{
       "primitive": "SPLIT",
       "source_column": "foodNutrients",
       "action": "json_array_extract_multi",
@@ -145,6 +150,11 @@ For json_array_extract_multi, target_columns is a dict:
     {{
       "primitive": "DELETE",
       "source_column": "gtinUpc"
+    }},
+    {{
+      "primitive": "ENRICH_ALIAS",
+      "target_column": "category",
+      "source_enrichment": "primary_category"
     }}
   ],
   "unresolvable": [
@@ -201,9 +211,10 @@ CRITIC_PROMPT = """You are a senior data engineer reviewing a junior engineer's 
 You will be given:
 1. The source data profile (column by column, with structure detection and sample values)
 2. The unified target schema
-3. The gap analysis operations list produced by the junior engineer
+3. The column_mapping already decided (RENAME operations — these columns are already resolved)
+4. The gap analysis operations list (everything else: CAST, FORMAT, ADD, SPLIT, UNIFY, DERIVE, DELETE, ENRICH_ALIAS)
 
-Your job is to find errors, omissions, and poor classifications, then return a corrected operations list.
+Your job is to find errors in the 4 areas below. Do NOT touch what is already correct.
 
 ## Source Data Profile
 {source_profile}
@@ -214,40 +225,33 @@ Your job is to find errors, omissions, and poor classifications, then return a c
 ## Unified Target Schema
 {unified_schema}
 
+## Already-Resolved Column Mapping (RENAME operations — DO NOT re-add these)
+{column_mapping}
+
+The target columns in column_mapping are already handled. Do NOT add operations for them. Do NOT flag them as missing or derivable.
+
 ## Junior Engineer's Operations List
 {operations}
 
-## Verification Checklist
+## Verification Rules
 
-Work through each rule below for EVERY operation. Correct any violations.
+Apply ONLY these 4 rules. Do not invent others.
 
 ### Rule 1 — value_map completeness
-For every operation with action `value_map`: inspect the source column's `sample_values` in the profile. Every distinct value in `sample_values` must appear as a key in the mapping dict. Additionally use world knowledge to add other likely variants not present in the sample. For example if sample shows `["GRM", "g", "MG"]` the mapping must include at minimum all common abbreviations and spellings for those unit families. If any sample value is missing from the mapping keys, add it. This is a mandatory correction — never leave a sampled value unmapped.
+For every operation with action `value_map`: inspect the source column's `sample_values` in the profile. Every distinct value in `sample_values` must appear as a key in the mapping dict. Use world knowledge to add other likely variants not in the sample (e.g., if sample shows `["GRM", "g", "MG"]`, add all common abbreviations for those unit families). This is mandatory — never leave a sampled value unmapped.
 
 ### Rule 2 — semantic override detection
-For every operation classified as `RENAME` or FORMAT passthrough: inspect whether the source column's sample values are internal system codes, submission channel identifiers, technical keys, or numeric IDs rather than the human-readable semantic value the unified schema column represents. Examples of system codes: `"GDSN"`, `"LI"`, `"API"`, `"BATCH"`, `"SRC_01"`. If yes, reclassify as `ADD` with action `set_default`. The default value must be the data provider name inferred from context (file path, dataset name, domain). If you cannot determine the provider name with confidence, flag it in `critique_notes` and set the default to `"UNKNOWN"` rather than leaving the system code.
+For every RENAME or FORMAT passthrough in operations[]: inspect whether sample values are internal system codes, submission channel identifiers, technical keys, or numeric IDs rather than the human-readable semantic value the unified schema column represents. Examples: `"GDSN"`, `"LI"`, `"API"`, `"BATCH"`, `"SRC_01"`. If yes, reclassify as `ADD set_default`. Default value = data provider name from context (file path, dataset name, domain). If uncertain, set default to `"UNKNOWN"` and flag in critique_notes.
 
 ### Rule 3 — structural column under-classification
-For every source column where `detected_structure` in the profile is `json_array`, `json_object`, `composite`, `delimited`, or `xml`: verify that the operation assigned to it reflects the structure. A `json_array` column classified as simple `FORMAT` or `RENAME` is almost certainly wrong — it should be `SPLIT` with `json_array_extract_multi` or `DERIVE` with `extract_json_field`. If a structured column has been under-classified, correct it and specify the appropriate target columns based on `inferred_keys` in the profile.
-
-### Rule 4 — type mismatch on RENAME
-For every `RENAME` operation: compare the source column's `dtype` in the profile against the target column's `type` in the unified schema. If they differ (e.g. source is `object`, target is `float`), reclassify as `CAST` and add the appropriate `target_type`. A RENAME should only remain a RENAME if types are already compatible.
+For every source column where `detected_structure` in the profile is `json_array`, `json_object`, `composite`, `delimited`, or `xml`: verify the operation reflects the structure. A `json_array` column classified as simple RENAME or FORMAT is wrong — it should be SPLIT with `json_array_extract_multi` or DERIVE with `extract_json_field`. If under-classified, correct it using `inferred_keys` from the profile.
 
 ### Rule 5 — derivable ADD operations
-For every `ADD set_null` operation: scan all source columns in the profile and determine whether any source column could reasonably produce the target column's value through extraction, derivation, or transformation. If yes, reclassify from `ADD set_null` to the appropriate `DERIVE` or `FORMAT` operation and explain the derivation in `critique_notes`. Only leave it as `set_null` if no source data path exists.
-
-### Rule 6 — DELETE completeness
-Compare the full list of source columns in the profile against the columns consumed by operations (as `source_column`). Any source column that appears in neither the unified schema nor any operation's `source_column` field is an implicit DELETE that Agent 1 missed. Add explicit `DELETE drop_column` operations for each.
-
-### Rule 7 — normalize_before_dedup annotation
-For every operation targeting a column that is identity-bearing — meaning it will be used as a similarity signal during deduplication (product name, brand, title, identifier-like columns) — ensure the operation has `normalize_before_dedup: true`. If Agent 1 omitted this annotation on identity columns, add it.
-
-### Rule 8 — enrichment alias detection
-For every `ADD set_null` operation on a **required** unified column: scan the unified schema for enrichment columns (`"enrichment": true`). If an enrichment column semantically covers the same concept as the required column (same meaning, compatible type), convert the `ADD set_null` to `ENRICH_ALIAS` with `source_enrichment` pointing to that enrichment column. Log the correction with the enrichment column name as the reason. Only convert when confident — leave as `set_null` if no clear semantic match exists.
+For every `ADD set_null` in operations[]: check whether any source column that is NOT already in column_mapping could produce the target value via extraction, derivation, or transformation. If a genuine unused source path exists, reclassify to DERIVE or FORMAT. Do NOT reclassify if the source column is already in column_mapping (it's already handled as a RENAME).
 
 ## Output Format
 
-Return ONLY a JSON object with this exact structure:
+Return ONLY a JSON object:
 {{
   "revised_operations": [ ...complete corrected operations list... ],
   "critique_notes": [

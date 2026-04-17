@@ -127,8 +127,15 @@ def render_schema_delta(
                 f'</tr>'
             )
     if missing_columns is not None:
+        # Build set of columns covered by enrichment or alias — don't show as MISSING
+        covered_by_enrichment = set(enrichment_columns or [])
+        covered_by_alias = {a.get("target", "") for a in (enrich_alias_ops or [])}
+        skip_missing = covered_by_enrichment | covered_by_alias
+
         for mc in missing_columns:
             target_col = mc.get("target_column", "")
+            if target_col in skip_missing:
+                continue  # Will appear in enrichment or alias section instead
             target_type = mc.get("target_type", "")
             reason = mc.get("reason", "")
 
