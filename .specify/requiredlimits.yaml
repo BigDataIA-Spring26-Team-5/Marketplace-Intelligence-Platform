@@ -6,3 +6,4 @@ max_s3_calls_per_chunk: 50
 llm_confidence_threshold: 0.85
 chunk_size: 5000
 checkpoint_interval: 1000
+checkpoint_schema_version: 1
