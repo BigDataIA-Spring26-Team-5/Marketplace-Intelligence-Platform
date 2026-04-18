@@ -80,7 +80,8 @@ CLAUDE.md
 *.bak
 
 # =========================
-# Spec it
+# Spec Kit
 # =========================
 specs
 .specify
+.opencode
