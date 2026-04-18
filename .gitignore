@@ -79,11 +79,11 @@ CLAUDE.md
 *.tmp
 *.bak
 
-# =========================
-# Spec Kit
-# =========================
-specs
-.specify
-.opencode
-.agents
-.ruff_cache
+# # =========================
+# # Spec Kit
+# # =========================
+# specs
+# .specify
+# .opencode
+# .agents
+# .ruff_cache

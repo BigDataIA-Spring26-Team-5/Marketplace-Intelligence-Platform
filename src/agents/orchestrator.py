@@ -83,7 +83,14 @@ def load_source_node(state: PipelineState) -> dict:
         "Unknown",
         "UNKNOWN",
     ]
-    df = pd.read_csv(source_path, na_values=_NULL_SENTINELS, keep_default_na=True)
+    import csv as _csv
+    with open(source_path, newline="", encoding="utf-8", errors="replace") as _f:
+        _sample = _f.read(8192)
+    try:
+        _sep = _csv.Sniffer().sniff(_sample, delimiters=",\t|").delimiter
+    except _csv.Error:
+        _sep = "\t" if _sample.count("\t") > _sample.count(",") else ","
+    df = pd.read_csv(source_path, sep=_sep, na_values=_NULL_SENTINELS, keep_default_na=True, low_memory=False)
 
     # Use adaptive sampling for representative row selection
     sampled_df, sampling_strategy = adaptive_sample(df, seed=42)
