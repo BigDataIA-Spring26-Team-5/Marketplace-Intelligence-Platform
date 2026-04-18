@@ -18,13 +18,12 @@ class StripPunctuationBlock(Block):
         target_cols = ["product_name", "brand_name"]
         for col in target_cols:
             if col in df.columns:
-                df[col] = df[col].astype(str).where(df[col].astype(str) != "nan", pd.NA)
                 df[col] = (
                     df[col]
                     .apply(
                         lambda v: (
-                            v
-                            if v == "nan"
+                            pd.NA
+                            if pd.isna(v)
                             else (
                                 (cleaned := re.sub(r"[^\w\s]", " ", str(v))) or str(v)
                             )
@@ -32,6 +31,5 @@ class StripPunctuationBlock(Block):
                     )
                     .str.replace(r"\s+", " ", regex=True)
                     .str.strip()
-                    .replace("nan", pd.NA)
                 )
         return df

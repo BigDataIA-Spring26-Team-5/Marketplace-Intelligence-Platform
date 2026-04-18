@@ -15,10 +15,5 @@ class StripWhitespaceBlock(Block):
         df = df.copy()
         str_cols = df.select_dtypes(include=["object"]).columns
         for col in str_cols:
-            df[col] = (
-                df[col]
-                .astype(str)
-                .str.strip()
-                .where(df[col].astype(str) != "nan", pd.NA)
-            )
+            df[col] = df[col].str.strip().replace("", pd.NA)
         return df

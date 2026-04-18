@@ -14,5 +14,5 @@ class LowercaseBrandBlock(Block):
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()
         if "brand_name" in df.columns:
-            df["brand_name"] = df["brand_name"].astype(str).str.lower().replace("nan", pd.NA)
+            df["brand_name"] = df["brand_name"].str.lower()
         return df
