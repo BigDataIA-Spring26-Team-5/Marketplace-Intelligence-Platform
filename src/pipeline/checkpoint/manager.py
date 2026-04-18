@@ -355,3 +355,114 @@ class CheckpointManager:
             logger.info(f"Cleared checkpoint(s): {run_id or 'all'}")
         finally:
             conn.close()
+
+    def save_chunk_stage(
+        self,
+        run_id: str,
+        chunk_index: int,
+        stage: str,
+        state: Optional[dict] = None,
+    ) -> None:
+        """
+        Save checkpoint at a specific pipeline stage for a chunk.
+
+        Args:
+            run_id: The checkpoint run identifier
+            chunk_index: Index of the chunk
+            stage: Current stage (transform, enrich, dq, complete)
+            state: Optional state dict to store
+        """
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT id FROM checkpoints WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"Checkpoint not found: {run_id}")
+            checkpoint_id = row["id"]
+
+            existing = conn.execute(
+                """SELECT id FROM chunk_states 
+                   WHERE checkpoint_id = ? AND chunk_index = ?""",
+                (checkpoint_id, chunk_index),
+            ).fetchone()
+
+            if existing:
+                conn.execute(
+                    """UPDATE chunk_states 
+                       SET status = ?, dq_score_pre = ?, dq_score_post = ?, completed_at = ?
+                       WHERE checkpoint_id = ? AND chunk_index = ?""",
+                    (
+                        stage,
+                        state.get("dq_score_pre") if state else None,
+                        state.get("dq_score_post") if state else None,
+                        datetime.now(timezone.utc).isoformat() if stage == "complete" else None,
+                        checkpoint_id,
+                        chunk_index,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO chunk_states
+                       (checkpoint_id, chunk_index, status, record_count,
+                        dq_score_pre, dq_score_post, completed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        checkpoint_id,
+                        chunk_index,
+                        stage,
+                        state.get("record_count", 0) if state else 0,
+                        state.get("dq_score_pre") if state else None,
+                        state.get("dq_score_post") if state else None,
+                        datetime.now(timezone.utc).isoformat() if stage == "complete" else None,
+                    ),
+                )
+            conn.commit()
+            logger.info(f"Saved chunk stage: run_id={run_id}, chunk={chunk_index}, stage={stage}")
+        finally:
+            conn.close()
+
+    def get_chunk_resume_index(self, run_id: str) -> int:
+        """
+        Get the chunk index to resume from.
+
+        Args:
+            run_id: The checkpoint run identifier
+
+        Returns:
+            Chunk index to resume from (0 if no checkpoint)
+        """
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT id FROM checkpoints WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if not row:
+                return 0
+            checkpoint_id = row["id"]
+
+            completed = conn.execute(
+                """SELECT MAX(chunk_index) as max_chunk 
+                   FROM chunk_states 
+                   WHERE checkpoint_id = ? AND status = 'completed'""",
+                (checkpoint_id,),
+            ).fetchone()
+
+            if completed and completed["max_chunk"] is not None:
+                return completed["max_chunk"] + 1
+            return 0
+        finally:
+            conn.close()
+
+    def get_latest_run_id(self) -> Optional[str]:
+        """Get the most recent run_id."""
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT run_id FROM checkpoints ORDER BY created_at DESC LIMIT 1",
+            ).fetchone()
+            return row["run_id"] if row else None
+        finally:
+            conn.close()

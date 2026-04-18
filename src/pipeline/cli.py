@@ -39,6 +39,7 @@ def run_pipeline(
     domain: str,
     resume: bool = False,
     force_fresh: bool = False,
+    chunk_size: int = 10000,
 ) -> dict:
     """Execute the pipeline with checkpoint support."""
     source_file = Path(source_path)
@@ -81,6 +82,7 @@ def run_pipeline(
         "source_path": source_path,
         "domain": domain,
         "missing_column_decisions": {},
+        "chunk_size": chunk_size,
     })
 
     try:
@@ -130,6 +132,12 @@ def main():
         action="store_true",
         help="Clear checkpoint and start fresh",
     )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=10000,
+        help="Rows per chunk for large file processing (default: 10000)",
+    )
 
     args = parser.parse_args()
 
@@ -138,6 +146,7 @@ def main():
         domain=args.domain,
         resume=args.resume,
         force_fresh=args.force_fresh,
+        chunk_size=args.chunk_size,
     )
 
     rows = len(result.get("working_df", []))

@@ -7,6 +7,7 @@ import logging
 import pandas as pd
 
 from src.registry.block_registry import BlockRegistry
+from src.utils.csv_stream import CsvStreamReader, DEFAULT_CHUNK_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -148,3 +149,47 @@ class PipelineRunner:
                 expanded.append(item)
 
         return expanded
+
+    def run_chunked(
+        self,
+        source_path: str,
+        block_sequence: list[str],
+        column_mapping: dict[str, str] | None = None,
+        config: dict | None = None,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+    ) -> tuple[pd.DataFrame, list[dict]]:
+        """
+        Execute pipeline in chunks for large files.
+
+        Args:
+            source_path: Path to source CSV file
+            block_sequence: Ordered list of block names
+            column_mapping: source_col -> unified_col rename mapping
+            config: Block configuration
+            chunk_size: Rows per chunk
+
+        Returns:
+            (result_df, audit_log)
+        """
+        config = config or {}
+        all_audit_logs: list[dict] = []
+        combined_df: pd.DataFrame | None = None
+
+        reader = CsvStreamReader(source_path, chunk_size=chunk_size)
+
+        for i, chunk_df in enumerate(reader):
+            logger.info(f"Processing chunk {i + 1} ({len(chunk_df)} rows)")
+            chunk_result, chunk_log = self.run(
+                chunk_df,
+                block_sequence,
+                column_mapping,
+                config,
+            )
+            all_audit_logs.append({"chunk_index": i, "logs": chunk_log})
+
+            if combined_df is None:
+                combined_df = chunk_result
+            else:
+                combined_df = pd.concat([combined_df, chunk_result], ignore_index=True)
+
+        return combined_df, all_audit_logs

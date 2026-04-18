@@ -90,12 +90,19 @@ A data operator wants to re-run a previously processed source and have the pipel
 
 ### Edge Cases
 
+- How does the system handle CSV files exceeding available memory (e.g., 12GB Open Food Facts)?
 - What happens when the CSV file is empty or has no valid rows?
 - How does system handle CSV files with encoding issues (UTF-8 vs Latin-1)?
 - What when the unified schema is missing entirely (first run scenario)?
 - How does the system handle columns with JSON/array structures that require SPLIT operations?
 - What when LLM API fails during schema analysis or enrichment?
 - How does the system behave when FAISS index is corrupted or missing for S2?
+
+## Clarifications
+
+### Session 2026-04-18
+
+- Q: The spec mentions pipeline runs for datasets up to 10,000 rows (SC-001) but has no handling for large files. The 12.8GB Open Food Facts file caused a crash (OOM). What file size/row limits should the spec define, or should it support chunked processing? → A: Support chunked processing - Add chunking/streaming: process in batches with checkpoint/resume, no hard row limit
 
 ## Requirements *(mandatory)*
 
@@ -111,6 +118,7 @@ A data operator wants to re-run a previously processed source and have the pipel
 - **FR-008**: System MUST provide Streamlit UI with 5-step wizard: Select Source → Schema Analysis → Schema Mapping → Pipeline Execution → Results.
 - **FR-009**: System MUST enforce safety constraint: allergens, is_organic, dietary_tags are extraction-only (S2/S3 MUST NOT modify them).
 - **FR-010**: System MUST provide HITL approval gates at schema mapping and quarantine stages.
+- **FR-011**: System MUST support chunked processing for large files: stream data in configurable batches with checkpoint/resume capability for each chunk, enabling processing of files of any size without OOM.
 
 ### Key Entities
 
