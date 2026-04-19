@@ -13,12 +13,16 @@ logger = logging.getLogger(__name__)
 class ColumnWiseMergeBlock(Block):
     name = "column_wise_merge"
     domain = "all"
+    description = "Merge duplicate clusters column-wise, picking the most complete value per field"
+    inputs = ["duplicate_group_id", "all columns"]
+    outputs = ["merged rows (one per cluster)"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         if "duplicate_group_id" not in df.columns:
             return df
 
         df = df.copy()
+        df.attrs = {}  # prevent pandas deepcopy overhead in groupby __finalize__
 
         def pick_best(series: pd.Series) -> object:
             """Pick the most complete (longest non-null) value from a group."""
@@ -36,6 +40,6 @@ class ColumnWiseMergeBlock(Block):
         merged = df.groupby("duplicate_group_id", as_index=False).agg(
             {col: pick_best for col in df.columns if col != "duplicate_group_id"}
         )
-        merged["duplicate_group_id"] = merged["duplicate_group_id"]
+        merged.attrs = df.attrs.copy()
         logger.info(f"Column-wise merge: {len(df)} rows → {len(merged)} merged rows")
         return merged

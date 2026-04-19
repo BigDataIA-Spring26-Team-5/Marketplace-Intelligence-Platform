@@ -18,15 +18,16 @@
     },
     "category": {
       "type": "string",
-      "required": true
+      "required": false,
+      "enrichment_alias": "primary_category"
     },
     "serving_size": {
       "type": "float",
-      "required": true
+      "required": false
     },
     "serving_size_unit": {
       "type": "string",
-      "required": true
+      "required": false
     },
     "published_date": {
       "type": "string",

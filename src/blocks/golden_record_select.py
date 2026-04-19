@@ -9,6 +9,9 @@ from src.blocks.base import Block
 class GoldenRecordSelectBlock(Block):
     name = "golden_record_select"
     domain = "all"
+    description = "Select the best row per duplicate cluster using a composite DQ score"
+    inputs = ["duplicate_group_id", "published_date", "ingredients"]
+    outputs = ["golden records (one per cluster)"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         if "duplicate_group_id" not in df.columns:

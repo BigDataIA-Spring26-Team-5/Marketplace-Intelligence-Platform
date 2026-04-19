@@ -17,6 +17,9 @@ class Block(ABC):
 
     name: str = "unnamed"
     domain: str = "all"  # "all", "nutrition", "safety", "pricing"
+    description: str = ""
+    inputs: list[str] = []   # column names / state keys this block reads
+    outputs: list[str] = []  # column names / state keys this block produces
 
     @abstractmethod
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
