@@ -21,6 +21,9 @@ _SAFETY_FIELDS = ["allergens", "is_organic", "dietary_tags"]
 class LLMEnrichBlock(Block):
     name = "llm_enrich"
     domain = "all"
+    description = "3-strategy enrichment (deterministic → KNN → RAG-LLM) for category, dietary tags, organic flag"
+    inputs = ["product_name", "ingredients"]
+    outputs = ["primary_category", "dietary_tags", "is_organic", "enriched_by_llm"]
 
     # Stores enrichment stats from the last run (read by the UI / graph node)
     last_enrichment_stats: dict = {}
@@ -39,14 +42,14 @@ class LLMEnrichBlock(Block):
         # Track which rows still need enrichment (True = needs enrichment)
         needs_enrichment = df[enrich_cols].isna().any(axis=1)
 
-        stats = {"s1_extraction": 0, "s2_knn": 0, "s3_rag_llm": 0, "unresolved": 0}
+        stats = {"deterministic": 0, "embedding": 0, "llm": 0, "unresolved": 0}
         initial_missing = int(needs_enrichment.sum())
         logger.info(f"Enrichment: {initial_missing}/{len(df)} rows need enrichment")
 
         # Strategy 1: Deterministic extraction (all safety fields + primary_category)
-        df, needs_enrichment = deterministic_enrich(df, enrich_cols, needs_enrichment)
-        stats["s1_extraction"] = initial_missing - int(needs_enrichment.sum())
-        logger.info(f"  S1 (deterministic extraction): resolved {stats['s1_extraction']} rows")
+        df, needs_enrichment, s1_stats = deterministic_enrich(df, enrich_cols, needs_enrichment)
+        stats["deterministic"] = s1_stats["resolved"]
+        logger.info(f"  S1 (deterministic extraction): resolved {stats['deterministic']} rows")
 
         # Capture safety field values after S1 to verify S2/S3 do not modify them
         safety_snapshot = {
@@ -55,23 +58,19 @@ class LLMEnrichBlock(Block):
             if col in df.columns
         }
 
-        remaining_before = int(needs_enrichment.sum())
-
         # Strategy 2: KNN corpus search (primary_category only)
-        df, needs_enrichment = embedding_enrich(df, enrich_cols, needs_enrichment)
-        stats["s2_knn"] = remaining_before - int(needs_enrichment.sum())
-        logger.info(f"  S2 (KNN corpus): resolved {stats['s2_knn']} rows")
-
-        remaining_before = int(needs_enrichment.sum())
+        df, needs_enrichment, s2_stats = embedding_enrich(df, enrich_cols, needs_enrichment)
+        stats["embedding"] = s2_stats["resolved"]
+        logger.info(f"  S2 (KNN corpus): resolved {stats['embedding']} rows")
 
         # Capture which rows are unresolved before S3 to identify S3-resolved rows
         unresolved_before_s3 = needs_enrichment.copy()
 
         # Strategy 3: RAG-augmented LLM (primary_category only)
-        df, needs_enrichment = llm_enrich(df, enrich_cols, needs_enrichment)
-        stats["s3_rag_llm"] = remaining_before - int(needs_enrichment.sum())
-        stats["unresolved"] = int(needs_enrichment.sum())
-        logger.info(f"  S3 (RAG-LLM): resolved {stats['s3_rag_llm']} rows")
+        df, needs_enrichment, s3_stats = llm_enrich(df, enrich_cols, needs_enrichment)
+        stats["llm"] = s3_stats["resolved"]
+        stats["unresolved"] = int(df["primary_category"].isna().sum()) if "primary_category" in df.columns else 0
+        logger.info(f"  S3 (RAG-LLM): resolved {stats['llm']} rows")
         logger.info(f"  Unresolved: {stats['unresolved']} rows")
 
         # Drop pipeline-internal column before output

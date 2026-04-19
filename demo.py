@@ -32,18 +32,21 @@ def run_pipeline(source_path: str, domain: str, run_label: str) -> dict:
     """Execute the full LangGraph pipeline for one data source."""
     from src.agents.graph import build_graph
 
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info(f"  {run_label}")
     logger.info(f"  Source: {source_path}")
     logger.info(f"  Domain: {domain}")
-    logger.info(f"{'='*60}\n")
+    logger.info(f"{'=' * 60}\n")
 
     graph = build_graph()
 
-    result = graph.invoke({
-        "source_path": source_path,
-        "domain": domain,
-    })
+    result = graph.invoke(
+        {
+            "source_path": source_path,
+            "domain": domain,
+            "missing_column_decisions": {},  # CLI default: accept nulls for all
+        }
+    )
 
     # Print summary
     working_df = result.get("working_df")
@@ -52,8 +55,9 @@ def run_pipeline(source_path: str, domain: str, run_label: str) -> dict:
     dq_post = result.get("dq_score_post", 0)
     schema_existed = result.get("unified_schema_existed", False)
     gaps = result.get("gaps", [])
-    registry_hits = result.get("registry_hits", {})
-    generated = result.get("generated_functions", [])
+    registry_hits = result.get("block_registry_hits", {})
+    unresolvable = result.get("unresolvable_gaps", [])
+    critique_notes = result.get("critique_notes", [])
     audit_log = result.get("audit_log", [])
 
     logger.info(f"\n--- {run_label} Results ---")
@@ -64,7 +68,15 @@ def run_pipeline(source_path: str, domain: str, run_label: str) -> dict:
     logger.info(f"  Schema existed:       {schema_existed}")
     logger.info(f"  Gaps detected:        {len(gaps)}")
     logger.info(f"  Registry hits:        {len(registry_hits)}")
-    logger.info(f"  Functions generated:  {len([f for f in generated if f.get('validation_passed')])}")
+    logger.info(f"  Unresolvable gaps:    {len(unresolvable)}")
+    logger.info(f"  Agent 2 corrections: {len(critique_notes)}")
+
+    if critique_notes:
+        logger.info(f"\n  Agent 2 critique notes:")
+        for note in critique_notes:
+            rule = note.get("rule", "?")
+            col = note.get("column", "?")
+            logger.info(f"    [{rule}] {col}: {note.get('correction', '')[:80]}")
 
     if audit_log:
         logger.info(f"\n  Block execution trace:")
@@ -101,14 +113,21 @@ def main():
     result_3 = run_pipeline(fda_path, "safety", "Run 3: FDA Recalls (replay)")
 
     # Final summary
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info("  DEMO COMPLETE")
-    logger.info(f"{'='*60}")
-    gen2 = [f for f in result_2.get("generated_functions", []) if f.get("validation_passed")]
-    gen3 = [f for f in result_3.get("generated_functions", []) if f.get("validation_passed")]
-    logger.info(f"  Run 1 (USDA):  {result_1.get('dq_score_post', 0)}% DQ — schema established")
-    logger.info(f"  Run 2 (FDA):   {result_2.get('dq_score_post', 0)}% DQ — {len(gen2)} functions generated")
-    logger.info(f"  Run 3 (FDA):   {result_3.get('dq_score_post', 0)}% DQ — {len(result_3.get('registry_hits', {}))} registry hits, pipeline remembered")
+    logger.info(f"{'=' * 60}")
+    logger.info(
+        f"  Run 1 (USDA):  {result_1.get('dq_score_post', 0)}% DQ — schema established"
+    )
+    logger.info(
+        f"  Run 2 (FDA):   {result_2.get('dq_score_post', 0)}% DQ — "
+        f"{len(result_2.get('block_registry_hits', {}))} registry hits, "
+        f"{len(result_2.get('unresolvable_gaps', []))} unresolvable"
+    )
+    logger.info(
+        f"  Run 3 (FDA):   {result_3.get('dq_score_post', 0)}% DQ — "
+        f"{len(result_3.get('block_registry_hits', {}))} registry hits, pipeline remembered"
+    )
 
 
 if __name__ == "__main__":

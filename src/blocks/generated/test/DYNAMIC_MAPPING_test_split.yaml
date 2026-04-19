@@ -1,0 +1,14 @@
+column_operations:
+- source: foodNutrients
+  action: json_array_extract_multi
+  target_columns:
+    serving_size:
+      key: amount
+      filter:
+        name: Energy
+      type: float
+    serving_size_unit:
+      key: unitName
+      filter:
+        name: Energy
+      type: string

@@ -36,6 +36,16 @@ SYSTEM_PROMPT = (
     f"CATEGORIES: {CATEGORIES}"
 )
 
+BATCH_SYSTEM_PROMPT = (
+    "You are a product categorization assistant. Categorize each product below. "
+    "Return ONLY a JSON object: "
+    '{"results": [{"idx": 0, "primary_category": "<category>"}, ...]}. '
+    "Use null for primary_category if unsure. Include ALL indices in results.\n\n"
+    f"CATEGORIES: {CATEGORIES}"
+)
+
+_LLM_BATCH_SIZE = int(__import__("os").environ.get("LLM_ENRICH_BATCH_SIZE", "20"))
+
 
 def _build_rag_prompt(row: pd.Series, neighbors: list[dict]) -> str:
     """Build a RAG-augmented prompt for primary_category assignment."""
@@ -66,68 +76,99 @@ def _build_rag_prompt(row: pd.Series, neighbors: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _build_batch_rag_prompt(rows: list[pd.Series], neighbors_list: list[list[dict]]) -> str:
+    """Build a batch RAG prompt for multiple rows."""
+    lines = ["Products to categorize (return results for ALL indices):"]
+    for i, (row, neighbors) in enumerate(zip(rows, neighbors_list)):
+        lines.append(f"\n[{i}]")
+        for field, label in [
+            ("product_name", "Name"),
+            ("brand_name", "Brand"),
+            ("ingredients", "Ingredients"),
+            ("category", "Source category"),
+        ]:
+            val = row.get(field)
+            if pd.notna(val) and str(val).strip():
+                lines.append(f"  {label}: {str(val)[:200]}")
+        if neighbors:
+            lines.append("  Similar:")
+            for n in neighbors[:2]:
+                lines.append(f"    - {n.get('product_name', '')} → {n.get('category', '')} ({n.get('similarity', 0):.2f})")
+    return "\n".join(lines)
+
+
 def llm_enrich(
     df: pd.DataFrame,
     enrich_cols: list[str],
     needs_enrichment: pd.Series,
-) -> tuple[pd.DataFrame, pd.Series]:
+) -> tuple[pd.DataFrame, pd.Series, dict]:
     """
     Call LLM with RAG context for rows where primary_category is still null.
 
     Only operates on primary_category. allergens, is_organic, and dietary_tags
     are never sent to the LLM — they are extraction-only fields handled by S1.
 
-    Returns (modified_df, updated_needs_enrichment_mask).
+    Returns (modified_df, updated_needs_enrichment_mask, stats).
     """
     if "primary_category" not in enrich_cols:
-        return df, needs_enrichment
+        return df, needs_enrichment, {"resolved": 0}
 
     mask = needs_enrichment & df["primary_category"].isna()
     if not mask.any():
-        return df, needs_enrichment
+        return df, needs_enrichment, {"resolved": 0}
 
     model = get_enrichment_llm()
     rows_to_enrich = df.index[mask].tolist()
-    logger.info(f"S3 RAG-LLM: {len(rows_to_enrich)} rows need primary_category")
+    logger.info(f"S3 RAG-LLM: {len(rows_to_enrich)} rows need primary_category (batch_size={_LLM_BATCH_SIZE})")
 
     # Load corpus for feedback loop additions
     index, metadata = load_corpus()
     corpus_updated = False
+    resolved = 0
 
-    for idx in rows_to_enrich:
-        row = df.loc[idx]
+    for batch_start in range(0, len(rows_to_enrich), _LLM_BATCH_SIZE):
+        batch_indices = rows_to_enrich[batch_start:batch_start + _LLM_BATCH_SIZE]
+        batch_rows = [df.loc[idx] for idx in batch_indices]
 
-        # Parse KNN neighbors from S2 if available
-        neighbors = []
-        raw_neighbors = row.get("_knn_neighbors")
-        if pd.notna(raw_neighbors) and raw_neighbors:
+        batch_neighbors: list[list[dict]] = []
+        for row in batch_rows:
+            raw = row.get("_knn_neighbors")
             try:
-                neighbors = json.loads(raw_neighbors)
+                neighbors = json.loads(raw) if pd.notna(raw) and raw else []
             except (json.JSONDecodeError, TypeError):
                 neighbors = []
+            batch_neighbors.append(neighbors)
 
-        prompt = _build_rag_prompt(row, neighbors)
+        prompt = _build_batch_rag_prompt(batch_rows, batch_neighbors)
 
         try:
             result = call_llm_json(
                 model=model,
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": BATCH_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
             )
 
-            category = result.get("primary_category") if isinstance(result, dict) else None
-            if category is not None:
-                df.at[idx, "primary_category"] = category
-                # Corpus feedback loop: add high-confidence S3 results
-                if index is not None:
-                    add_to_corpus(row, category, index, metadata)
-                    corpus_updated = True
+            items = result.get("results", []) if isinstance(result, dict) else []
+            for item in items:
+                local_idx = item.get("idx")
+                category = item.get("primary_category")
+                if local_idx is None or not isinstance(local_idx, int):
+                    continue
+                if local_idx < 0 or local_idx >= len(batch_indices):
+                    continue
+                real_idx = batch_indices[local_idx]
+                if category is not None:
+                    df.at[real_idx, "primary_category"] = category
+                    resolved += 1
+                    if index is not None:
+                        add_to_corpus(df.loc[real_idx], category, index, metadata)
+                        corpus_updated = True
 
         except Exception as e:
-            logger.warning(f"S3 RAG-LLM: enrichment failed for row {idx}: {e}")
+            logger.warning(f"S3 RAG-LLM: batch [{batch_start}:{batch_start + _LLM_BATCH_SIZE}] failed: {e}")
 
     if corpus_updated:
         try:
@@ -136,4 +177,4 @@ def llm_enrich(
             logger.warning(f"S3 RAG-LLM: could not save corpus: {e}")
 
     needs_enrichment = df[enrich_cols].isna().any(axis=1)
-    return df, needs_enrichment
+    return df, needs_enrichment, {"resolved": resolved}

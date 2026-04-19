@@ -1,0 +1,16 @@
+column_operations:
+- source: fdc_id
+  action: drop_column
+- source: gtin_upc
+  action: drop_column
+- source: market_country
+  action: drop_column
+- source: search_term
+  action: drop_column
+- target: serving_size_unit
+  type: string
+  action: value_map
+  source: serving_size_unit
+  mapping:
+    GRM: g
+    g: g

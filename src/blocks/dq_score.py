@@ -9,25 +9,41 @@ from src.blocks.base import Block
 
 logger = logging.getLogger(__name__)
 
+# Columns that are never data quality indicators — always excluded from completeness
+_SKIP_ALWAYS = {
+    "dq_score_pre", "dq_score_post", "dq_delta",
+    "duplicate_group_id", "canonical",
+    "enriched_by_llm",  # pipeline-internal enrichment tag
+    "sizes",            # extracted from product_name, not a source-level completeness indicator
+}
+
 
 def compute_dq_score(
     df: pd.DataFrame,
     weights: dict | None = None,
+    reference_columns: list[str] | None = None,
 ) -> pd.Series:
     """
     Compute a DQ score per row.
 
     Score = Completeness * w1 + Freshness * w2 + IngredientRichness * w3
+
+    reference_columns: if provided, compute completeness over this fixed column set
+    (used by dq_score_post to match the column set from dq_score_pre for a fair delta).
     """
     weights = weights or {"completeness": 0.4, "freshness": 0.35, "ingredient_richness": 0.25}
 
-    # Ignore computed/meta columns
-    skip = {"dq_score_pre", "dq_score_post", "dq_delta",
-            "duplicate_group_id", "canonical"}
-    data_cols = [c for c in df.columns if c not in skip]
+    if reference_columns is not None:
+        # Fixed column set for fair pre/post comparison
+        data_cols = [c for c in reference_columns if c in df.columns and c not in _SKIP_ALWAYS]
+    else:
+        data_cols = [c for c in df.columns if c not in _SKIP_ALWAYS]
 
     # Completeness: fraction of non-null values
-    completeness = df[data_cols].notna().mean(axis=1)
+    if not data_cols:
+        completeness = pd.Series(0.0, index=df.index)
+    else:
+        completeness = df[data_cols].notna().mean(axis=1)
 
     # Freshness proxy: if published_date exists
     if "published_date" in df.columns:
@@ -44,9 +60,9 @@ def compute_dq_score(
     if "ingredients" in df.columns:
         lengths = df["ingredients"].fillna("").astype(str).str.len()
         max_len = lengths.max()
-        richness = lengths / max_len if max_len > 0 else 0
+        richness = lengths / max_len if max_len > 0 else pd.Series(0.0, index=df.index)
     else:
-        richness = 0
+        richness = pd.Series(0.0, index=df.index)
 
     score = (
         completeness * weights["completeness"]
@@ -59,11 +75,16 @@ def compute_dq_score(
 class DQScorePreBlock(Block):
     name = "dq_score_pre"
     domain = "all"
+    description = "Compute initial per-row data quality score before enrichment"
+    inputs = ["all columns"]
+    outputs = ["dq_score_pre"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()
         weights = (config or {}).get("dq_weights")
         df["dq_score_pre"] = compute_dq_score(df, weights)
+        # Store the column set so dq_score_post uses the same columns for a fair delta
+        df.attrs["dq_reference_columns"] = [c for c in df.columns if c not in _SKIP_ALWAYS]
         mean_score = df["dq_score_pre"].mean()
         logger.info(f"DQ Score (pre): mean={mean_score:.1f}%, min={df['dq_score_pre'].min():.1f}%, max={df['dq_score_pre'].max():.1f}%")
         return df
@@ -72,11 +93,16 @@ class DQScorePreBlock(Block):
 class DQScorePostBlock(Block):
     name = "dq_score_post"
     domain = "all"
+    description = "Compute final per-row data quality score after enrichment and compute dq_delta"
+    inputs = ["all columns", "dq_score_pre"]
+    outputs = ["dq_score_post", "dq_delta"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()
         weights = (config or {}).get("dq_weights")
-        df["dq_score_post"] = compute_dq_score(df, weights)
+        # Use the same column set as dq_score_pre for a fair pre/post comparison
+        reference_columns = df.attrs.get("dq_reference_columns")
+        df["dq_score_post"] = compute_dq_score(df, weights, reference_columns=reference_columns)
         if "dq_score_pre" in df.columns:
             df["dq_delta"] = (df["dq_score_post"] - df["dq_score_pre"]).round(2)
             mean_delta = df["dq_delta"].mean()
