@@ -1,6 +1,6 @@
 # Implementation Plan: Production Deployment
 
-**Branch**: `005-production-deployment` | **Date**: 2026-04-18 | **Spec**: `specs/005-production-deployment/plan.md`
+**Branch**: `006-production-deployment` | **Date**: 2026-04-18 | **Spec**: `specs/006-production-deployment/plan.md`
 **Input**: Architecture design from session on 2026-04-18 — converting local ETL pipeline to deployed, API-accessible production system.
 
 ## Summary
@@ -33,7 +33,7 @@ Convert the schema-driven ETL pipeline from a local Streamlit + Poetry environme
 ### Documentation (this feature)
 
 ```text
-specs/005-production-deployment/
+specs/006-production-deployment/
 ├── plan.md              # This file
 ├── research.md          # Architecture options evaluated
 ├── data-model.md        # PostgreSQL schema for run_state, audit_log, block_registry

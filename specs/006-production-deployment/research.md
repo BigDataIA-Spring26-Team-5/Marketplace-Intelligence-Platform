@@ -1,6 +1,6 @@
 # Research: Production Deployment Architecture
 
-**Feature**: 005-production-deployment  
+**Feature**: 006-production-deployment  
 **Date**: 2026-04-18
 
 ## Summary

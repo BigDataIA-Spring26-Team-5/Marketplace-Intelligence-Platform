@@ -165,7 +165,11 @@ def _step_1_schema_analysis() -> None:
     source_schema = ps.get("source_schema", {})
     column_mapping = ps.get("column_mapping", {})
     gaps = ps.get("gaps", [])
-    unified_schema = ps.get("unified_schema")
+    from src.schema.analyzer import get_unified_schema as _get_schema
+    try:
+        unified_schema = _get_schema()
+    except FileNotFoundError:
+        unified_schema = None
     missing_columns = ps.get("missing_columns", [])
     derivable_gaps = ps.get("derivable_gaps", [])
     enrich_alias_ops = ps.get("enrich_alias_ops", [])
