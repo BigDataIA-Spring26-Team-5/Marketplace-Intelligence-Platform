@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -14,72 +15,149 @@ from src.agents.orchestrator import (
     analyze_schema_node,
     check_registry_node,
 )
-from src.agents.code_generator import (
-    generate_code_node,
-    validate_code_node,
-    register_functions_node,
-)
+from src.agents.critic import critique_schema_node
+from src.agents.prompts import SEQUENCE_PLANNING_PROMPT
+from src.models.llm import call_llm_json, get_orchestrator_llm
 from src.registry.block_registry import BlockRegistry
-from src.registry.function_registry import FunctionRegistry
-from src.pipeline.runner import PipelineRunner
+from src.pipeline.runner import PipelineRunner, DEFAULT_CHUNK_SIZE
+from src.schema.analyzer import get_unified_schema
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-REGISTRY_DIR = PROJECT_ROOT / "function_registry"
 OUTPUT_DIR = PROJECT_ROOT / "output"
 
 
 # ── Pipeline execution nodes ─────────────────────────────────────────
 
 
-def run_pipeline_node(state: PipelineState) -> dict:
-    """Execute the block sequence on the working DataFrame."""
-    block_registry = BlockRegistry()
-    function_registry = FunctionRegistry(REGISTRY_DIR)
-    runner = PipelineRunner(block_registry, function_registry)
+def plan_sequence_node(state: PipelineState) -> dict:
+    """
+    Agent 3: LLM call to determine optimal block execution order.
 
+    Receives the block pool (determined by domain/enrichment settings) plus
+    domain, source schema, and gap/registry context. Returns an ordered sequence.
+    Agent 3 can only reorder — it cannot add or remove blocks from the pool.
+    """
+    if state.get("block_sequence"):
+        return {}
     domain = state.get("domain", "nutrition")
-    block_sequence = block_registry.get_default_sequence(domain)
+    source_schema = state.get("source_schema", {})
+    gaps = state.get("gaps", [])
+    registry_misses = state.get("registry_misses", [])
+    block_registry_hits = state.get("block_registry_hits", {})
+    enable_enrichment = state.get("enable_enrichment", True)
 
-    # Collect all functions (registry hits + newly generated)
-    all_functions = []
+    block_reg = BlockRegistry.instance()
 
-    # Registry hits
-    for key, file_path in (state.get("registry_hits") or {}).items():
-        entries = function_registry.list_all()
-        entry = next((e for e in entries if e["key"] == key), None)
-        if entry:
-            all_functions.append(
-                {
-                    "function_name": entry["function_name"],
-                    "file_path": file_path,
-                    "registry_key": key,
-                }
-            )
+    pool = block_reg.get_default_sequence(
+        domain=domain,
+        unified_schema=get_unified_schema(),
+        enable_enrichment=enable_enrichment,
+    )
+    blocks_metadata = block_reg.get_blocks_with_metadata(pool)
 
-    # Newly generated functions
-    for func in state.get("generated_functions") or []:
-        if func.get("validation_passed") and func.get("file_path"):
-            all_functions.append(func)
+    generated_block_prefixes = ("DYNAMIC_MAPPING_",)
 
-    config = {
-        "dq_weights": (state.get("unified_schema") or {}).get("dq_weights"),
-        "domain": domain,
+    gap_summary = {
+        "gaps_detected": len(gaps),
+        "block_registry_hits": block_registry_hits,
+        "misses_requiring_generated_blocks": [
+            g["target_column"] for g in registry_misses
+        ],
+        "generated_block_prefixes": generated_block_prefixes,
     }
 
-    df = state["source_df"].copy()
-    column_mapping = state.get("column_mapping", {})
+    compact_schema = {
+        col: {"type": info.get("dtype", "unknown")}
+        for col, info in source_schema.items()
+    }
 
-    result_df, audit_log = runner.run(
-        df=df,
-        block_sequence=block_sequence,
-        generated_functions=all_functions,
-        column_mapping=column_mapping,
-        config=config,
+    model = get_orchestrator_llm()
+    result = call_llm_json(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": SEQUENCE_PLANNING_PROMPT.format(
+                    domain=domain,
+                    source_schema=json.dumps(compact_schema, indent=2),
+                    gap_summary=json.dumps(gap_summary, indent=2),
+                    blocks_metadata=json.dumps(blocks_metadata, indent=2),
+                ),
+            }
+        ],
     )
 
-    # Extract DQ scores
+    sequence = result.get("block_sequence", pool)
+    reasoning = result.get("reasoning", "")
+
+    # Expand stages in pool so the missing-check uses individual block names,
+    # matching what Agent 3 received and returned (get_blocks_with_metadata expands stages).
+    expanded_pool = []
+    for item in pool:
+        if block_reg.is_stage(item):
+            expanded_pool.extend(block_reg.expand_stage(item))
+        else:
+            expanded_pool.append(item)
+
+    missing = [b for b in expanded_pool if b not in sequence]
+    if missing:
+        logger.warning(
+            f"Agent 3 omitted blocks {missing} — appending at end before dq_score_post"
+        )
+        if "dq_score_post" in sequence:
+            idx = sequence.index("dq_score_post")
+            for b in missing:
+                sequence.insert(idx, b)
+        else:
+            sequence.extend(missing)
+
+    logger.info(f"Agent 3 planned sequence ({len(sequence)} blocks): {sequence}")
+    if reasoning:
+        logger.info(f"Agent 3 reasoning: {reasoning}")
+
+    return {
+        "block_sequence": sequence,
+        "sequence_reasoning": reasoning,
+    }
+
+
+def run_pipeline_node(state: PipelineState) -> dict:
+    """Execute the block sequence on the working DataFrame."""
+    if state.get("working_df") is not None:
+        return {}
+    block_registry = BlockRegistry.instance()
+    runner = PipelineRunner(block_registry)
+
+    domain = state.get("domain", "nutrition")
+    unified = get_unified_schema()
+    block_sequence = state.get("block_sequence") or block_registry.get_default_sequence(
+        domain=domain,
+        unified_schema=unified,
+        enable_enrichment=state.get("enable_enrichment", True),
+    )
+
+    config = {
+        "dq_weights": unified.dq_weights.model_dump(),
+        "domain": domain,
+        "unified_schema": unified,
+    }
+
+    source_path = state.get("source_path")
+    if source_path is None:
+        raise ValueError("Missing 'source_path' in state — cannot stream data for pipeline execution.")
+    column_mapping = state.get("column_mapping", {})
+
+    result_df, audit_log = runner.run_chunked(
+        source_path=source_path,
+        block_sequence=block_sequence,
+        column_mapping=column_mapping,
+        config=config,
+        chunk_size=state.get("chunk_size", DEFAULT_CHUNK_SIZE),
+        sep=state.get("source_sep", ","),
+    )
+
     dq_pre = (
         float(result_df["dq_score_pre"].mean())
         if "dq_score_pre" in result_df.columns
@@ -91,7 +169,6 @@ def run_pipeline_node(state: PipelineState) -> dict:
         else 0.0
     )
 
-    # Extract enrichment stats from the llm_enrich block instance
     enrichment_stats = {}
     try:
         enrich_block = block_registry.get("llm_enrich")
@@ -99,15 +176,20 @@ def run_pipeline_node(state: PipelineState) -> dict:
     except Exception:
         pass
 
-    # Post-enrichment quarantine: rows with nulls in required fields
-    unified_schema = state.get("unified_schema", {})
-    required_cols = [
-        col
-        for col, spec in unified_schema.get("columns", {}).items()
-        if spec.get("required") and not spec.get("computed")
-    ]
+    # Apply enrich aliases: copy enrichment col → required col where null
+    # Runs post-enrichment (all blocks already executed), before quarantine check
+    for alias in state.get("enrich_alias_ops", []):
+        src, tgt = alias.get("source", ""), alias.get("target", "")
+        if not src or not tgt:
+            continue
+        if src in result_df.columns and tgt in result_df.columns:
+            result_df[tgt] = result_df[tgt].fillna(result_df[src])
+        elif src in result_df.columns:
+            result_df[tgt] = result_df[src].copy()
 
-    # Only quarantine rows where existing columns have nulls (not missing columns)
+    excluded = set(state.get("excluded_columns") or [])
+    required_cols = sorted(unified.required_columns - excluded)
+
     existing_required = [c for c in required_cols if c in result_df.columns]
     missing_cols = [c for c in required_cols if c not in result_df.columns]
 
@@ -115,8 +197,6 @@ def run_pipeline_node(state: PipelineState) -> dict:
         logger.warning(
             f"Schema mismatch: {len(missing_cols)} required columns missing from output: {missing_cols}"
         )
-        # Don't quarantine just because columns are missing - that's a schema mismatch issue, not a data issue
-        # Only quarantine rows with nulls in columns that actually exist
         quarantined_mask = (
             result_df[existing_required].isna().any(axis=1)
             if existing_required
@@ -133,7 +213,10 @@ def run_pipeline_node(state: PipelineState) -> dict:
 
     quarantine_reasons = []
     for idx in quarantined_df.index:
-        missing = [c for c in required_cols if pd.isna(quarantined_df.at[idx, c])]
+        missing = [
+            c for c in required_cols
+            if c in quarantined_df.columns and pd.isna(quarantined_df.at[idx, c])
+        ]
         quarantine_reasons.append(
             {
                 "row_idx": int(idx),
@@ -167,39 +250,14 @@ def save_output_node(state: PipelineState) -> dict:
     source_name = Path(source_path).stem
     output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
 
-    df = state["working_df"]
+    df = state.get("working_df")
+    if df is None:
+        raise ValueError("Missing 'working_df' in state — run_pipeline_node did not complete successfully.")
     df.to_csv(output_path, index=False)
     logger.info(f"Output saved to {output_path} ({len(df)} rows)")
 
     return {"output_path": str(output_path)}
 
-
-# ── Routing functions ────────────────────────────────────────────────
-
-
-def route_after_registry_check(state: PipelineState) -> str:
-    misses = state.get("registry_misses", [])
-    if misses:
-        logger.info(f"{len(misses)} registry misses — routing to code generator")
-        return "generate_code"
-    logger.info("All gaps covered by registry — skipping code generation")
-    return "run_pipeline"
-
-
-def route_after_validation(state: PipelineState) -> str:
-    generated = state.get("generated_functions", [])
-    retry_count = state.get("retry_count", 0)
-    max_retries = state.get("max_retries", 2)
-
-    all_passed = all(f.get("validation_passed", False) for f in generated)
-
-    if all_passed:
-        return "register_functions"
-    if retry_count < max_retries:
-        logger.info(f"Validation failed, retrying ({retry_count}/{max_retries})")
-        return "generate_code"
-    logger.warning("Max retries reached — registering partial results")
-    return "register_functions"
 
 
 # ── Step-by-step runner (for Streamlit UI) ───────────────────────────
@@ -207,10 +265,9 @@ def route_after_validation(state: PipelineState) -> str:
 NODE_MAP = {
     "load_source": load_source_node,
     "analyze_schema": analyze_schema_node,
+    "critique_schema": critique_schema_node,
     "check_registry": check_registry_node,
-    "generate_code": generate_code_node,
-    "validate_code": validate_code_node,
-    "register_functions": register_functions_node,
+    "plan_sequence": plan_sequence_node,
     "run_pipeline": run_pipeline_node,
     "save_output": save_output_node,
 }
@@ -238,31 +295,17 @@ def build_graph() -> StateGraph:
 
     graph.add_node("load_source", load_source_node)
     graph.add_node("analyze_schema", analyze_schema_node)
+    graph.add_node("critique_schema", critique_schema_node)
     graph.add_node("check_registry", check_registry_node)
-    graph.add_node("generate_code", generate_code_node)
-    graph.add_node("validate_code", validate_code_node)
-    graph.add_node("register_functions", register_functions_node)
+    graph.add_node("plan_sequence", plan_sequence_node)
     graph.add_node("run_pipeline", run_pipeline_node)
     graph.add_node("save_output", save_output_node)
 
     graph.add_edge("load_source", "analyze_schema")
-    graph.add_edge("analyze_schema", "check_registry")
-
-    graph.add_conditional_edges(
-        "check_registry",
-        route_after_registry_check,
-        {"generate_code": "generate_code", "run_pipeline": "run_pipeline"},
-    )
-
-    graph.add_edge("generate_code", "validate_code")
-
-    graph.add_conditional_edges(
-        "validate_code",
-        route_after_validation,
-        {"register_functions": "register_functions", "generate_code": "generate_code"},
-    )
-
-    graph.add_edge("register_functions", "run_pipeline")
+    graph.add_edge("analyze_schema", "critique_schema")
+    graph.add_edge("critique_schema", "check_registry")
+    graph.add_edge("check_registry", "plan_sequence")
+    graph.add_edge("plan_sequence", "run_pipeline")
     graph.add_edge("run_pipeline", "save_output")
     graph.add_edge("save_output", END)
 

@@ -1,0 +1,376 @@
+openapi: "3.1.0"
+info:
+  title: ETL Pipeline API
+  version: "1.0.0"
+  description: |
+    Schema-Driven Self-Extending ETL Pipeline — production API.
+    Exposes pipeline execution, HITL approval, and output retrieval.
+
+servers:
+  - url: http://localhost:8000
+    description: Local (uvicorn)
+  - url: https://{project}.railway.app
+    description: Railway deploy
+
+paths:
+  /pipeline/run:
+    post:
+      summary: Submit a pipeline run
+      operationId: submitRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PipelineRunRequest"
+            example:
+              source_path: "data/usda_fooddata_sample.csv"
+              domain: "nutrition"
+              chunk_size: 10000
+              hitl_mode: true
+      responses:
+        "202":
+          description: Run accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunAccepted"
+              example:
+                run_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                status: "queued"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /pipeline/{run_id}/status:
+    get:
+      summary: Get run status and summary
+      operationId: getRunStatus
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Current run status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunStatus"
+              example:
+                run_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                status: "awaiting_approval"
+                gate: "schema_mapping"
+                dq_score_pre: 0.71
+                dq_score_post: null
+                row_count_in: 50000
+                row_count_out: null
+                created_at: "2026-04-18T10:00:00Z"
+                updated_at: "2026-04-18T10:01:30Z"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /pipeline/{run_id}/approve:
+    patch:
+      summary: Submit HITL approval or rejection
+      operationId: approveRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalRequest"
+            examples:
+              approve_schema:
+                summary: Approve schema mapping as-is
+                value:
+                  gate: "schema_mapping"
+                  decision: "approved"
+                  modifications: null
+              modify_schema:
+                summary: Approve with modified operations
+                value:
+                  gate: "schema_mapping"
+                  decision: "modified"
+                  modifications:
+                    - primitive: "RENAME"
+                      source_column: "product_desc"
+                      target_column: "product_name"
+              approve_quarantine:
+                summary: Accept quarantined rows
+                value:
+                  gate: "quarantine"
+                  decision: "approved"
+                  modifications: null
+      responses:
+        "200":
+          description: Decision recorded; run continues or terminates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalResponse"
+        "409":
+          description: Run not in awaiting_approval state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /pipeline/{run_id}/output:
+    get:
+      summary: Get presigned S3 URL for output CSV
+      operationId: getRunOutput
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Presigned download URL (valid 15 min)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutputResponse"
+              example:
+                run_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                download_url: "https://minio.local/etl-bucket/runs/f47ac10b.../output.csv?X-Amz-Signature=..."
+                expires_at: "2026-04-18T10:20:00Z"
+                row_count: 49823
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Run not yet completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /pipeline/{run_id}/audit:
+    get:
+      summary: Get block execution audit log
+      operationId: getRunAudit
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: chunk_index
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Filter to a specific chunk (omit for all chunks)
+      responses:
+        "200":
+          description: List of audit log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditEntry"
+              example:
+                - run_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                  chunk_index: 0
+                  block_name: "dq_score_pre"
+                  rows_in: 10000
+                  rows_out: 10000
+                  rows_delta: 0
+                  duration_ms: 142
+                - run_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                  chunk_index: 0
+                  block_name: "DYNAMIC_MAPPING_nutrition"
+                  rows_in: 10000
+                  rows_out: 10000
+                  rows_delta: 0
+                  duration_ms: 310
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  parameters:
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    PipelineRunRequest:
+      type: object
+      required: [source_path, domain]
+      properties:
+        source_path:
+          type: string
+          description: Path to source CSV relative to project root, or S3 key if prefixed with s3://
+          example: "data/usda_fooddata_sample.csv"
+        domain:
+          type: string
+          enum: [nutrition, recalls, pricing]
+          example: "nutrition"
+        chunk_size:
+          type: integer
+          minimum: 1000
+          maximum: 100000
+          default: 10000
+        hitl_mode:
+          type: boolean
+          default: true
+          description: If false, schema mapping and quarantine gates auto-approve
+
+    RunAccepted:
+      type: object
+      required: [run_id, status]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued]
+
+    RunStatus:
+      type: object
+      required: [run_id, status, created_at, updated_at]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, awaiting_approval, approved, failed, completed]
+        gate:
+          type: string
+          nullable: true
+          enum: [schema_mapping, quarantine, null]
+          description: Set when status is awaiting_approval
+        dq_score_pre:
+          type: number
+          format: float
+          nullable: true
+        dq_score_post:
+          type: number
+          format: float
+          nullable: true
+        row_count_in:
+          type: integer
+          nullable: true
+        row_count_out:
+          type: integer
+          nullable: true
+        row_count_quarantined:
+          type: integer
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ApprovalRequest:
+      type: object
+      required: [gate, decision]
+      properties:
+        gate:
+          type: string
+          enum: [schema_mapping, quarantine]
+        decision:
+          type: string
+          enum: [approved, rejected, modified]
+        modifications:
+          type: array
+          nullable: true
+          description: Modified operations list (only when decision=modified and gate=schema_mapping)
+          items:
+            type: object
+
+    ApprovalResponse:
+      type: object
+      required: [run_id, status]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [running, failed]
+          description: running if approved/modified, failed if rejected
+
+    OutputResponse:
+      type: object
+      required: [run_id, download_url, expires_at]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        download_url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+        row_count:
+          type: integer
+          nullable: true
+
+    AuditEntry:
+      type: object
+      required: [run_id, chunk_index, block_name, rows_in, rows_out]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        chunk_index:
+          type: integer
+        block_name:
+          type: string
+        rows_in:
+          type: integer
+        rows_out:
+          type: integer
+        rows_delta:
+          type: integer
+        columns_renamed:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: string
+        extra_meta:
+          type: object
+          nullable: true
+        duration_ms:
+          type: integer
+          nullable: true
+
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+
+  responses:
+    NotFound:
+      description: Run ID not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ValidationError:
+      description: Request body validation failed
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: array
+                items:
+                  type: object

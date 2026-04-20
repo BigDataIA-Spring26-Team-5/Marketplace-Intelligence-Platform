@@ -138,6 +138,45 @@ def build_seed_corpus(df: pd.DataFrame) -> None:
     logger.info(f"Corpus seeded with {len(metadata)} labeled rows")
 
 
+def _score_from_search_result(
+    similarities: np.ndarray,
+    indices: np.ndarray,
+    metadata: list[dict],
+) -> tuple[Optional[str], float, list[dict]]:
+    """Shared scoring logic: votes neighbors, returns (category, confidence, top-3)."""
+    neighbors = []
+    for sim, idx in zip(similarities, indices):
+        if idx < 0:
+            continue
+        neighbors.append({
+            "category": metadata[idx]["category"],
+            "product_name": metadata[idx]["product_name"],
+            "similarity": float(sim),
+        })
+
+    votes: dict[str, float] = {}
+    for n in neighbors:
+        if n["similarity"] >= VOTE_SIMILARITY_THRESHOLD:
+            votes[n["category"]] = votes.get(n["category"], 0.0) + n["similarity"]
+
+    if not votes:
+        return None, 0.0, neighbors[:3]
+
+    best_category = max(votes, key=lambda c: votes[c])
+    winner_sims = [
+        n["similarity"]
+        for n in neighbors
+        if n["category"] == best_category
+        and n["similarity"] >= VOTE_SIMILARITY_THRESHOLD
+    ]
+    confidence = sum(winner_sims) / len(winner_sims) if winner_sims else 0.0
+
+    if confidence < CONFIDENCE_THRESHOLD_CATEGORY:
+        return None, confidence, neighbors[:3]
+
+    return best_category, confidence, neighbors[:3]
+
+
 def knn_search(
     row: pd.Series,
     index,
@@ -170,42 +209,50 @@ def knn_search(
     k_actual = min(k, index.ntotal)
     similarities, indices = index.search(embedding, k_actual)
 
-    similarities = similarities[0]
-    indices = indices[0]
+    return _score_from_search_result(similarities[0], indices[0], metadata)
 
-    neighbors = []
-    for sim, idx in zip(similarities, indices):
-        if idx < 0:
-            continue
-        neighbors.append({
-            "category": metadata[idx]["category"],
-            "product_name": metadata[idx]["product_name"],
-            "similarity": float(sim),
-        })
 
-    # Vote: weighted by similarity, only count neighbors above vote threshold
-    votes: dict[str, float] = {}
-    for n in neighbors:
-        if n["similarity"] >= VOTE_SIMILARITY_THRESHOLD:
-            votes[n["category"]] = votes.get(n["category"], 0.0) + n["similarity"]
+def knn_search_batch(
+    rows: list[pd.Series],
+    index,
+    metadata: list[dict],
+    k: int = K_NEIGHBORS,
+) -> list[tuple[Optional[str], float, list[dict]]]:
+    """
+    Batch KNN search: one model.encode() call for all rows.
 
-    if not votes:
-        return None, 0.0, neighbors[:3]
+    Returns list of (category, confidence, neighbors) tuples, one per input row.
+    Rows with empty text return (None, 0.0, []).
+    """
+    model = _get_model()
+    if model is None or index is None or index.ntotal < MIN_CORPUS_SIZE:
+        return [(None, 0.0, []) for _ in rows]
 
-    best_category = max(votes, key=lambda c: votes[c])
-    # Confidence = average similarity of neighbors that voted for the winner
-    winner_sims = [
-        n["similarity"]
-        for n in neighbors
-        if n["category"] == best_category
-        and n["similarity"] >= VOTE_SIMILARITY_THRESHOLD
-    ]
-    confidence = sum(winner_sims) / len(winner_sims) if winner_sims else 0.0
+    import faiss
 
-    if confidence < CONFIDENCE_THRESHOLD_CATEGORY:
-        return None, confidence, neighbors[:3]
+    texts = [_build_row_text(row) for row in rows]
+    valid_mask = [bool(t.strip()) for t in texts]
 
-    return best_category, confidence, neighbors[:3]
+    if not any(valid_mask):
+        return [(None, 0.0, []) for _ in rows]
+
+    valid_texts = [t for t, v in zip(texts, valid_mask) if v]
+    embeddings = model.encode(valid_texts, batch_size=64, show_progress_bar=False).astype(np.float32)
+    faiss.normalize_L2(embeddings)
+
+    k_actual = min(k, index.ntotal)
+    all_similarities, all_indices = index.search(embeddings, k_actual)
+
+    results: list[tuple[Optional[str], float, list[dict]]] = []
+    valid_iter = iter(zip(all_similarities, all_indices))
+    for is_valid in valid_mask:
+        if is_valid:
+            sims, idxs = next(valid_iter)
+            results.append(_score_from_search_result(sims, idxs, metadata))
+        else:
+            results.append((None, 0.0, []))
+
+    return results
 
 
 def add_to_corpus(

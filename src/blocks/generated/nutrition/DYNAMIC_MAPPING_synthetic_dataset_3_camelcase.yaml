@@ -1,0 +1,23 @@
+column_operations:
+- source: productID
+  action: drop_column
+- target: data_source
+  type: string
+  action: type_cast
+  source: dataSourceID
+  source_type: object
+- target: published_date
+  type: string
+  action: parse_date
+  source: published_date
+  format: '%Y-%m-%d'
+- target: serving_size
+  type: float
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: serving_size_unit
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
