@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.registry.block_registry import BlockRegistry
+from src.schema.models import UnifiedSchema
 from src.utils.csv_stream import CsvStreamReader, DEFAULT_CHUNK_SIZE
 
 logger = logging.getLogger(__name__)
@@ -102,15 +103,11 @@ class PipelineRunner:
         config: dict,
     ) -> list[str]:
         """Check that required output columns have at least one producing block."""
-        unified_schema = config.get("unified_schema")
+        unified_schema: UnifiedSchema | None = config.get("unified_schema")
         if not unified_schema:
             return []
 
-        required_cols = {
-            col
-            for col, spec in unified_schema.get("columns", {}).items()
-            if spec.get("required") and not spec.get("computed")
-        }
+        required_cols = unified_schema.required_columns
 
         covered_cols = set(column_mapping.values()) if column_mapping else set()
         for block_name in expanded_sequence:

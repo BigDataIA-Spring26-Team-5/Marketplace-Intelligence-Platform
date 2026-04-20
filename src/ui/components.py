@@ -114,7 +114,7 @@ def render_schema_delta(
     source_profile: dict,
     column_mapping: dict,
     gaps: list[dict],
-    unified_schema: dict | None = None,
+    unified_schema=None,  # UnifiedSchema | None
     missing_columns: list[dict] | None = None,
     derivable_gaps: list[dict] | None = None,
     enrichment_columns: list[str] | None = None,
@@ -141,8 +141,8 @@ def render_schema_delta(
         src_type = src_info.get("dtype", "?")
         uni_type = ""
         if unified_schema:
-            uni_spec = unified_schema.get("columns", {}).get(uni_col, {})
-            uni_type = uni_spec.get("type", "")
+            uni_spec = unified_schema.columns.get(uni_col)
+            uni_type = uni_spec.type if uni_spec else ""
 
         rows.append(
             f"<tr>"
@@ -228,8 +228,8 @@ def render_schema_delta(
         for col_name in enrichment_columns:
             uni_type = ""
             if unified_schema:
-                uni_spec = unified_schema.get("columns", {}).get(col_name, {})
-                uni_type = uni_spec.get("type", "")
+                uni_spec = unified_schema.columns.get(col_name)
+                uni_type = uni_spec.type if uni_spec else ""
             rows.append(
                 f"<tr>"
                 f'<td class="col-source" style="color:#1a7f37;">—</td>'
@@ -249,8 +249,8 @@ def render_schema_delta(
             src = alias.get("source", "")
             uni_type = ""
             if unified_schema:
-                uni_spec = unified_schema.get("columns", {}).get(tgt, {})
-                uni_type = uni_spec.get("type", "")
+                uni_spec = unified_schema.columns.get(tgt)
+                uni_type = uni_spec.type if uni_spec else ""
             rows.append(
                 f"<tr>"
                 f'<td class="col-source" style="color:#6e40c9;">—</td>'
