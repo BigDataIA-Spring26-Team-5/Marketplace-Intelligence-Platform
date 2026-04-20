@@ -10,8 +10,37 @@ from typing import Any
 
 import pandas as pd
 
+from src.schema.models import ColumnSpec, UnifiedSchema
+
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
 UNIFIED_SCHEMA_PATH = CONFIG_DIR / "unified_schema.json"
+
+# Lazy singleton — loaded once per process, reset via _reset_schema_cache() in tests.
+_schema_cache: UnifiedSchema | None = None
+
+
+def get_unified_schema() -> UnifiedSchema:
+    """Return the unified schema, loading and caching on first call.
+
+    Raises FileNotFoundError if config/unified_schema.json is absent.
+    """
+    global _schema_cache
+    if _schema_cache is None:
+        if not UNIFIED_SCHEMA_PATH.exists():
+            raise FileNotFoundError(
+                "config/unified_schema.json not found. "
+                "The unified schema is the gold-standard target format and must be "
+                "defined before running the pipeline."
+            )
+        with open(UNIFIED_SCHEMA_PATH) as f:
+            _schema_cache = UnifiedSchema.model_validate(json.load(f))
+    return _schema_cache
+
+
+def _reset_schema_cache() -> None:
+    """Reset the schema cache. For use in tests only."""
+    global _schema_cache
+    _schema_cache = None
 
 # Minimum fraction of non-null rows that must successfully parse for a
 # structural detection to be accepted (avoids false positives on mostly-scalar cols).
@@ -313,19 +342,11 @@ def profile_dataframe(df: pd.DataFrame, sample_size: int = 5) -> dict:
     return profile
 
 
-def load_unified_schema() -> dict | None:
-    """Load unified schema from config. Returns None if it doesn't exist."""
-    if not UNIFIED_SCHEMA_PATH.exists():
-        return None
-    with open(UNIFIED_SCHEMA_PATH) as f:
-        return json.load(f)
-
-
-def save_unified_schema(schema: dict) -> None:
+def save_unified_schema(schema: UnifiedSchema) -> None:
     """Save unified schema to config."""
     UNIFIED_SCHEMA_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(UNIFIED_SCHEMA_PATH, "w") as f:
-        json.dump(schema, f, indent=2)
+        json.dump(schema.model_dump(), f, indent=2)
 
 
 def derive_unified_schema_from_source(
@@ -375,19 +396,19 @@ def derive_unified_schema_from_source(
             "computed": True,
         }
 
-    return {
+    return UnifiedSchema.model_validate({
         "columns": columns,
         "dq_weights": {
             "completeness": 0.4,
             "freshness": 0.35,
             "ingredient_richness": 0.25,
         },
-    }
+    })
 
 
 def compute_schema_diff(
     source_profile: dict,
-    unified_schema: dict,
+    unified_schema: UnifiedSchema,
 ) -> tuple[dict, list[dict]]:
     """
     Compute the diff between a source profile and the unified schema.
@@ -396,19 +417,11 @@ def compute_schema_diff(
         column_mapping: {source_col -> unified_col} for direct matches
         gaps: list of gap dicts for columns that need transformation
     """
-    unified_cols = unified_schema.get("columns", {})
-
-    # Columns that are computed or enrichment-only don't need source mapping
-    mappable_cols = {
-        name: spec
-        for name, spec in unified_cols.items()
-        if not spec.get("computed") and not spec.get("enrichment")
-    }
+    mappable_cols = unified_schema.mappable_columns
 
     column_mapping = {}
     gaps = []
 
-    # Try exact name matches first
     source_cols_remaining = set(k for k in source_profile.keys() if k != "__meta__")
     target_cols_remaining = set(mappable_cols.keys())
 
@@ -418,12 +431,11 @@ def compute_schema_diff(
             source_cols_remaining.discard(src_col)
             target_cols_remaining.discard(src_col)
 
-    # Remaining target cols that have no source match are gaps
     for target_col in target_cols_remaining:
         target_spec = mappable_cols[target_col]
         gaps.append({
             "target_column": target_col,
-            "target_type": target_spec["type"],
+            "target_type": target_spec.type,
             "source_column": None,
             "source_type": None,
             "action": "ADD",

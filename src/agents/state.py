@@ -54,8 +54,8 @@ class PipelineState(TypedDict, total=False):
     chunk_size: int  # rows per processing chunk (default from DEFAULT_CHUNK_SIZE)
 
     # Schema analysis (set by orchestrator node)
-    unified_schema: dict
-    unified_schema_existed: bool  # True if schema was loaded, False if derived
+    unified_schema_existed: bool  # True if schema was loaded from disk, False if derived
+    excluded_columns: list[str]  # columns excluded from required via HITL decision
     gaps: list[GapItem]  # backward-compat union of derivable_gaps + missing_columns
     derivable_gaps: list[DerivedGap]  # gaps resolvable by transforming source columns
     missing_columns: list[

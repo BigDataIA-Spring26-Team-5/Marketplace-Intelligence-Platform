@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import logging
 from pathlib import Path
@@ -14,8 +13,9 @@ from src.agents.prompts import SCHEMA_ANALYSIS_PROMPT
 from src.models.llm import call_llm_json, get_orchestrator_llm
 from src.schema.analyzer import (
     profile_dataframe,
-    load_unified_schema,
+    get_unified_schema,
 )
+from src.schema.models import UnifiedSchema
 from src.schema.sampling import adaptive_sample
 from src.agents.confidence import calculate_confidence
 from src.registry.block_registry import BlockRegistry
@@ -44,14 +44,10 @@ _UNIFY_PRIMITIVES = {"UNIFY"}
 _DELETE_PRIMITIVES = {"DELETE"}
 
 
-def _detect_enrichment_columns(unified_schema: dict, source_schema: dict) -> list[str]:
+def _detect_enrichment_columns(unified_schema: UnifiedSchema, source_schema: dict) -> list[str]:
     """Return names of enrichment columns in the unified schema absent from source data."""
     source_cols = {k for k in source_schema.keys() if k != "__meta__"}
-    return [
-        name
-        for name, spec in unified_schema.get("columns", {}).items()
-        if spec.get("enrichment") and name not in source_cols
-    ]
+    return [name for name in unified_schema.enrichment_columns if name not in source_cols]
 
 
 def load_source_node(state: PipelineState) -> dict:
@@ -183,28 +179,17 @@ def analyze_schema_node(state: PipelineState) -> dict:
 
     Raises FileNotFoundError if config/unified_schema.json is absent.
     """
-    if state.get("unified_schema") is not None:
+    if state.get("operations") is not None:
         return {}
     source_schema = state["source_schema"]
     domain = state.get("domain", "nutrition")
     model = get_orchestrator_llm()
 
-    unified = load_unified_schema()
-
-    if unified is None:
-        raise FileNotFoundError(
-            "config/unified_schema.json not found. "
-            "The unified schema is the gold-standard target format and must be defined before running the pipeline."
-        )
+    unified = get_unified_schema()  # raises FileNotFoundError if absent
 
     logger.info("Unified schema found — diffing against source")
 
-    mappable_cols = {
-        name: spec
-        for name, spec in unified["columns"].items()
-        if not spec.get("computed")
-    }
-    unified_for_prompt = {"columns": mappable_cols}
+    unified_for_prompt = unified.for_prompt()
 
     # Separate __meta__ from per-column profile before sending to LLM
     meta_block = source_schema.get("__meta__", {})
@@ -349,11 +334,8 @@ def analyze_schema_node(state: PipelineState) -> dict:
         )
 
     required_mappable = {
-        name
-        for name, spec in unified["columns"].items()
-        if spec.get("required")
-        and not spec.get("computed")
-        and not spec.get("enrichment")
+        name for name in unified.required_columns
+        if not unified.columns[name].enrichment
     }
     # Covered = mapped + all target columns from operations
     op_targets: set[str] = set()
@@ -381,10 +363,10 @@ def analyze_schema_node(state: PipelineState) -> dict:
         )
 
     # Hard fallback: ensure schema-declared enrichment_alias columns are always in enrich_alias_ops
-    # This is LLM-proof — if both Agent 1 and 1.5 miss/revert ENRICH_ALIAS, schema wins.
+    # LLM-proof — if both Agent 1 and Agent 2 miss/revert ENRICH_ALIAS, schema wins.
     alias_targets_set = {a["target"] for a in enrich_alias_ops}
-    for col_name, col_spec in unified.get("columns", {}).items():
-        schema_alias = col_spec.get("enrichment_alias")
+    for col_name, col_spec in unified.columns.items():
+        schema_alias = col_spec.enrichment_alias
         if schema_alias and col_name not in alias_targets_set:
             enrich_alias_ops.append({"target": col_name, "source": schema_alias})
             alias_targets_set.add(col_name)
@@ -446,7 +428,6 @@ def analyze_schema_node(state: PipelineState) -> dict:
                 op["confidence_factors"] = ["no_source_column"]
 
     return {
-        "unified_schema": unified,
         "unified_schema_existed": True,
         "column_mapping": column_mapping,
         "gaps": gaps,
@@ -482,7 +463,7 @@ def _deterministic_corrections(
     operations: list[dict],
     column_mapping: dict,
     source_schema: dict,
-    unified_schema: dict,
+    unified_schema: UnifiedSchema,
 ) -> list[dict]:
     """Apply Rules 4, 6, 7 deterministically — no LLM needed.
 
@@ -490,7 +471,6 @@ def _deterministic_corrections(
     Rule 6: Source columns not consumed anywhere → DELETE drop_column.
     Rule 7: Operations targeting identity columns missing normalize_before_dedup → add it.
     """
-    unified_cols = unified_schema.get("columns", {})
     source_cols = {k: v for k, v in source_schema.items() if k != "__meta__"}
 
     # --- Rule 4: type mismatch on RENAME ---
@@ -500,7 +480,8 @@ def _deterministic_corrections(
             src = op.get("source_column", "")
             tgt = op.get("target_column", "")
             src_dtype = source_cols.get(src, {}).get("dtype", "object")
-            tgt_type = unified_cols.get(tgt, {}).get("type", "string")
+            tgt_spec = unified_schema.columns.get(tgt)
+            tgt_type = tgt_spec.type if tgt_spec else "string"
             src_family = _DTYPE_FAMILY.get(src_dtype, "string")
             if src_family != tgt_type:
                 op = {
@@ -585,9 +566,8 @@ def check_registry_node(state: PipelineState) -> dict:
 
     # Apply deterministic corrections (Rules 4, 6, 7) regardless of which agent produced operations
     source_schema = state.get("source_schema", {})
-    unified_schema_state = state.get("unified_schema", {})
     operations = _deterministic_corrections(
-        operations, column_mapping, source_schema, unified_schema_state
+        operations, column_mapping, source_schema, get_unified_schema()
     )
 
     block_hits: dict[str, str] = {}
@@ -669,9 +649,8 @@ def check_registry_node(state: PipelineState) -> dict:
         # Hard fallback: ensure schema-declared enrichment_alias columns are always in enrich_alias_ops
         # Catches cases where Agent 2 reverted ENRICH_ALIAS → ADD set_null
         alias_targets_set = {a["target"] for a in enrich_alias_ops}
-        unified_schema_cols = state.get("unified_schema", {}).get("columns", {})
-        for col_name, col_spec in unified_schema_cols.items():
-            schema_alias = col_spec.get("enrichment_alias")
+        for col_name, col_spec in get_unified_schema().columns.items():
+            schema_alias = col_spec.enrichment_alias
             if schema_alias and col_name not in alias_targets_set:
                 enrich_alias_ops.append({"target": col_name, "source": schema_alias})
                 alias_targets_set.add(col_name)
@@ -811,8 +790,7 @@ def check_registry_node(state: PipelineState) -> dict:
                     }
                 )
 
-    # ── Phase C: Apply HITL decisions, patch schema, and write YAML ──
-    unified_schema = copy.deepcopy(state.get("unified_schema", {}))
+    # ── Phase C: Apply HITL decisions and write YAML ──
     aliased_cols = {a["target"] for a in enrich_alias_ops}
     excluded_columns = []
     for col_name, decision in decisions.items():
@@ -820,13 +798,8 @@ def check_registry_node(state: PipelineState) -> dict:
             # Column will be filled by enrichment alias — ignore HITL exclusion decision
             continue
         if decision.get("action") == "exclude":
-            col_spec = unified_schema.get("columns", {}).get(col_name)
-            if col_spec:
-                col_spec["required"] = False
-                excluded_columns.append(col_name)
-                logger.info(
-                    f"Excluded '{col_name}' from required schema (HITL decision)"
-                )
+            excluded_columns.append(col_name)
+            logger.info(f"Excluded '{col_name}' from required schema (HITL decision)")
 
     if yaml_operations:
         yaml_operations = merge_hitl_decisions(yaml_operations, decisions)
@@ -857,17 +830,13 @@ def check_registry_node(state: PipelineState) -> dict:
     else:
         logger.info("All missing columns have coverage (alias, block, or YAML)")
 
-    result = {
+    return {
         "block_registry_hits": block_hits,
         "registry_misses": [],  # Always empty — no Agent 2
         "mapping_yaml_path": mapping_yaml_path,
         "enrich_alias_ops": enrich_alias_ops,
+        "excluded_columns": excluded_columns,
     }
-
-    if excluded_columns:
-        result["unified_schema"] = unified_schema
-
-    return result
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
