@@ -4,7 +4,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+.claude/
 # =========================
 # Environment / secrets
 # =========================
@@ -68,12 +68,22 @@ Thumbs.db
 .idea/
 
 # =========================
-# Notebooks (if you add later)
+# Claude files
 # =========================
-.ipynb_checkpoints/
+.claude/
+CLAUDE.md
 
 # =========================
 # Misc
 # =========================
 *.tmp
 *.bak
+
+# # =========================
+# # Spec Kit
+# # =========================
+# specs
+# .specify
+# .opencode
+# .agents
+# .ruff_cache

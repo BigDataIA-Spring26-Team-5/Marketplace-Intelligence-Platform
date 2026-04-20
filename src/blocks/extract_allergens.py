@@ -31,6 +31,9 @@ ALLERGEN_PATTERNS = {
 class ExtractAllergensBlock(Block):
     name = "extract_allergens"
     domain = "nutrition"
+    description = "Scan ingredients for FDA Big-9 allergens using keyword patterns"
+    inputs = ["ingredients"]
+    outputs = ["allergens"]
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()
@@ -45,7 +48,7 @@ class ExtractAllergensBlock(Block):
             for allergen, pattern in ALLERGEN_PATTERNS.items():
                 if pattern.search(text):
                     found.append(allergen)
-            return ", ".join(sorted(found)) if found else None
+            return ", ".join(sorted(found)) if found else ""
 
         df["allergens"] = df["ingredients"].apply(scan_allergens)
         detected = df["allergens"].notna().sum()

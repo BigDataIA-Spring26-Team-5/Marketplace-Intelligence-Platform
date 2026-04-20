@@ -17,7 +17,7 @@ from src.enrichment.corpus import (
     CONFIDENCE_THRESHOLD_CATEGORY,
     add_to_corpus,
     build_seed_corpus,
-    knn_search,
+    knn_search_batch,
     load_corpus,
     save_corpus,
 )
@@ -29,7 +29,7 @@ def embedding_enrich(
     df: pd.DataFrame,
     enrich_cols: list[str],
     needs_enrichment: pd.Series,
-) -> tuple[pd.DataFrame, pd.Series]:
+) -> tuple[pd.DataFrame, pd.Series, dict]:
     """
     Use KNN corpus search to assign primary_category to unmatched rows.
 
@@ -41,14 +41,14 @@ def embedding_enrich(
     (JSON string) for use by Strategy 3's RAG prompt. This column must be
     dropped by the orchestrator before final output.
 
-    Returns (modified_df, updated_needs_enrichment_mask).
+    Returns (modified_df, updated_needs_enrichment_mask, stats).
     """
     if "primary_category" not in enrich_cols:
-        return df, needs_enrichment
+        return df, needs_enrichment, {"resolved": 0}
 
     mask = needs_enrichment & df["primary_category"].isna()
     if not mask.any():
-        return df, needs_enrichment
+        return df, needs_enrichment, {"resolved": 0}
 
     # Ensure the internal neighbor column exists
     if "_knn_neighbors" not in df.columns:
@@ -64,32 +64,31 @@ def embedding_enrich(
             index, metadata = load_corpus()
         except ImportError:
             logger.warning("S2 KNN: faiss not installed, skipping Strategy 2")
-            return df, needs_enrichment
+            return df, needs_enrichment, {"resolved": 0}
         except Exception as e:
             logger.warning(f"S2 KNN: corpus seed failed: {e}")
-            return df, needs_enrichment
+            return df, needs_enrichment, {"resolved": 0}
 
     if index is None or index.ntotal < 10:
         logger.info("S2 KNN: corpus still too small after seeding, skipping to S3")
-        return df, needs_enrichment
+        return df, needs_enrichment, {"resolved": 0}
 
     resolved = 0
-    for idx in df.index[mask]:
-        row = df.loc[idx]
-        try:
-            category, confidence, neighbors = knn_search(row, index, metadata)
-        except ImportError:
-            logger.warning("S2 KNN: faiss not installed, skipping Strategy 2")
-            break
-        except Exception as e:
-            logger.warning(f"S2 KNN: search failed for row {idx}: {e}")
-            neighbors = []
-            category = None
-            confidence = 0.0
+    unresolved_indices = list(df.index[mask])
+    unresolved_rows = [df.loc[idx] for idx in unresolved_indices]
 
-        # Store neighbors for S3 RAG prompt regardless of confidence
+    try:
+        batch_results = knn_search_batch(unresolved_rows, index, metadata)
+    except ImportError:
+        logger.warning("S2 KNN: faiss not installed, skipping Strategy 2")
+        needs_enrichment = df[enrich_cols].isna().any(axis=1)
+        return df, needs_enrichment, {"resolved": 0}
+    except Exception as e:
+        logger.warning(f"S2 KNN: batch search failed: {e}")
+        batch_results = [(None, 0.0, []) for _ in unresolved_indices]
+
+    for idx, row, (category, confidence, neighbors) in zip(unresolved_indices, unresolved_rows, batch_results):
         df.at[idx, "_knn_neighbors"] = json.dumps(neighbors)
-
         if category is not None and confidence >= CONFIDENCE_THRESHOLD_CATEGORY:
             df.at[idx, "primary_category"] = category
             add_to_corpus(row, category, index, metadata)
@@ -103,4 +102,4 @@ def embedding_enrich(
 
     logger.info(f"S2 KNN: resolved {resolved} rows")
     needs_enrichment = df[enrich_cols].isna().any(axis=1)
-    return df, needs_enrichment
+    return df, needs_enrichment, {"resolved": resolved}
