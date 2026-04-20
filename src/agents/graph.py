@@ -20,6 +20,7 @@ from src.agents.prompts import SEQUENCE_PLANNING_PROMPT
 from src.models.llm import call_llm_json, get_orchestrator_llm
 from src.registry.block_registry import BlockRegistry
 from src.pipeline.runner import PipelineRunner, DEFAULT_CHUNK_SIZE
+from src.schema.analyzer import get_unified_schema
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +46,13 @@ def plan_sequence_node(state: PipelineState) -> dict:
     gaps = state.get("gaps", [])
     registry_misses = state.get("registry_misses", [])
     block_registry_hits = state.get("block_registry_hits", {})
-    unified_schema = state.get("unified_schema")
     enable_enrichment = state.get("enable_enrichment", True)
 
     block_reg = BlockRegistry.instance()
 
     pool = block_reg.get_default_sequence(
         domain=domain,
-        unified_schema=unified_schema,
+        unified_schema=get_unified_schema(),
         enable_enrichment=enable_enrichment,
     )
     blocks_metadata = block_reg.get_blocks_with_metadata(pool)
@@ -131,16 +131,17 @@ def run_pipeline_node(state: PipelineState) -> dict:
     runner = PipelineRunner(block_registry)
 
     domain = state.get("domain", "nutrition")
+    unified = get_unified_schema()
     block_sequence = state.get("block_sequence") or block_registry.get_default_sequence(
         domain=domain,
-        unified_schema=state.get("unified_schema"),
+        unified_schema=unified,
         enable_enrichment=state.get("enable_enrichment", True),
     )
 
     config = {
-        "dq_weights": (state.get("unified_schema") or {}).get("dq_weights"),
+        "dq_weights": unified.dq_weights.model_dump(),
         "domain": domain,
-        "unified_schema": state.get("unified_schema"),
+        "unified_schema": unified,
     }
 
     source_path = state.get("source_path")
@@ -186,12 +187,8 @@ def run_pipeline_node(state: PipelineState) -> dict:
         elif src in result_df.columns:
             result_df[tgt] = result_df[src].copy()
 
-    unified_schema = state.get("unified_schema", {})
-    required_cols = [
-        col
-        for col, spec in unified_schema.get("columns", {}).items()
-        if spec.get("required") and not spec.get("computed")
-    ]
+    excluded = set(state.get("excluded_columns") or [])
+    required_cols = sorted(unified.required_columns - excluded)
 
     existing_required = [c for c in required_cols if c in result_df.columns]
     missing_cols = [c for c in required_cols if c not in result_df.columns]
