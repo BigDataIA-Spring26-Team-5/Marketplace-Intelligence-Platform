@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from docx import Document; d=Document\\('Final_Project_Proposal.docx'\\); [print\\(p.text\\) for p in d.paragraphs]\")",
+      "Bash(python -c \"import fitz; d=fitz.open\\('BIG-DATA FINAL prep.pdf'\\); print\\('pages:', len\\(d\\)\\); [print\\(f'--- page {i} ---'\\); print\\(p.get_text\\(\\)[:2000]\\) for i,p in enumerate\\(d\\)]\")",
+      "Bash(python -c ' *)",
+      "Bash(python -m pip install pymupdf -q)",
+      "Bash(python *)",
+      "Bash(docker exec *)",
+      "Bash(gcloud auth *)",
+      "Bash(gcloud config *)",
+      "Bash(python3 *)",
+      "Bash(pip install *)",
+      "WebSearch",
+      "Bash(chmod +x /home/bhavyalikhitha_bbl/bhavya-workspace/scripts/register_connectors.sh)",
+      "Bash(docker-compose up *)",
+      "Bash(docker compose version *)",
+      "Bash(docker run *)",
+      "Bash(docker network ls *)",
+      "Bash(docker rm *)",
+      "Bash(curl -sf http://localhost:8083/connectors)",
+      "Bash(curl -s http://localhost:8083/)"
+    ]
+  }
+}
