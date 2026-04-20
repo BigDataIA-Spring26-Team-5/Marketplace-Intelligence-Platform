@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from src.blocks.base import Block
+from src.schema.models import UnifiedSchema
 from src.blocks.strip_whitespace import StripWhitespaceBlock
 from src.blocks.lowercase_brand import LowercaseBrandBlock
 from src.blocks.remove_noise_words import RemoveNoiseWordsBlock
@@ -148,7 +149,7 @@ class BlockRegistry:
     def get_default_sequence(
         self,
         domain: str = "nutrition",
-        unified_schema: dict | None = None,
+        unified_schema: UnifiedSchema | None = None,
         enable_enrichment: bool = True,
     ) -> list[str]:
         """
@@ -172,10 +173,7 @@ class BlockRegistry:
             base.append("extract_quantity_column")
 
         has_enrichment = (
-            any(
-                spec.get("enrichment")
-                for spec in unified_schema.get("columns", {}).values()
-            )
+            bool(unified_schema.enrichment_columns)
             if unified_schema is not None
             else domain in ("nutrition", "safety")
         )

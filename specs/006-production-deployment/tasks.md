@@ -1,11 +1,11 @@
 ---
-description: "Task list for 005-production-deployment"
+description: "Task list for 006-production-deployment"
 ---
 
 # Tasks: Production Deployment
 
-**Input**: `specs/005-production-deployment/plan.md`, `data-model.md`, `contracts/api.yaml`, `research.md`, `quickstart.md`
-**Branch**: `005-production-deployment`
+**Input**: `specs/006-production-deployment/plan.md`, `data-model.md`, `contracts/api.yaml`, `research.md`, `quickstart.md`
+**Branch**: `006-production-deployment`
 **Date**: 2026-04-18
 
 ## Format: `[ID] [P?] [Story] Description`
