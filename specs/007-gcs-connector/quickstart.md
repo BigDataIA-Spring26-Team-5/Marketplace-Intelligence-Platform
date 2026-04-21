@@ -51,6 +51,6 @@ for chunk in loader.iter_chunks(chunk_size=10000):
 ```bash
 cd src && pytest ../tests/test_gcs_loader.py -v
 
-# Integration test (requires real GCS access)
-pytest ../tests/test_gcs_loader.py -v -k integration
+# Integration test (requires real GCS access + GOOGLE_CLOUD_PROJECT set)
+pytest tests/test_gcs_loader.py -v -m integration
 ```
