@@ -1,0 +1,35 @@
+column_operations:
+- source: fdcId
+  action: drop_column
+- source: dataType
+  action: drop_column
+- source: gtinUpc
+  action: drop_column
+- source: _dataType
+  action: drop_column
+- source: foodNutrients
+  action: drop_column
+- target: brand_name
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: ingredients
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: serving_size
+  type: float
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: serving_size_unit
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: data_source
+  type: string
+  action: set_default
+  default_value: USDA
