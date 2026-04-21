@@ -10,36 +10,44 @@ column_operations:
   default_value: OpenFoodFacts
 - target: product_name
   type: string
-  action: format_transform
+  action: extract_json_field
   source: product_name
-  normalize_before_dedup: true
+  key: ''
 - target: ingredients
   type: string
-  action: format_transform
+  action: extract_json_field
   source: ingredients_text
+  key: ''
 - target: serving_size
   type: float
   action: regex_extract
   source: serving_size
-  pattern: ([0-9]+\.?[0-9]*)
+  pattern: ([0-9]+(?:\.[0-9]+)?)
 - target: serving_size_unit
   type: string
   action: regex_extract
   source: serving_size
-  pattern: '[0-9]+\.?[0-9]*\s*([a-zA-Z]+)'
+  pattern: (g|ONZ|oz|ml|l|kg|lb)\b
+- target: serving_size_unit
+  type: string
+  action: value_map
+  source: serving_size_unit
+  mapping:
+    ONZ: oz
+    g: g
+    oz: oz
+    ml: ml
+    l: l
+    kg: kg
+    lb: lb
 - target: published_date
   type: string
   action: parse_date
-  source: published_date
+  source: last_modified_t
+  format: unix_timestamp
 - source: pnns_groups_1
   action: drop_column
 - source: pnns_groups_2
-  action: drop_column
-- source: allergens
-  action: drop_column
-- source: traces
-  action: drop_column
-- source: countries
   action: drop_column
 - source: energy_100g
   action: drop_column

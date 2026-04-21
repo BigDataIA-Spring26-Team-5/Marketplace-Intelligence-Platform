@@ -34,27 +34,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SILVER_BUCKET  = os.environ.get("SILVER_BUCKET",  "mip-silver-2024")
-BRONZE_BUCKET  = os.environ.get("BRONZE_BUCKET",  "mip-bronze-2024")
-GCS_ENDPOINT   = os.environ.get("GCS_ENDPOINT",   "https://storage.googleapis.com")
-GCS_ACCESS_KEY = os.environ.get("GCS_ACCESS_KEY", "")
-GCS_SECRET_KEY = os.environ.get("GCS_SECRET_KEY", "")
-BQ_PROJECT     = os.environ.get("GCP_PROJECT",    "mip-platform-2024")
+SILVER_BUCKET   = os.environ.get("SILVER_BUCKET",   "mip-silver-2024")
+BQ_PROJECT      = os.environ.get("GCP_PROJECT",     "mip-platform-2024")
 BQ_GOLD_DATASET = os.environ.get("BQ_GOLD_DATASET", "mip_gold")
 BQ_GOLD_TABLE   = os.environ.get("BQ_GOLD_TABLE",   "products")
 
 
 def _gcs_client():
-    import boto3
-    from botocore.config import Config
-    return boto3.client(
-        "s3",
-        endpoint_url=GCS_ENDPOINT,
-        aws_access_key_id=GCS_ACCESS_KEY,
-        aws_secret_access_key=GCS_SECRET_KEY,
-        config=Config(signature_version="s3v4"),
-        region_name="auto",
-    )
+    from google.cloud import storage
+    return storage.Client()
 
 
 def _read_silver_parquet(source_name: str, date: str) -> pd.DataFrame:
@@ -64,29 +52,24 @@ def _read_silver_parquet(source_name: str, date: str) -> pd.DataFrame:
     """
     prefix = f"{source_name}/{date}/"
     client = _gcs_client()
+    bucket = client.bucket(SILVER_BUCKET)
+    blobs = [b for b in bucket.list_blobs(prefix=prefix) if b.name.endswith(".parquet")]
 
-    paginator = client.get_paginator("list_objects_v2")
-    keys = []
-    for page in paginator.paginate(Bucket=SILVER_BUCKET, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            if obj["Key"].endswith(".parquet"):
-                keys.append(obj["Key"])
-
-    if not keys:
+    if not blobs:
         raise FileNotFoundError(
             f"No Silver Parquet files found at gs://{SILVER_BUCKET}/{prefix}"
         )
 
-    logger.info(f"Reading {len(keys)} Silver Parquet file(s) for {source_name}/{date}")
+    logger.info(f"Reading {len(blobs)} Silver Parquet file(s) for {source_name}/{date}")
     frames = []
-    for key in sorted(keys):
-        obj = client.get_object(Bucket=SILVER_BUCKET, Key=key)
-        buf = io.BytesIO(obj["Body"].read())
+    for blob in sorted(blobs, key=lambda b: b.name):
+        buf = io.BytesIO(blob.download_as_bytes())
         frames.append(pd.read_parquet(buf, engine="pyarrow"))
 
     df = pd.concat(frames, ignore_index=True)
     logger.info(f"Loaded {len(df)} rows from Silver")
     return df
+
 
 
 def _write_gold_bq(df: pd.DataFrame, source_name: str) -> int:
