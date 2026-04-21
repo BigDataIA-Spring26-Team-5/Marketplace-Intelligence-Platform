@@ -250,6 +250,67 @@ Question: {question}
 
 ---
 
+## MetricsExporter
+
+```
+src/uc2_observability/metrics_exporter.py
+```
+
+```python
+class MetricsExporter:
+    def __init__(self, pushgateway_url: str = "localhost:9091", job: str = "etl_pipeline"):
+        ...
+
+    def push(self, run_log: dict) -> bool:
+        """Push run metrics to Prometheus Pushgateway. Returns True on success. Never raises."""
+        ...
+```
+
+**Prometheus metrics pushed per run** (all `Gauge` type):
+
+| Metric name | Value source | Labels |
+|---|---|---|
+| `etl_dq_score_pre` | `run_log["dq_score_pre"]` | `source_name`, `status`, `run_id` |
+| `etl_dq_score_post` | `run_log["dq_score_post"]` | `source_name`, `status`, `run_id` |
+| `etl_dq_delta` | `run_log["dq_delta"]` | `source_name`, `status`, `run_id` |
+| `etl_rows_in` | `run_log["rows_in"]` | `source_name`, `status`, `run_id` |
+| `etl_rows_out` | `run_log["rows_out"]` | `source_name`, `status`, `run_id` |
+| `etl_rows_quarantined` | `run_log["rows_quarantined"]` | `source_name`, `status`, `run_id` |
+| `etl_duration_seconds` | `run_log["duration_seconds"]` | `source_name`, `status`, `run_id` |
+| `etl_enrichment_s1_resolved` | `enrichment_stats["deterministic"]` | `source_name`, `run_id` |
+| `etl_enrichment_s2_resolved` | `enrichment_stats["embedding"]` | `source_name`, `run_id` |
+| `etl_enrichment_s3_resolved` | `enrichment_stats["llm"]` | `source_name`, `run_id` |
+| `etl_enrichment_unresolved` | `enrichment_stats["unresolved"]` | `source_name`, `run_id` |
+| `etl_run_status` | 1.0=success / 0.5=partial / 0.0=failed | `source_name`, `run_id` |
+
+**Behavior**:
+- Uses `prometheus_client.CollectorRegistry` (isolated per push) + `push_to_gateway()`
+- Missing fields (e.g., `dq_score_pre` absent on failed runs) default to `0.0` — metric is still pushed
+- Returns `False` and logs a warning on any network error; never raises
+
+---
+
+## Grafana Dashboard
+
+```
+grafana/dashboards/pipeline-observability.json
+```
+
+Provisioned dashboard with 6 panels:
+
+| Panel | Type | Metric(s) |
+|---|---|---|
+| DQ Scores Over Time | Time series | `etl_dq_score_pre`, `etl_dq_score_post`, `etl_dq_delta` |
+| Enrichment Tier Breakdown | Stacked bar | `etl_enrichment_s1_resolved`, `_s2_`, `_s3_`, `_unresolved` |
+| Run Status | Stat (last value) | `etl_run_status` |
+| Row Counts | Time series | `etl_rows_in`, `etl_rows_out`, `etl_rows_quarantined` |
+| Run Duration | Time series | `etl_duration_seconds` |
+| Source Filter | Dashboard variable | `$source_name` label filter on all panels |
+
+All panels use `run_id` as a series label to distinguish individual runs on the time axis.
+
+---
+
 ## Chatbot Session State (Streamlit)
 
 Stored in `st.session_state` under `obs_*` prefix to avoid collisions:

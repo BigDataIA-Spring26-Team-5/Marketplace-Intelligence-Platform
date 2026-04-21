@@ -5,7 +5,7 @@
 
 ## Summary
 
-Persist structured run logs (JSON, one file per run) after every pipeline execution, then expose a RAG chatbot in the Streamlit wizard that lets operators ask natural-language questions about past pipeline runs. Log data is sourced directly from `PipelineState` fields already collected during execution. The chatbot uses structured filtering + LLM synthesis over the stored JSON logs.
+Persist structured run logs (JSON, one file per run) after every pipeline execution, then expose a RAG chatbot in the Streamlit wizard for natural-language questions about past runs, and a Grafana dashboard for visual analytics. Log data is sourced directly from `PipelineState` fields already collected during execution. The chatbot uses structured filtering + LLM synthesis over stored JSON logs. The Grafana dashboard reads pipeline metrics pushed to Prometheus Pushgateway after each run.
 
 ## Technical Context
 
@@ -56,23 +56,36 @@ src/uc2_observability/
 ├── log_writer.py                # NEW — RunLogWriter: PipelineState → JSON file
 ├── log_store.py                 # NEW — RunLogStore: query persisted logs
 ├── rag_chatbot.py               # IMPLEMENT (replace placeholder) — ObservabilityChatbot
+├── metrics_exporter.py          # NEW — MetricsExporter: push run metrics to Prometheus Pushgateway
 ├── anomaly_detection.py         # UNCHANGED (still placeholder)
 └── dashboard.py                 # UNCHANGED (still placeholder)
 
 src/agents/
-└── graph.py                     # EDIT — call RunLogWriter.save() at end of save_output_node
+└── graph.py                     # EDIT — call RunLogWriter.save() + MetricsExporter.push() at end of save_output_node
 
 src/models/
 └── llm.py                       # EDIT — add get_observability_llm() getter
 
 app.py                           # EDIT — add sidebar Mode radio + ObservabilityPage render
 
+grafana/
+├── docker-compose.yml           # NEW — Prometheus + Pushgateway + Grafana stack
+├── prometheus.yml               # NEW — Prometheus scrape config (scrapes Pushgateway)
+├── provisioning/
+│   ├── datasources/
+│   │   └── prometheus.yml       # NEW — Grafana auto-provision Prometheus datasource
+│   └── dashboards/
+│       └── dashboards.yml       # NEW — Grafana dashboard provisioning config
+└── dashboards/
+    └── pipeline-observability.json  # NEW — Grafana dashboard definition
+
 tests/
 └── uc2_observability/
     ├── __init__.py              # NEW
     ├── test_log_writer.py       # NEW
     ├── test_log_store.py        # NEW
-    └── test_rag_chatbot.py      # NEW
+    ├── test_rag_chatbot.py      # NEW
+    └── test_metrics_exporter.py # NEW
 ```
 
 **Structure Decision**: Single-project layout. New code goes into the existing `src/uc2_observability/` tree. No new packages or top-level directories. Tests mirror source structure under `tests/uc2_observability/`.
@@ -154,6 +167,51 @@ Delivers: chatbot UI accessible from the existing wizard.
      - On submit: call `obs_chatbot.query(question)`, append to `st.session_state.obs_messages`
      - Render message history with `st.chat_message()`, show cited run IDs as collapsible expander
      - "Clear chat" button resets `obs_messages`
+
+### Phase E: Grafana Dashboard
+
+Delivers: visual Grafana dashboard showing pipeline metrics over time. Requires Phases A (log writer) for data and Prometheus Pushgateway running locally.
+
+1. **`src/uc2_observability/metrics_exporter.py`** — `MetricsExporter` class
+   - `__init__(pushgateway_url)`: default `"localhost:9091"`, `job="etl_pipeline"`
+   - `push(run_log: dict) -> bool`: push labelled gauges derived from a run log dict; returns `True` on success, `False` on failure; never raises
+   - Metrics pushed (all as `Gauge`, labelled with `source_name`, `status`, `run_id`):
+     - `etl_dq_score_pre`, `etl_dq_score_post`, `etl_dq_delta`
+     - `etl_rows_in`, `etl_rows_out`, `etl_rows_quarantined`
+     - `etl_duration_seconds`
+     - `etl_enrichment_s1_resolved`, `etl_enrichment_s2_resolved`, `etl_enrichment_s3_resolved`, `etl_enrichment_unresolved`
+     - `etl_run_status` (1.0=success, 0.5=partial, 0.0=failed)
+
+2. **`src/agents/graph.py`** — add Pushgateway push after log write
+   - After `RunLogWriter().save()` call: if write succeeded (path returned), call `MetricsExporter().push(run_log_dict)`
+   - Wrap in try/except — metrics push failure must never affect pipeline return
+
+3. **`grafana/docker-compose.yml`** — local observability stack
+   ```yaml
+   services:
+     prometheus:   image: prom/prometheus, ports: 9090, mounts: prometheus.yml
+     pushgateway:  image: prom/pushgateway, ports: 9091
+     grafana:      image: grafana/grafana, ports: 3000, mounts: provisioning/ + dashboards/
+   ```
+
+4. **`grafana/prometheus.yml`** — scrape config
+   - Scrape `pushgateway:9091` every 15s with `honor_labels: true`
+
+5. **`grafana/provisioning/datasources/prometheus.yml`** — auto-provision datasource
+   - `url: http://prometheus:9090`, `access: proxy`, `isDefault: true`
+
+6. **`grafana/dashboards/pipeline-observability.json`** — dashboard panels:
+   - **DQ Scores Over Time**: time-series, metrics `etl_dq_score_pre`, `etl_dq_score_post`, `etl_dq_delta`, group by `run_id`
+   - **Enrichment Tier Distribution**: stacked bar, S1/S2/S3/unresolved counts per run
+   - **Run Status**: stat panel, `etl_run_status` last value per run, color-coded (green/yellow/red)
+   - **Row Counts**: time-series, `etl_rows_in`, `etl_rows_out`, `etl_rows_quarantined`
+   - **Run Duration**: time-series, `etl_duration_seconds`
+   - **Source Filter**: dashboard variable `$source_name` applied as label filter on all panels
+
+7. **`tests/uc2_observability/test_metrics_exporter.py`**
+   - Test `push()` returns `True` when Pushgateway responds 200 (mock requests)
+   - Test `push()` returns `False` (not raises) on connection error
+   - Test `push()` sends correct metric names and label values from a fixture run log
 
 ## Complexity Tracking
 

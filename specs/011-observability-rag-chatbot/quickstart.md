@@ -4,11 +4,13 @@
 
 ## What this feature adds
 
-After every pipeline run, a JSON log file is written to `output/run_logs/`. A new "Observability" mode in the Streamlit wizard lets you ask natural-language questions about past pipeline executions.
+After every pipeline run, a JSON log file is written to `output/run_logs/` and key metrics are pushed to Prometheus Pushgateway. A new "Observability" mode in the Streamlit wizard lets you ask natural-language questions about past pipeline executions. A Grafana dashboard provides visual analytics over all runs.
 
 ## Prerequisites
 
-No new dependencies. Uses the existing Poetry environment and `.env` configuration.
+No new Python dependencies. Uses the existing Poetry environment and `.env` configuration.
+
+For the Grafana dashboard: Docker (to run Prometheus + Pushgateway + Grafana).
 
 ## Running the pipeline (logs auto-saved)
 
@@ -47,6 +49,30 @@ output/run_logs/
 ```bash
 poetry run pytest tests/uc2_observability/ -v
 ```
+
+## Grafana dashboard
+
+Start the observability stack (Prometheus + Pushgateway + Grafana):
+
+```bash
+cd grafana/
+docker compose up -d
+```
+
+Services:
+- Pushgateway: http://localhost:9091 — receives metrics after each pipeline run
+- Prometheus: http://localhost:9090 — scrapes Pushgateway every 15s
+- Grafana: http://localhost:3000 — default login `admin/admin`
+
+The **Pipeline Observability** dashboard is auto-provisioned. After running the pipeline at least once, open Grafana and select it from the dashboard list.
+
+To stop:
+```bash
+cd grafana/
+docker compose down
+```
+
+Metric push is best-effort — if Pushgateway is not running, the pipeline still completes normally and JSON logs are still written.
 
 ## Checking log content manually
 
