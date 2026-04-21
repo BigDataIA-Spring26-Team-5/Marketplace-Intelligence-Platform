@@ -29,11 +29,12 @@ logger = logging.getLogger(__name__)
 
 # ── configuration ──────────────────────────────────────────────────────────────
 
-KAFKA_BOOTSTRAP = "localhost:9092"
+import os
+KAFKA_BOOTSTRAP = os.getenv("UC2_KAFKA_BOOTSTRAP", "localhost:9092")
 KAFKA_TOPIC = "pipeline.events"
 KAFKA_GROUP = "uc2-kafka-to-pg"
 
-PG_DSN = "host=localhost port=5432 dbname=uc2 user=mip password=REMOVED_PG_PASSWORD"
+PG_DSN = os.getenv("UC2_PG_DSN", "host=localhost port=5432 dbname=uc2 user=mip password=REMOVED_PG_PASSWORD")
 
 MAX_BACKOFF = 60  # seconds
 

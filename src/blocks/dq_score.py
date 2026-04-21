@@ -45,12 +45,13 @@ def compute_dq_score(
     else:
         completeness = df[data_cols].notna().mean(axis=1)
 
-    # Freshness proxy: if published_date exists
+    # Freshness: absolute age from today (0 = 2+ years old, 1 = today)
     if "published_date" in df.columns:
         dates = pd.to_datetime(df["published_date"], errors="coerce")
         if dates.notna().any():
-            min_d, max_d = dates.min(), dates.max()
-            freshness = ((dates - min_d) / (max_d - min_d)).fillna(0.5) if min_d != max_d else 1.0
+            today = pd.Timestamp("today", tz=None).normalize()
+            age_days = (today - dates.dt.tz_localize(None)).dt.days.clip(lower=0)
+            freshness = (1 - (age_days / 730)).clip(0, 1).fillna(0.5)
         else:
             freshness = 0.5
     else:
