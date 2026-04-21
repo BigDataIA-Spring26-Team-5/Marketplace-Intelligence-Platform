@@ -63,7 +63,6 @@ def fetch_and_upload(execution_date=None, **kwargs):
         "tasksource/esci",
         split="train",
         streaming=True,
-        trust_remote_code=True,
     )
 
     buffer    = []
