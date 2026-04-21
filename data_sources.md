@@ -1,6 +1,0 @@
-•	Open Food Facts: https://world.openfoodfacts.org/data (ODbL v1.0)
-•	USDA FoodData Central: https://fdc.nal.usda.gov/download-datasets/ (Public domain)
-•	openFDA Food Enforcement: https://open.fda.gov/apis/food/enforcement/ (Public domain)
-•	Open Prices: https://prices.openfoodfacts.org/ (ODbL)
-•	Amazon ESCI: https://huggingface.co/datasets/tasksource/esci (Apache 2.0)
-•	Instacart: https://www.kaggle.com/datasets/yasserh/instacart-online-grocery-basket-analysis-dataset (Non-commercial)
