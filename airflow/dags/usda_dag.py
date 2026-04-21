@@ -20,6 +20,10 @@ USDA_API_KEY  = os.getenv("USDA_API_KEY", "gZJUqbshltC7qfQ9lk0meZcMJjazosPLfPVnE
 USDA_LIST_URL = "https://api.nal.usda.gov/fdc/v1/foods/list"
 PAGE_SIZE     = 200
 FLUSH_EVERY   = 50   # write to GCS every 50 pages (10k records) to avoid OOM
+MAX_PAGE      = 500  # API hard limit per dataType query
+
+# Each dataType gets its own 500-page quota → ~100k records each
+DATA_TYPES = ["Branded", "Foundation", "SR Legacy", "Survey (FNDDS)"]
 
 GCS_ACCESS_KEY = os.getenv("GCS_ACCESS_KEY", "GOOG1ECMI5556PKW4BG6QK3VL43KFGUZ2XZWA4ZGVF3IVDWK3Q2X6HYAWQ535")
 GCS_SECRET_KEY = os.getenv("GCS_SECRET_KEY", "/yluMFMGYXpgcDtKnzszQfRKKyfbFBGpxmcpSQYx")
@@ -58,50 +62,61 @@ def _flush(client, records, ds, chunk_idx):
 
 
 def fetch_and_upload(execution_date=None, **kwargs):
-    """Page through /foods/list and write all USDA records to GCS bronze."""
+    """Page through /foods/list per dataType and write all USDA records to GCS bronze."""
     ds = execution_date.strftime("%Y/%m/%d") if execution_date else datetime.utcnow().strftime("%Y/%m/%d")
     gcs = _gcs_client()
 
-    page        = 1
-    chunk_idx   = 0
-    total       = 0
-    buffer      = []
+    chunk_idx = 0
+    grand_total = 0
 
-    while True:
-        resp = requests.get(
-            USDA_LIST_URL,
-            params={
-                "api_key":    USDA_API_KEY,
-                "pageSize":   PAGE_SIZE,
-                "pageNumber": page,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        foods = resp.json()
+    for data_type in DATA_TYPES:
+        page   = 1
+        buffer = []
+        dt_total = 0
+        print(f"--- Fetching dataType={data_type} ---")
 
-        if not foods:
-            break
+        while page <= MAX_PAGE:
+            resp = requests.get(
+                USDA_LIST_URL,
+                params={
+                    "api_key":    USDA_API_KEY,
+                    "pageSize":   PAGE_SIZE,
+                    "pageNumber": page,
+                    "dataType":   data_type,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            foods = resp.json()
 
-        buffer.extend(foods)
-        total += len(foods)
+            if not foods:
+                break
 
-        if page % FLUSH_EVERY == 0:
+            # tag each record with its dataType for downstream use
+            for f in foods:
+                f["_dataType"] = data_type
+            buffer.extend(foods)
+            dt_total += len(foods)
+
+            if len(buffer) >= FLUSH_EVERY * PAGE_SIZE:
+                _flush(gcs, buffer, ds, chunk_idx)
+                chunk_idx += 1
+                buffer = []
+
+            if len(foods) < PAGE_SIZE:
+                break
+
+            page += 1
+
+        if buffer:
             _flush(gcs, buffer, ds, chunk_idx)
             chunk_idx += 1
-            buffer = []
 
-        if len(foods) < PAGE_SIZE:
-            break
+        print(f"  dataType={data_type}: {dt_total} records")
+        grand_total += dt_total
 
-        page += 1
-
-    # flush remainder
-    if buffer:
-        _flush(gcs, buffer, ds, chunk_idx)
-
-    print(f"USDA ingestion complete. Total records: {total}")
-    return total
+    print(f"USDA ingestion complete. Grand total: {grand_total}")
+    return grand_total
 
 
 with DAG(
