@@ -5,11 +5,13 @@ Usage:
     python -m src.pipeline.cli --source data/usda_fooddata_sample.csv --domain nutrition
     python -m src.pipeline.cli --source data/fda_recalls_sample.csv --resume
     python -m src.pipeline.cli --source data/usda_sample_raw.csv --force-fresh
+    python -m src.pipeline.cli --source gs://mip-bronze-2024/usda/2026/04/20/*.jsonl --domain nutrition
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import sys
 from pathlib import Path
@@ -25,6 +27,7 @@ load_dotenv()
 
 from src.agents.graph import build_graph
 from src.pipeline.checkpoint import CheckpointManager
+from src.pipeline.loaders.gcs_loader import is_gcs_uri
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +35,51 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _gcs_checkpoint_source_file(uri: str) -> Path:
+    """Return a synthetic Path for GCS URIs so CheckpointManager can store the source key.
+
+    We use the URI's SHA256 as a stable filename — the actual file doesn't exist
+    on disk, but CheckpointManager.create() needs a Path. We override the SHA256
+    logic below via _create_gcs_checkpoint().
+    """
+    digest = hashlib.sha256(uri.encode()).hexdigest()[:16]
+    return Path(f"gcs_{digest}.jsonl")
+
+
+def _create_gcs_checkpoint(checkpoint_mgr: CheckpointManager, uri: str) -> str:
+    """Create a checkpoint for a GCS source, using URI hash instead of file SHA256."""
+    import uuid
+    import sqlite3
+    from datetime import datetime, timezone
+    from src.pipeline.checkpoint.manager import _get_schema_version
+
+    run_id = str(uuid.uuid4())
+    schema_version = _get_schema_version()
+    uri_sha256 = hashlib.sha256(uri.encode()).hexdigest()
+
+    conn = checkpoint_mgr._get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO checkpoints
+               (run_id, source_file, source_sha256, schema_version, created_at, resume_state)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                run_id,
+                uri,
+                uri_sha256,
+                schema_version,
+                datetime.now(timezone.utc).isoformat(),
+                "none",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    logger.info(f"Created GCS checkpoint: run_id={run_id}, source={uri}")
+    return run_id
 
 
 def run_pipeline(
@@ -42,9 +90,12 @@ def run_pipeline(
     chunk_size: int = 10000,
 ) -> dict:
     """Execute the pipeline with checkpoint support."""
-    source_file = Path(source_path)
-    if not source_file.exists():
-        raise FileNotFoundError(f"Source file not found: {source_path}")
+    gcs_source = is_gcs_uri(source_path)
+
+    if not gcs_source:
+        source_file = Path(source_path)
+        if not source_file.exists():
+            raise FileNotFoundError(f"Source file not found: {source_path}")
 
     checkpoint_mgr = CheckpointManager()
 
@@ -57,23 +108,37 @@ def run_pipeline(
     if resume:
         checkpoint = checkpoint_mgr.get_resume_state()
         if checkpoint:
-            is_valid, msg = checkpoint_mgr.validate_checkpoint(source_file)
-            if is_valid:
-                run_id = checkpoint["run_id"]
-                logger.info(f"Resuming from checkpoint: run_id={run_id}")
-                logger.info(f"Completed chunks: {len([c for c in checkpoint.get('chunks', []) if c['status'] == 'completed'])}")
+            if gcs_source:
+                # For GCS: validate by matching URI (stored as source_file)
+                stored_uri = checkpoint.get("source_file", "")
+                if stored_uri == source_path:
+                    run_id = checkpoint["run_id"]
+                    logger.info(f"Resuming from checkpoint: run_id={run_id}")
+                else:
+                    logger.warning("Checkpoint source URI mismatch. Starting fresh.")
+                    checkpoint_mgr.force_fresh()
             else:
-                logger.warning(f"Checkpoint invalid: {msg}. Starting fresh.")
-                checkpoint_mgr.force_fresh()
+                source_file = Path(source_path)
+                is_valid, msg = checkpoint_mgr.validate_checkpoint(source_file)
+                if is_valid:
+                    run_id = checkpoint["run_id"]
+                    logger.info(f"Resuming from checkpoint: run_id={run_id}")
+                    logger.info(f"Completed chunks: {len([c for c in checkpoint.get('chunks', []) if c['status'] == 'completed'])}")
+                else:
+                    logger.warning(f"Checkpoint invalid: {msg}. Starting fresh.")
+                    checkpoint_mgr.force_fresh()
         else:
             logger.info("No checkpoint found, starting fresh")
 
     if not run_id:
-        run_id = checkpoint_mgr.create(
-            source_file=source_file,
-            block_sequence=[],
-            config={},
-        )
+        if gcs_source:
+            run_id = _create_gcs_checkpoint(checkpoint_mgr, source_path)
+        else:
+            run_id = checkpoint_mgr.create(
+                source_file=Path(source_path),
+                block_sequence=[],
+                config={},
+            )
         logger.info(f"Created new checkpoint: run_id={run_id}")
 
     graph = build_graph()
@@ -114,7 +179,7 @@ def main():
     parser.add_argument(
         "--source",
         required=True,
-        help="Path to source CSV file",
+        help="Path to source CSV file or GCS URI (gs://bucket/path/*.jsonl)",
     )
     parser.add_argument(
         "--domain",
