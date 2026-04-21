@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -138,6 +139,7 @@ def load_source_node(state: PipelineState) -> dict:
         "source_df": df,
         "source_sep": _sep,
         "source_schema": schema,
+        "_run_start_time": time.monotonic(),
     }
 
 

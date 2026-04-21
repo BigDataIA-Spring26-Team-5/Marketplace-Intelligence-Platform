@@ -1,0 +1,126 @@
+{
+  "uid": "etl-pipeline-observability",
+  "title": "Pipeline Observability",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "source_name",
+        "type": "query",
+        "label": "Source",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(etl_dq_score_pre, source_name)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "DQ Scores Over Time",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "etl_dq_score_pre{source_name=~\"$source_name\"}",
+          "legendFormat": "DQ Pre ({{run_id}})"
+        },
+        {
+          "expr": "etl_dq_score_post{source_name=~\"$source_name\"}",
+          "legendFormat": "DQ Post ({{run_id}})"
+        },
+        {
+          "expr": "etl_dq_delta{source_name=~\"$source_name\"}",
+          "legendFormat": "DQ Delta ({{run_id}})"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "barchart",
+      "title": "Enrichment Tier Breakdown",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "options": { "stacking": "normal" },
+      "targets": [
+        {
+          "expr": "etl_enrichment_s1_resolved{source_name=~\"$source_name\"}",
+          "legendFormat": "S1 Deterministic ({{run_id}})"
+        },
+        {
+          "expr": "etl_enrichment_s2_resolved{source_name=~\"$source_name\"}",
+          "legendFormat": "S2 KNN ({{run_id}})"
+        },
+        {
+          "expr": "etl_enrichment_s3_resolved{source_name=~\"$source_name\"}",
+          "legendFormat": "S3 LLM ({{run_id}})"
+        },
+        {
+          "expr": "etl_enrichment_unresolved{source_name=~\"$source_name\"}",
+          "legendFormat": "Unresolved ({{run_id}})"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Run Status",
+      "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
+      "options": {
+        "colorMode": "background",
+        "thresholds": {
+          "steps": [
+            { "value": 0, "color": "red" },
+            { "value": 0.5, "color": "yellow" },
+            { "value": 1, "color": "green" }
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "etl_run_status{source_name=~\"$source_name\"}",
+          "legendFormat": "{{run_id}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Row Counts",
+      "gridPos": { "x": 6, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "etl_rows_in{source_name=~\"$source_name\"}",
+          "legendFormat": "Rows In ({{run_id}})"
+        },
+        {
+          "expr": "etl_rows_out{source_name=~\"$source_name\"}",
+          "legendFormat": "Rows Out ({{run_id}})"
+        },
+        {
+          "expr": "etl_rows_quarantined{source_name=~\"$source_name\"}",
+          "legendFormat": "Quarantined ({{run_id}})"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Run Duration",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "targets": [
+        {
+          "expr": "etl_duration_seconds{source_name=~\"$source_name\"}",
+          "legendFormat": "Duration ({{run_id}})"
+        }
+      ]
+    }
+  ]
+}

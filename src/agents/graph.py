@@ -215,7 +215,7 @@ def run_pipeline_node(state: PipelineState) -> dict:
 
     # UC2: generate run_id, thread into config, reset LLM counter
     run_id = str(uuid4())
-    _run_start_time = time.perf_counter()
+    _block_start_time = time.monotonic()
     reset_llm_counter()
     config["run_id"] = run_id
     config["source_name"] = source_name
@@ -404,78 +404,100 @@ def run_pipeline_node(state: PipelineState) -> dict:
         "dq_score_pre": round(dq_pre, 2),
         "dq_score_post": round(dq_post, 2),
         "_run_id": run_id,
-        "_run_start_time": _run_start_time,
     }
 
 
 def save_output_node(state: PipelineState) -> dict:
     """Save the final DataFrame to output/."""
+    from src.uc2_observability.log_writer import RunLogWriter
+    from src.uc2_observability.metrics_exporter import MetricsExporter
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     source_path = state.get("source_path", "unknown")
     source_name = Path(source_path).stem
     output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
+    _run_start = state.get("_run_start_time")
 
-    df = state.get("working_df")
-    if df is None:
-        raise ValueError("Missing 'working_df' in state — run_pipeline_node did not complete successfully.")
-    df.to_csv(output_path, index=False)
-    logger.info(f"Output saved to {output_path} ({len(df)} rows)")
+    try:
+        df = state.get("working_df")
+        if df is None:
+            raise ValueError("Missing 'working_df' in state — run_pipeline_node did not complete successfully.")
+        df.to_csv(output_path, index=False)
+        logger.info(f"Output saved to {output_path} ({len(df)} rows)")
 
-    cache_client = state.get("cache_client")
-    if cache_client is not None:
-        cache_client.get_stats().log_all()
+        cache_client = state.get("cache_client")
+        if cache_client is not None:
+            cache_client.get_stats().log_all()
 
-    # UC2: push Prometheus metrics
-    if _UC2_AVAILABLE:
-        try:
-            source_df = state.get("source_df")
-            rows_in = len(source_df) if source_df is not None else 0
-            rows_out = len(df)
-
-            null_rate = float(
-                df[NULL_RATE_COLUMNS].isna().mean().mean()
-            ) if all(c in df.columns for c in NULL_RATE_COLUMNS) else 0.0
-
-            enrichment_stats = state.get("enrichment_stats") or {}
-            llm_calls = get_llm_call_count()
-
+        # UC2: push Prometheus metrics (legacy MetricsCollector)
+        if _UC2_AVAILABLE:
             try:
-                dedup_block = BlockRegistry.instance().get("fuzzy_deduplicate")
-                dedup_rate = getattr(dedup_block, "last_dedup_rate", 0.0)
-            except Exception:
-                dedup_rate = 0.0
+                source_df = state.get("source_df")
+                rows_in = len(source_df) if source_df is not None else 0
+                rows_out = len(df)
 
-            quarantined_df = state.get("quarantined_df")
-            quarantine_rows = len(quarantined_df) if quarantined_df is not None else 0
+                null_rate = float(
+                    df[NULL_RATE_COLUMNS].isna().mean().mean()
+                ) if all(c in df.columns for c in NULL_RATE_COLUMNS) else 0.0
 
-            dq_score_pre = float(state.get("dq_score_pre") or 0.0)
-            dq_score_post = float(state.get("dq_score_post") or 0.0)
+                enrichment_stats = state.get("enrichment_stats") or {}
+                llm_calls = get_llm_call_count()
 
-            run_start = state.get("_run_start_time") or 0.0
-            block_duration = time.perf_counter() - run_start if run_start else 0.0
+                try:
+                    dedup_block = BlockRegistry.instance().get("fuzzy_deduplicate")
+                    dedup_rate = getattr(dedup_block, "last_dedup_rate", 0.0)
+                except Exception:
+                    dedup_rate = 0.0
 
-            metrics = {
-                "rows_in": rows_in,
-                "rows_out": rows_out,
-                "dq_score_pre": dq_score_pre,
-                "dq_score_post": dq_score_post,
-                "dq_delta": round(dq_score_post - dq_score_pre, 4),
-                "null_rate": round(null_rate, 4),
-                "dedup_rate": round(float(dedup_rate), 4),
-                "s1_count": int(enrichment_stats.get("deterministic", 0)),
-                "s2_count": int(enrichment_stats.get("embedding", 0)),
-                "s3_count": 0,
-                "s4_count": int(enrichment_stats.get("llm", 0)),
-                "cost_usd": round(llm_calls * 0.002, 6),
-                "llm_calls": llm_calls,
-                "quarantine_rows": quarantine_rows,
-                "block_duration_seconds": round(block_duration, 3),
-            }
+                quarantined_df = state.get("quarantined_df")
+                quarantine_rows = len(quarantined_df) if quarantined_df is not None else 0
 
-            _MetricsCollector().push(metrics, source=source_name, run_id=state.get("_run_id", "unknown"))
-        except Exception as e:
-            logger.warning(f"UC2 MetricsCollector.push failed: {e}")
+                dq_score_pre = float(state.get("dq_score_pre") or 0.0)
+                dq_score_post = float(state.get("dq_score_post") or 0.0)
+
+                run_start_t = _run_start or 0.0
+                block_duration = time.monotonic() - run_start_t if run_start_t else 0.0
+
+                metrics = {
+                    "rows_in": rows_in,
+                    "rows_out": rows_out,
+                    "dq_score_pre": dq_score_pre,
+                    "dq_score_post": dq_score_post,
+                    "dq_delta": round(dq_score_post - dq_score_pre, 4),
+                    "null_rate": round(null_rate, 4),
+                    "dedup_rate": round(float(dedup_rate), 4),
+                    "s1_count": int(enrichment_stats.get("deterministic", 0)),
+                    "s2_count": int(enrichment_stats.get("embedding", 0)),
+                    "s3_count": 0,
+                    "s4_count": int(enrichment_stats.get("llm", 0)),
+                    "cost_usd": round(llm_calls * 0.002, 6),
+                    "llm_calls": llm_calls,
+                    "quarantine_rows": quarantine_rows,
+                    "block_duration_seconds": round(block_duration, 3),
+                }
+
+                _MetricsCollector().push(metrics, source=source_name, run_id=state.get("_run_id", "unknown"))
+            except Exception as e:
+                logger.warning(f"UC2 MetricsCollector.push failed: {e}")
+
+        # Write structured run log
+        log_path = RunLogWriter().save(state, status="success", start_time=_run_start)
+
+        # Push Prometheus metrics via Pushgateway
+        if log_path is not None:
+            try:
+                import json as _json
+                run_log_dict = _json.loads(log_path.read_text(encoding="utf-8"))
+                MetricsExporter().push(run_log_dict)
+            except Exception as e:
+                logger.warning(f"MetricsExporter.push failed: {e}")
+
+    except Exception as e:
+        try:
+            RunLogWriter().save(state, status="partial", error=str(e), start_time=_run_start)
+        except Exception as inner:
+            logger.warning(f"RunLogWriter.save (partial) failed: {inner}")
+        raise
 
     return {"output_path": str(output_path)}
 

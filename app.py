@@ -545,6 +545,60 @@ def _format_logs_as_text(
 # ── Main ──────────────────────────────────────────────────────────────────
 
 
+def _render_observability_page() -> None:
+    from src.uc2_observability.log_store import RunLogStore
+    from src.uc2_observability.rag_chatbot import ObservabilityChatbot
+
+    if "obs_chatbot" not in st.session_state:
+        store = RunLogStore()
+        bot = ObservabilityChatbot(store)
+        count = bot.ingest_audit_logs()
+        st.session_state.obs_chatbot = bot
+        st.session_state.obs_messages = []
+        st.session_state.obs_last_refresh = datetime.now()
+        st.session_state.obs_run_count = count
+
+    bot: ObservabilityChatbot = st.session_state.obs_chatbot
+
+    st.header("Pipeline Observability")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.caption(
+            f"Loaded **{st.session_state.obs_run_count}** run log(s). "
+            f"Last refresh: {st.session_state.obs_last_refresh.strftime('%H:%M:%S')}"
+        )
+    with col2:
+        if st.button("Refresh logs", key="obs_refresh"):
+            count = bot.ingest_audit_logs()
+            st.session_state.obs_run_count = count
+            st.session_state.obs_last_refresh = datetime.now()
+            st.rerun()
+
+    for msg in st.session_state.obs_messages:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+            if msg.get("cited_run_ids"):
+                with st.expander(f"Cited run IDs ({len(msg['cited_run_ids'])})"):
+                    for rid in msg["cited_run_ids"]:
+                        st.code(rid)
+
+    if question := st.chat_input("Ask about pipeline runs…", key="obs_input"):
+        st.session_state.obs_messages.append({"role": "user", "content": question})
+        with st.spinner("Thinking…"):
+            response = bot.query(question)
+        st.session_state.obs_messages.append({
+            "role": "assistant",
+            "content": response.answer,
+            "cited_run_ids": response.cited_run_ids,
+        })
+        st.rerun()
+
+    if st.session_state.obs_messages:
+        if st.button("Clear chat", key="obs_clear"):
+            st.session_state.obs_messages = []
+            st.rerun()
+
+
 def main() -> None:
     st.set_page_config(
         page_title="ETL Pipeline — HITL Wizard",
@@ -556,21 +610,10 @@ def main() -> None:
     _init_state()
     _setup_logging()
 
-    st.title("Schema-Driven ETL Pipeline")
-    st.caption(
-        "5-step HITL wizard — pick a CSV, review schema analysis, "
-        "approve transforms, run pipeline, inspect results."
-    )
-
-    st.markdown(
-        render_step_bar(
-            st.session_state.step, STEPS, st.session_state.max_completed
-        ),
-        unsafe_allow_html=True,
-    )
-
-    # Sidebar: cache controls + live log feed
+    # Sidebar: mode selector + cache controls + live log feed
     with st.sidebar:
+        mode = st.radio("Mode", ["Pipeline", "Observability"], key="app_mode")
+        st.markdown("---")
         st.markdown("### Cache Controls")
         no_cache = st.checkbox(
             "Bypass cache (--no-cache)",
@@ -607,21 +650,35 @@ def main() -> None:
         else:
             st.caption("Logs appear here as pipeline steps run.")
 
-    # Error banner
-    if st.session_state.get("error"):
-        st.error(f"**Last error:** {st.session_state.error}")
+    if mode == "Pipeline":
+        st.title("Schema-Driven ETL Pipeline")
+        st.caption(
+            "5-step HITL wizard — pick a CSV, review schema analysis, "
+            "approve transforms, run pipeline, inspect results."
+        )
+        st.markdown(
+            render_step_bar(
+                st.session_state.step, STEPS, st.session_state.max_completed
+            ),
+            unsafe_allow_html=True,
+        )
 
-    step = st.session_state.step
-    if step == 0:
-        _step_0_source_selection()
-    elif step == 1:
-        _step_1_schema_analysis()
-    elif step == 2:
-        _step_2_code_generation()
-    elif step == 3:
-        _step_3_pipeline_execution()
-    elif step == 4:
-        _step_4_results()
+        if st.session_state.get("error"):
+            st.error(f"**Last error:** {st.session_state.error}")
+
+        step = st.session_state.step
+        if step == 0:
+            _step_0_source_selection()
+        elif step == 1:
+            _step_1_schema_analysis()
+        elif step == 2:
+            _step_2_code_generation()
+        elif step == 3:
+            _step_3_pipeline_execution()
+        elif step == 4:
+            _step_4_results()
+    elif mode == "Observability":
+        _render_observability_page()
 
 
 if __name__ == "__main__":
