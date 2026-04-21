@@ -18,7 +18,9 @@ from typing import Optional
 
 import pandas as pd
 
-from src.models.llm import call_llm_json, get_enrichment_llm
+import asyncio
+
+from src.models.llm import async_call_llm_json, call_llm_json, get_enrichment_llm
 from src.enrichment.corpus import add_to_corpus, load_corpus, save_corpus
 
 logger = logging.getLogger(__name__)
@@ -46,7 +48,8 @@ BATCH_SYSTEM_PROMPT = (
     f"CATEGORIES: {CATEGORIES}"
 )
 
-_LLM_BATCH_SIZE = int(__import__("os").environ.get("LLM_ENRICH_BATCH_SIZE", "20"))
+_LLM_BATCH_SIZE   = int(__import__("os").environ.get("LLM_ENRICH_BATCH_SIZE",  "50"))
+_LLM_CONCURRENCY  = int(__import__("os").environ.get("LLM_ENRICH_CONCURRENCY", "5"))
 
 
 def _compute_content_hash(product_name: str, description: str, enrich_cols: list[str]) -> str:
@@ -109,6 +112,30 @@ def _build_batch_rag_prompt(rows: list[pd.Series], neighbors_list: list[list[dic
     return "\n".join(lines)
 
 
+async def _call_one_batch(
+    miss_rows: list,
+    batch_neighbors: list,
+    model: str,
+    semaphore: asyncio.Semaphore,
+    batch_label: str,
+) -> dict | Exception:
+    """Fire one LLM batch call, protected by semaphore. Returns raw result dict or Exception."""
+    prompt = _build_batch_rag_prompt(miss_rows, batch_neighbors)
+    try:
+        async with semaphore:
+            return await async_call_llm_json(
+                model=model,
+                messages=[
+                    {"role": "system", "content": BATCH_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+            )
+    except Exception as e:
+        logger.warning(f"S3 RAG-LLM: {batch_label} failed: {e}")
+        return e
+
+
 def llm_enrich(
     df: pd.DataFrame,
     enrich_cols: list[str],
@@ -121,6 +148,9 @@ def llm_enrich(
     Only operates on primary_category. allergens, is_organic, and dietary_tags
     are never sent to the LLM — they are extraction-only fields handled by S1.
 
+    Batches are fired concurrently (up to LLM_ENRICH_CONCURRENCY) via asyncio.
+    df mutations are applied sequentially after all batches complete.
+
     Returns (modified_df, updated_needs_enrichment_mask, stats).
     """
     if "primary_category" not in enrich_cols:
@@ -132,21 +162,25 @@ def llm_enrich(
 
     model = get_enrichment_llm()
     rows_to_enrich = df.index[mask].tolist()
-    logger.info(f"S3 RAG-LLM: {len(rows_to_enrich)} rows need primary_category (batch_size={_LLM_BATCH_SIZE})")
+    logger.info(
+        f"S3 RAG-LLM: {len(rows_to_enrich)} rows need primary_category "
+        f"(batch_size={_LLM_BATCH_SIZE}, concurrency={_LLM_CONCURRENCY})"
+    )
 
-    # Load corpus for feedback loop additions
     index, metadata = load_corpus()
-    corpus_updated = False
     resolved = 0
 
     from src.cache.client import CACHE_TTL_LLM
+
+    # ── Phase 1: Cache lookup (synchronous) ──────────────────────────
+    # Collect per-batch data: cache hits applied immediately, misses queued for LLM
+    pending_batches: list[tuple[list[int], list, list]] = []  # (miss_indices, miss_rows, neighbors)
 
     for batch_start in range(0, len(rows_to_enrich), _LLM_BATCH_SIZE):
         batch_indices = rows_to_enrich[batch_start:batch_start + _LLM_BATCH_SIZE]
         batch_rows = [df.loc[idx] for idx in batch_indices]
 
-        # Split batch into cache hits and misses
-        cache_hit_map: dict[int, dict] = {}  # real_idx → cached result dict
+        cache_hit_map: dict[int, dict] = {}
         miss_indices: list[int] = []
         miss_rows: list[pd.Series] = []
 
@@ -169,7 +203,6 @@ def llm_enrich(
             miss_indices = list(batch_indices)
             miss_rows = batch_rows
 
-        # Apply cache hits
         for real_idx, cached_result in cache_hit_map.items():
             for col, val in cached_result.items():
                 if col in df.columns and val is not None:
@@ -188,47 +221,71 @@ def llm_enrich(
                 neighbors = []
             batch_neighbors.append(neighbors)
 
-        prompt = _build_batch_rag_prompt(miss_rows, batch_neighbors)
+        pending_batches.append((miss_indices, miss_rows, batch_neighbors))
 
-        try:
-            result = call_llm_json(
+    if not pending_batches:
+        needs_enrichment = df[enrich_cols].isna().any(axis=1)
+        return df, needs_enrichment, {"resolved": resolved}
+
+    # ── Phase 2: Fire all LLM batches concurrently ───────────────────
+    # Always runs in a fresh thread+loop — safe in both CLI and Streamlit contexts.
+    async def _gather_all():
+        semaphore = asyncio.Semaphore(_LLM_CONCURRENCY)
+        tasks = [
+            _call_one_batch(
+                miss_rows=miss_rows,
+                batch_neighbors=neighbors,
                 model=model,
-                messages=[
-                    {"role": "system", "content": BATCH_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
+                semaphore=semaphore,
+                batch_label=f"batch[{i * _LLM_BATCH_SIZE}:{(i + 1) * _LLM_BATCH_SIZE}]",
             )
+            for i, (_, miss_rows, neighbors) in enumerate(pending_batches)
+        ]
+        return await asyncio.gather(*tasks)
 
-            items = result.get("results", []) if isinstance(result, dict) else []
-            for item in items:
-                local_idx = item.get("idx")
-                category = item.get("primary_category")
-                if local_idx is None or not isinstance(local_idx, int):
-                    continue
-                if local_idx < 0 or local_idx >= len(miss_indices):
-                    continue
-                real_idx = miss_indices[local_idx]
-                if category is not None:
-                    df.at[real_idx, "primary_category"] = category
-                    resolved += 1
-                    if index is not None:
-                        add_to_corpus(df.loc[real_idx], category, index, metadata)
-                        corpus_updated = True
-                    # Cache the result for future partitions
-                    if cache_client is not None:
-                        try:
-                            row = miss_rows[local_idx]
-                            product_name = str(row.get("product_name") or "")
-                            description = str(row.get("ingredients") or row.get("description") or "")
-                            content_hash = _compute_content_hash(product_name, description, enrich_cols)
-                            row_result = {col: df.at[real_idx, col] for col in enrich_cols if col in df.columns}
-                            cache_client.set("llm", content_hash, json.dumps(row_result).encode(), ttl=CACHE_TTL_LLM)
-                        except Exception as _ce:
-                            logger.debug(f"LLM cache write skipped: {_ce}")
+    import concurrent.futures
 
-        except Exception as e:
-            logger.warning(f"S3 RAG-LLM: batch [{batch_start}:{batch_start + _LLM_BATCH_SIZE}] failed: {e}")
+    def _run_in_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(_gather_all())
+        finally:
+            loop.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        llm_results = pool.submit(_run_in_thread).result()
+
+    # ── Phase 3: Apply results sequentially ──────────────────────────
+    corpus_updated = False
+    for (miss_indices, miss_rows, _), result in zip(pending_batches, llm_results):
+        if isinstance(result, Exception):
+            continue
+        items = result.get("results", []) if isinstance(result, dict) else []
+        for item in items:
+            local_idx = item.get("idx")
+            category = item.get("primary_category")
+            if local_idx is None or not isinstance(local_idx, int):
+                continue
+            if local_idx < 0 or local_idx >= len(miss_indices):
+                continue
+            real_idx = miss_indices[local_idx]
+            if category is not None:
+                df.at[real_idx, "primary_category"] = category
+                resolved += 1
+                if index is not None:
+                    add_to_corpus(df.loc[real_idx], category, index, metadata)
+                    corpus_updated = True
+                if cache_client is not None:
+                    try:
+                        row = miss_rows[local_idx]
+                        product_name = str(row.get("product_name") or "")
+                        description = str(row.get("ingredients") or row.get("description") or "")
+                        content_hash = _compute_content_hash(product_name, description, enrich_cols)
+                        row_result = {col: df.at[real_idx, col] for col in enrich_cols if col in df.columns}
+                        cache_client.set("llm", content_hash, json.dumps(row_result).encode(), ttl=CACHE_TTL_LLM)
+                    except Exception as _ce:
+                        logger.debug(f"LLM cache write skipped: {_ce}")
 
     if corpus_updated:
         try:
