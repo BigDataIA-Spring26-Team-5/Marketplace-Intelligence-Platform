@@ -61,7 +61,12 @@ class FuzzyDeduplicateBlock(Block):
     inputs = ["product_name", "brand_name"]
     outputs = ["duplicate_group_id", "canonical"]
 
+    last_clusters: list[dict] = []
+    last_dedup_rate: float = 0.0
+
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
+        self.last_clusters = []
+        self.last_dedup_rate = 0.0
         config = config or {}
         threshold = config.get("dedup_threshold", 85)
         name_weight = config.get("name_weight", 0.5)
@@ -183,12 +188,38 @@ class FuzzyDeduplicateBlock(Block):
         dedup_rate = (dup_rows / n * 100) if n > 0 else 0
         logger.info(f"Dedup: {n} rows → {unique_clusters} clusters ({dedup_rate:.1f}% duplicate rate)")
 
-        # Log largest clusters
+        # UC2: populate last_clusters and last_dedup_rate
+        self.last_dedup_rate = (n - unique_clusters) / n if n > 0 else 0.0
+
         from collections import Counter
         cluster_sizes = Counter(group_ids)
         largest = cluster_sizes.most_common(3)
         for cid, size in largest:
             if size > 1:
                 logger.info(f"  Largest cluster #{cid}: {size} rows")
+
+        # Build last_clusters — one dict per multi-member cluster
+        built_clusters: list[dict] = []
+        for cid, size in cluster_sizes.items():
+            if size <= 1:
+                continue
+            member_indices = [i for i, g in enumerate(group_ids) if g == cid]
+            member_names = [
+                str(df["product_name"].iloc[i]) if "product_name" in df.columns else ""
+                for i in member_indices
+            ]
+            canonical_idx = member_indices[0]
+            canonical_name = str(df["product_name"].iloc[canonical_idx]) if "product_name" in df.columns else ""
+            canonical_brand = str(df["brand_name"].iloc[canonical_idx]) if "brand_name" in df.columns else ""
+            norm_name = _normalize_name(canonical_name)
+            built_clusters.append({
+                "cluster_id": cid,
+                "member_product_names": member_names,
+                "canonical_product_name": canonical_name,
+                "canonical_brand_name": canonical_brand,
+                "size": size,
+                "dedup_key": norm_name[:3] if norm_name else "",
+            })
+        self.last_clusters = built_clusters
 
         return df

@@ -92,9 +92,22 @@ Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THR
 
 [src/models/llm.py](src/models/llm.py) wraps [LiteLLM](https://github.com/BerriAI/litellm) with three getters (`get_orchestrator_llm`, `get_codegen_llm`, `get_enrichment_llm`) — all currently point to `deepseek/deepseek-chat`. `call_llm_json()` parses responses and has a markdown-fence fallback (` ```json ... ``` `) for models that wrap JSON. Swap models here, not at call sites. [config/litellm_config.yaml](config/litellm_config.yaml) exists for provider routing configuration.
 
-### UC2/UC3/UC4 are scaffolding only
+### UC2 observability layer is implemented
 
-`src/uc2_observability/`, `src/uc3_search/`, `src/uc4_recommendations/` contain **placeholder classes that all raise `NotImplementedError`** with "planned for next sprint" comments (dashboard, RAG chatbot, anomaly detection, hybrid search, indexer, evaluator, recommender, association rules, graph store). They are not wired into `demo.py`, `app.py`, or the graph. Don't assume any of them work or pull them into the main pipeline without implementing them first.
+`src/uc2_observability/` now contains working implementations:
+- `log_writer.py` — `RunLogWriter`: writes atomic JSON run logs to `output/run_logs/` after every pipeline run (success or partial). Called from `save_output_node` in `src/agents/graph.py`.
+- `log_store.py` — `RunLogStore`: read-only query interface (`load_all`, `filter`, `get_by_run_id`, `summary_stats`) over the persisted JSON logs.
+- `rag_chatbot.py` — `ObservabilityChatbot`: structured retrieval + LLM synthesis (via `get_observability_llm()`) answering natural-language questions about run history. Returns `ChatResponse(answer, cited_run_ids, context_run_count)`.
+- `metrics_exporter.py` — `MetricsExporter`: pushes 12 labelled Prometheus gauges to Pushgateway after each run. Uses isolated `CollectorRegistry`; never raises on network failure.
+- `anomaly_detection.py`, `dashboard.py` — still placeholder (raise `NotImplementedError`).
+
+`app.py` now has a sidebar Mode radio ("Pipeline" / "Observability"). Observability mode renders `_render_observability_page()` with multi-turn chat UI, refresh button, and cited run ID expanders.
+
+`grafana/docker-compose.yml` starts a local Prometheus + Pushgateway + Grafana stack (`cd grafana && docker compose up -d`). Dashboard at `http://localhost:3000`.
+
+### UC3/UC4 are scaffolding only
+
+`src/uc3_search/`, `src/uc4_recommendations/` contain **placeholder classes that all raise `NotImplementedError`** (hybrid search, indexer, evaluator, recommender, association rules, graph store). They are not wired into `demo.py`, `app.py`, or the graph. Don't assume any of them work.
 
 ## Things to double-check before editing
 
@@ -108,7 +121,13 @@ Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THR
 - Redis at `localhost:6379` (new); FAISS index (existing, unaffected) (009-redis-cache-layer)
 - Python 3.11 + `redis-py` (existing cache), `litellm` (existing LLM routing), `pandas` (existing), `streamlit` (existing UI) (010-observability-rag-chatbot)
 - Local JSON files in `output/run_logs/` (gitignored) (010-observability-rag-chatbot)
-- Python 3.11 + `kafka-python`/`confluent-kafka` and `prometheus_client` imported indirectly via UC2 modules; `uuid`, `hashlib`, `time`, `datetime` (stdlib) added directly (010-observability-rag-chatbot)
+- Python 3.11 + `kafka-python`/`confluent-kafka` and `prometheus_client` imported indirectly via UC2 modules; `uuid`, `hashlib`, `time`, `datetime` (stdlib) added directly (010-uc1-uc2-integration)
+- `NULL_RATE_COLUMNS` constant in `src/pipeline/runner.py` controls null-rate columns in block_end Kafka events (010-uc1-uc2-integration)
+- UC2 import guard in `src/models/llm.py` — `_UC2_AVAILABLE`, `_emit_event`, `_MetricsCollector` exported from that module; all other files import UC2 symbols from there (010-uc1-uc2-integration)
+- `prometheus_client` (push mode via `push_to_gateway` to Pushgateway at `localhost:9091`); `grafana/docker-compose.yml` Docker stack for UC2 Grafana dashboard (011-observability-rag-chatbot)
+- `RunLogWriter`, `RunLogStore`, `ObservabilityChatbot`, `MetricsExporter` in `src/uc2_observability/` fully implemented (011-observability-rag-chatbot)
 
 ## Recent Changes
 - 009-redis-cache-layer: Added Python 3.11 + `redis-py` (new), `numpy` (existing, for embedding serialization), `hashlib` (stdlib), `argparse` (stdlib)
+- 010-uc1-uc2-integration: Wired UC1 pipeline to emit Kafka events (block_start/block_end, run_started/run_completed, quarantine, dedup_cluster) and push Prometheus metrics via UC2 modules; added `_llm_call_counter` to `src/models/llm.py`; added `_run_id`/`_run_start_time` to PipelineState; added `last_clusters`/`last_dedup_rate` to FuzzyDeduplicateBlock
+- 011-observability-rag-chatbot: Implemented UC2 log persistence (`RunLogWriter`), queryable log store (`RunLogStore`), RAG chatbot (`ObservabilityChatbot`), Prometheus Pushgateway exporter (`MetricsExporter`); added Observability mode to Streamlit wizard; added `grafana/` Docker Compose stack; `_run_start_time` now set in `load_source_node` via `time.monotonic()`

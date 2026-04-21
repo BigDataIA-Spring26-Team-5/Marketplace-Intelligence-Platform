@@ -40,11 +40,63 @@ A user can ask natural-language questions about past pipeline executions — "Wh
 
 ---
 
-### User Story 3 - Run Comparison & Trend Queries (Priority: P3)
+### User Story 3 - Grafana Dashboard for Pipeline Analytics (Priority: P3)
+
+A user opens the Grafana dashboard and sees visual panels for pipeline health over time — DQ score trends, enrichment tier distributions, node durations, and run success/failure rates — without writing any queries or parsing JSON files.
+
+**Why this priority**: The chatbot answers ad-hoc questions; Grafana gives a persistent at-a-glance view of pipeline health trends. Both are complementary observability surfaces. Grafana is P3 because it depends on P1 (logs) and builds on existing Prometheus metrics from the UC2 integration already in place.
+
+**Independent Test**: Given 5+ completed pipeline runs, a user opens the Grafana dashboard and sees a time-series panel for `dq_delta` showing correct values per run without any manual data entry.
+
+**Testing Approach**: Two-tier:
+1. **Unit** (automated): `MetricsExporter.push()` is covered by `tests/uc2_observability/test_metrics_exporter.py` — no Docker required. Run with `poetry run pytest tests/uc2_observability/test_metrics_exporter.py -v`.
+2. **Docker smoke test** (manual, E2E): Execute the following checklist end-to-end:
+
+```
+# 1. Start the observability stack
+cd grafana && docker compose up -d
+# Verify: http://localhost:9091 (Pushgateway), http://localhost:9090 (Prometheus), http://localhost:3000 (Grafana)
+
+# 2. Generate run data (from repo root)
+cd .. && poetry run python demo.py
+# Expected: 3 pipeline runs execute; output/run_logs/ contains 3 run_*.json files
+
+# 3. Verify metrics reached Pushgateway
+curl -s http://localhost:9091/metrics | grep etl_dq_score_post
+# Expected: gauge lines with source_name and run_id labels
+
+# 4. Verify Prometheus scraped from Pushgateway
+# Open http://localhost:9090/graph → query: etl_dq_score_post
+# Expected: data points visible for each run
+
+# 5. Open Grafana dashboard
+# http://localhost:3000 → Dashboards → "Pipeline Observability"
+# Check SC-008: all 3 runs appear in DQ Scores panel within 30s of demo.py completing
+
+# 6. Verify enrichment tier panel
+# Expected: S1/S2/S3/unresolved stacked bars per run with non-zero values
+
+# 7. Test source filter variable
+# Select source_name = "usda_fooddata_sample" → all panels filter to USDA runs only
+
+# 8. Tear down
+cd grafana && docker compose down
+```
+
+**Acceptance Scenarios**:
+
+1. **Given** pipeline runs have completed and metrics are published, **When** a user opens the Grafana dashboard, **Then** they see a time-series panel showing DQ score (pre/post/delta) per run ordered by timestamp.
+2. **Given** runs with varying enrichment outcomes, **When** a user views the enrichment panel, **Then** it shows S1/S2/S3 resolved counts and unresolved counts per run as a stacked or grouped visualization.
+3. **Given** a run that failed, **When** the user views the run status panel, **Then** the failed run appears distinctly (e.g., different color) with its error label visible.
+4. **Given** multiple source types (USDA, FDA), **When** a user filters the dashboard by source type, **Then** all panels update to show only runs for that source.
+
+---
+
+### User Story 4 - Run Comparison & Trend Queries via Chatbot (Priority: P4)
 
 A user can ask comparative questions across runs — "Is DQ score improving over time?", "Are enrichment hit rates declining?", "How long did Agent 2 code generation take on average?" — and receive answers with supporting data from multiple runs.
 
-**Why this priority**: Single-run insights are useful; cross-run trend analysis is what turns observability into actionable feedback for pipeline operators.
+**Why this priority**: Grafana (P3) covers visual trend analysis; the chatbot's trend queries are a complementary natural-language path to the same insights. Deferred to P4 as Grafana satisfies the core trend-visibility need visually.
 
 **Independent Test**: Given 5+ persisted run logs, a user asks "Show me the trend in dq_delta over the last 5 runs" and receives a ranked/ordered list with values from each run.
 
@@ -57,7 +109,7 @@ A user can ask comparative questions across runs — "Is DQ score improving over
 
 ### Edge Cases
 
-- What happens when a log record is malformed or partially written (e.g., crash during save)? — System must detect and skip corrupt records without crashing the chatbot.
+- What happens when a log record is malformed or partially written (e.g., crash during save)? — Log writes are atomic (temp-file + rename); a crash before rename leaves no partial file. Any pre-existing corrupt file is detected and skipped at read time without crashing the chatbot.
 - How does the chatbot handle very large log histories (100+ runs) where the full context exceeds retrieval capacity? — Retrieval must be top-K by relevance, not full history dump.
 - What happens when two pipeline runs execute concurrently and write logs simultaneously? — Each run must get a unique run ID; log writes must not interleave or corrupt each other.
 - How does the chatbot respond when asked about a specific run ID that does not exist? — It must report "run not found" rather than fabricating data.
@@ -66,15 +118,17 @@ A user can ask comparative questions across runs — "Is DQ score improving over
 
 ### Functional Requirements
 
-- **FR-001**: System MUST automatically save a structured log record at the end of every pipeline run (successful or failed), without requiring any user action.
+- **FR-001**: System MUST automatically save a structured log record as a JSON file in `output/run_logs/` at the end of every pipeline run (successful or failed), without requiring any user action.
 - **FR-002**: Each log record MUST contain: unique run ID, start timestamp, end timestamp, source file name, list of executed nodes with durations, per-block audit entries (rows_in, rows_out, block name), DQ scores (pre/post/delta), enrichment tier outcome counts (S1/S2/S3 resolved), and error information if applicable.
 - **FR-003**: System MUST preserve all historical run records; no run log may be overwritten or deleted by a subsequent run.
-- **FR-004**: Users MUST be able to ask natural-language questions about pipeline execution history through a conversational interface and receive accurate, grounded answers.
+- **FR-004**: Users MUST be able to ask natural-language questions about pipeline execution history through a multi-turn conversational interface; the chatbot retains conversation history within a session so follow-up questions can reference prior exchanges without restating context.
 - **FR-005**: Chatbot responses MUST cite the specific run ID(s) from which the answer was drawn, so users can verify provenance.
 - **FR-006**: Chatbot MUST refuse to answer questions outside the domain of pipeline execution observability, clearly stating its scope.
 - **FR-007**: System MUST handle the case where no run logs exist and communicate this clearly to the user rather than returning empty or confusing responses.
-- **FR-008**: Log retrieval for chatbot queries MUST use relevance-based selection (not full history scan) to remain responsive as log volume grows.
-- **FR-009**: System MUST integrate with the existing Streamlit wizard UI (`app.py`) so users can access the chatbot interface from the same tool they use to run pipelines.
+- **FR-008**: Log retrieval for chatbot queries MUST use relevance-based selection via per-run summary embeddings: each run's key metrics are flattened to a text summary, embedded, and searched by semantic similarity; the full JSON log is loaded only for matched runs. This avoids full history scans as log volume grows.
+- **FR-009**: System MUST integrate with the existing pipeline management interface so users can access the chatbot interface from the same tool they use to run pipelines.
+- **FR-010**: System MUST publish key pipeline run metrics (DQ scores pre/post/delta, enrichment tier counts, node durations, run status) to Prometheus after each run so they are available as a Grafana data source.
+- **FR-011**: A Grafana dashboard MUST provide at minimum: (a) time-series panel for DQ scores per run, (b) enrichment tier distribution panel (S1/S2/S3/unresolved counts), (c) run status panel (success/partial/failed), (d) source-type filter to scope all panels to a single data source.
 
 ### Pipeline Governance Constraints *(mandatory when applicable)*
 
@@ -84,6 +138,7 @@ A user can ask comparative questions across runs — "Is DQ score improving over
 - No enrichment changes involved; safety fields (`allergens`, `is_organic`, `dietary_tags`) are not part of observability logs.
 - The chatbot interface is a **new UC2 surface** that reads persisted logs; it does not re-run or modify any pipeline state.
 - If the Streamlit wizard exposes the chatbot, it must be added as a new tab/section without altering existing HITL approval gate behavior.
+- The Grafana dashboard is a **read-only observability surface**; it reads from Prometheus only and has no write path back to the pipeline, registry, or schema.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -91,7 +146,9 @@ A user can ask comparative questions across runs — "Is DQ score improving over
 - **NodeExecutionRecord**: Child of PipelineRunLog. Represents one node's execution within a run. Key attributes: node_name, start_time, duration_seconds, rows_in, rows_out.
 - **BlockAuditRecord**: Child of NodeExecutionRecord (for `run_pipeline` node). Represents one block's audit entry. Key attributes: block_name, rows_in, rows_out, additional block-specific fields from `audit_entry()`.
 - **EnrichmentSummary**: Child of PipelineRunLog. Aggregate counts of enrichment tier outcomes per run: s1_resolved, s2_resolved, s3_resolved, unresolved, dq_score_pre, dq_score_post, dq_delta.
-- **ChatMessage**: Represents one turn in the observability chatbot. Key attributes: query_text, response_text, cited_run_ids, timestamp.
+- **ChatSession**: Represents one multi-turn conversation in the observability chatbot. Key attributes: session_id, start_timestamp, message_history (ordered list of ChatMessages).
+- **ChatMessage**: Represents one turn within a ChatSession. Key attributes: role (user/assistant), content, cited_run_ids, timestamp.
+- **GrafanaDashboard**: A provisioned Grafana dashboard definition (JSON) exported from this feature. Contains panel definitions for DQ trends, enrichment distribution, run status, and source-type filter variable. Deployed by placing the JSON in Grafana's provisioning directory.
 
 ## Success Criteria *(mandatory)*
 
@@ -103,14 +160,33 @@ A user can ask comparative questions across runs — "Is DQ score improving over
 - **SC-004**: Chatbot responds to user queries in under 5 seconds for a log history of up to 50 runs.
 - **SC-005**: Chatbot cites at least one specific run ID in every answer that draws on run data; zero ungrounded answers when run data is available.
 - **SC-006**: Log history survives application restarts — records written in a prior session are accessible in a subsequent session.
-- **SC-007**: The chatbot interface is accessible from the existing Streamlit pipeline wizard without requiring a separate application or login.
+- **SC-007**: The chatbot interface is accessible from the existing pipeline management interface without requiring a separate application or additional login.
+- **SC-008**: The Grafana dashboard displays correct metric values for all completed runs within 10 seconds of a run finishing, with no manual refresh required.
 
 ## Assumptions
 
 - Pipeline run logs are written locally (same machine as the ETL pipeline); remote/cloud log storage is out of scope for v1.
-- Log volume will not exceed ~500 runs in a single deployment; scaling to thousands of runs is a future concern.
+- Each pipeline run produces one JSON file in `output/run_logs/`, named by run ID (e.g., `run_<id>.json`). The directory is gitignored.
+- Log volume will not exceed ~500 runs in a single deployment; scaling to thousands of runs is a future concern. No automatic deletion or rotation is performed; operators may manually prune `output/run_logs/` if needed.
 - The chatbot interface is embedded in the existing Streamlit wizard (`app.py`) as a new section, not as a standalone web service.
 - The existing `PipelineState` and block `audit_entry()` outputs are the authoritative source of truth for log content; the log persistence layer consumes them as-is without re-computing metrics.
 - Users accessing the chatbot are the same operators who run the pipeline (no separate authentication layer needed for chatbot access in v1).
 - The RAG retrieval layer uses the same LLM routing already in place (`src/models/llm.py`) rather than introducing a new LLM provider.
 - UC2 placeholder classes in `src/uc2_observability/` exist but raise `NotImplementedError`; this feature will implement or replace them.
+- Prometheus metrics are already being pushed by the UC2 integration (`010-uc1-uc2-integration`); this feature extends that existing metric push to include per-run log metrics. No new Prometheus instance is needed.
+- Grafana is assumed to be running locally (e.g., via Docker or local install) with a Prometheus data source configured. Dashboard provisioning (JSON export) is in scope; Grafana installation is out of scope.
+
+## Clarifications
+
+### Session 2026-04-21
+
+- Q: What is the storage format for persisted pipeline run logs? → A: JSON files, one file per run, stored in `output/run_logs/`.
+- Q: What is the retrieval unit for the RAG layer? → A: Per-run summary embedding (key metrics flattened to text; full JSON loaded on match).
+- Q: How should log writes behave on crash? → A: Atomic write — write to temp file, rename to final path on success; corrupt partial files never appear on disk.
+- Q: Is the chatbot stateless or multi-turn? → A: Multi-turn — retains conversation history within a session.
+- Q: What is the run log retention policy? → A: Keep all runs indefinitely; no automatic deletion in v1.
+- Scope addition (user-directed): Grafana dashboard added as User Story 3 (P3). Prometheus is the data source (already in use via UC2). Dashboard provisioned as JSON; Grafana install is out of scope. FR-010, FR-011, SC-008 added.
+
+### Session 2026-04-21 (follow-up)
+
+- Q: What level of Grafana testing should be documented in the spec? → A: Unit tests (MetricsExporter covered by pytest) + Docker smoke-test checklist for dashboard visual verification; no automated E2E UI test required.

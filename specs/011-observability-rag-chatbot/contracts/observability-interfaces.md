@@ -140,3 +140,32 @@ RunLogWriter().save(state, status="partial", error=str(e), start_time=_run_start
 - `RunLogWriter().save()` call is wrapped in its own try/except — if it raises, the exception is logged as a warning and not re-raised
 - Log write happens AFTER the output CSV is written — the CSV is the primary output
 - Log write does NOT gate the pipeline's return value — `save_output_node` returns normally regardless of log write outcome
+
+---
+
+## Contract 5: MetricsExporter.push()
+
+**Producer**: `src/agents/graph.py` (`save_output_node`, after log write)  
+**Consumer**: Prometheus Pushgateway → Prometheus → Grafana
+
+```python
+def push(
+    self,
+    run_log: dict,  # the same dict written to disk by RunLogWriter
+) -> bool:
+    ...
+```
+
+**Pre-conditions**:
+- `run_log` is a dict conforming to the Run Log Schema (data-model.md)
+- `run_log` contains at minimum `run_id`, `source_name`, `status`
+
+**Post-conditions**:
+- Returns `True` if Pushgateway acknowledged the push (HTTP 200/202)
+- Returns `False` if Pushgateway is unreachable or returns an error — **never raises**
+- Pushgateway stores labelled gauge metrics for all fields present in `run_log`; missing optional fields default to `0.0`
+
+**Invariants**:
+- `push()` does NOT modify `run_log`
+- `push()` failure does NOT affect pipeline output or log file on disk
+- Each call pushes to the `etl_pipeline` job group with `run_id` as the grouping key — old values for the same `run_id` are overwritten (idempotent)

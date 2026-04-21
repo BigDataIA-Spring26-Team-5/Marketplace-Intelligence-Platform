@@ -1,44 +1,52 @@
 """
 openFDA food enforcement (recall) producer.
-Polls https://api.fda.gov/food/enforcement.json and produces
-all records to Kafka topic source.openfda.recalls.
-Run once: python -m src.producers.openfda_producer
+Polls https://api.fda.gov/food/enforcement.json and writes
+all records directly to GCS bronze (gs://mip-bronze-2024/openfda/).
+Also produces to Kafka topic source.openfda.recalls for pipeline events.
+Run: python -m src.producers.openfda_producer
 """
 
 import json
 import os
 import time
+from datetime import datetime
+from io import BytesIO
+
+import boto3
 import requests
-from kafka import KafkaProducer
-from kafka.errors import KafkaError
+from botocore.config import Config
 
-KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "34.42.181.128:9092")
-TOPIC           = "source.openfda.recalls"
-FDA_URL         = "https://api.fda.gov/food/enforcement.json"
-PAGE_LIMIT      = 100   # openFDA max per request
-RETRY_WAIT      = 5     # seconds between retries on 429/503
+GCS_ACCESS_KEY = os.getenv("GCS_ACCESS_KEY", "GOOG1ECMI5556PKW4BG6QK3VL43KFGUZ2XZWA4ZGVF3IVDWK3Q2X6HYAWQ535")
+GCS_SECRET_KEY = os.getenv("GCS_SECRET_KEY", "/yluMFMGYXpgcDtKnzszQfRKKyfbFBGpxmcpSQYx")
+GCS_ENDPOINT   = os.getenv("GCS_ENDPOINT", "https://storage.googleapis.com")
+BRONZE_BUCKET  = os.getenv("BRONZE_BUCKET", "mip-bronze-2024")
+
+FDA_URL    = "https://api.fda.gov/food/enforcement.json"
+PAGE_LIMIT = 100
+RETRY_WAIT = 5
 
 
-def make_producer():
-    return KafkaProducer(
-        bootstrap_servers=KAFKA_BOOTSTRAP,
-        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        acks="all",
-        retries=5,
-        max_block_ms=30_000,
+def gcs_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=GCS_ENDPOINT,
+        aws_access_key_id=GCS_ACCESS_KEY,
+        aws_secret_access_key=GCS_SECRET_KEY,
+        config=Config(signature_version="s3v4"),
+        region_name="auto",
     )
 
 
-def fetch_page(skip: int, limit: int = PAGE_LIMIT) -> list:
+def fetch_page(skip: int) -> list:
     for attempt in range(3):
         try:
             resp = requests.get(
                 FDA_URL,
-                params={"limit": limit, "skip": skip},
+                params={"limit": PAGE_LIMIT, "skip": skip},
                 timeout=30,
             )
-            if resp.status_code == 404:
-                return []   # past end of results
+            if resp.status_code in (404, 400):
+                return []   # 400 = past API's max skip limit (25k)
             if resp.status_code in (429, 503):
                 time.sleep(RETRY_WAIT * (attempt + 1))
                 continue
@@ -50,32 +58,50 @@ def fetch_page(skip: int, limit: int = PAGE_LIMIT) -> list:
     return []
 
 
-def main():
-    producer = make_producer()
-    skip     = 0
-    total    = 0
+FLUSH_EVERY = 5_000
 
-    print(f"Producing openFDA recalls → {TOPIC}")
+
+def flush(client, buffer, ds, chunk_idx):
+    key = f"openfda/{ds}/part_{chunk_idx:04d}.jsonl"
+    body = "\n".join(json.dumps(r) for r in buffer).encode("utf-8")
+    client.put_object(
+        Bucket=BRONZE_BUCKET, Key=key,
+        Body=BytesIO(body), ContentType="application/x-ndjson",
+    )
+    print(f"  Uploaded {len(buffer)} records → gs://{BRONZE_BUCKET}/{key}", flush=True)
+
+
+def main():
+    gcs       = gcs_client()
+    ds        = datetime.utcnow().strftime("%Y/%m/%d")
+    skip      = 0
+    total     = 0
+    chunk_idx = 0
+    buffer    = []
+
+    print("Fetching openFDA food enforcement records...", flush=True)
 
     while True:
         records = fetch_page(skip)
         if not records:
             break
-
-        for rec in records:
-            producer.send(TOPIC, value=rec)
-
+        buffer.extend(records)
         total += len(records)
-        print(f"  skip={skip:>6}  fetched={len(records):>3}  total={total:>6}")
+        print(f"  skip={skip:>6}  fetched={len(records):>3}  total={total:>6}", flush=True)
+
+        if len(buffer) >= FLUSH_EVERY:
+            flush(gcs, buffer, ds, chunk_idx)
+            chunk_idx += 1
+            buffer = []
 
         if len(records) < PAGE_LIMIT:
             break
-
         skip += PAGE_LIMIT
 
-    producer.flush()
-    producer.close()
-    print(f"Done. Total records produced: {total}")
+    if buffer:
+        flush(gcs, buffer, ds, chunk_idx)
+
+    print(f"Done. Total openFDA records: {total}", flush=True)
 
 
 if __name__ == "__main__":

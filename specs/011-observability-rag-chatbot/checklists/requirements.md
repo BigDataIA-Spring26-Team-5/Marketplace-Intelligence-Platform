@@ -34,3 +34,4 @@
 - All items pass. Spec is ready for `/speckit.plan`.
 - UC2 placeholder classes exist in `src/uc2_observability/` — implementation will address them.
 - Log storage mechanism (file vs. DB) is intentionally left to planning phase per spec scope.
+- 2026-04-21: FR-009 and SC-007 updated to remove Streamlit/`app.py` references; now tech-agnostic. Pipeline Governance Constraints section exempted — documents project-specific invariants by design.
