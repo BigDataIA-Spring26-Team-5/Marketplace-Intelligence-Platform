@@ -456,13 +456,16 @@ def save_output_node(state: PipelineState) -> dict:
     pipeline_mode = state.get("pipeline_mode") or "full"
     _run_start = state.get("_run_start_time")
 
-    # Derive date partition from source URI if possible (Bronze path: .../YYYY/MM/DD/...)
+    # Derive date partition and logical source name from GCS URI
+    # Bronze URI pattern: gs://bucket/{source}/{YYYY}/{MM}/{DD}/part_NNNN.jsonl
     _silver_date: str | None = None
+    _silver_source: str = source_name  # fallback
     if pipeline_mode == "silver":
         import re as _re
-        _m = _re.search(r"(\d{4}/\d{2}/\d{2})", source_path)
+        _m = _re.search(r"gs://[^/]+/([^/]+)/(\d{4}/\d{2}/\d{2})", source_path)
         if _m:
-            _silver_date = _m.group(1)
+            _silver_source = _m.group(1)   # e.g. "off"
+            _silver_date   = _m.group(2)   # e.g. "2026/04/21"
 
     output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
     silver_uri: str | None = None
@@ -475,9 +478,9 @@ def save_output_node(state: PipelineState) -> dict:
         if pipeline_mode == "silver":
             from src.pipeline.writers.gcs_silver_writer import GCSSilverWriter
             writer = GCSSilverWriter()
-            silver_uri = writer.write(df, source_name=source_name, date=_silver_date, chunk_idx=0)
+            silver_uri = writer.write(df, source_name=_silver_source, date=_silver_date, chunk_idx=0)
             if _silver_date:
-                writer.update_watermark(source_name, _silver_date)
+                writer.update_watermark(_silver_source, _silver_date)
         else:
             df.to_csv(output_path, index=False)
             logger.info(f"Output saved to {output_path} ({len(df)} rows)")
