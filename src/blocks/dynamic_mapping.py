@@ -236,7 +236,12 @@ def _fmt_parse_date(df: pd.DataFrame, op: dict) -> pd.DataFrame:
     fmt = op.get("format")  # optional strptime format
     if source not in df.columns:
         return _handle_set_null(df, op)
-    df[target] = pd.to_datetime(df[source], format=fmt, errors="coerce")
+    if fmt == "unix_timestamp":
+        df[target] = pd.to_datetime(
+            pd.to_numeric(df[source], errors="coerce"), unit="s", errors="coerce"
+        )
+    else:
+        df[target] = pd.to_datetime(df[source], format=fmt, errors="coerce")
     if source != target and source in df.columns:
         df = df.drop(columns=[source])
     return df
