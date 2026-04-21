@@ -7,7 +7,7 @@
 **pycache**/
 *.py[cod]
 *$py.class
-
+.claude/
 # =========================
 
 # Environment / secrets
