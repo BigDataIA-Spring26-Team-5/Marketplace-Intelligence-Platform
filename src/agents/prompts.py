@@ -26,6 +26,13 @@ Map source columns to unified columns based on SEMANTIC meaning, not just name:
 - "product_type" → "category"
 - "recall_initiation_date" / "report_date" → "published_date"
 - "event_id" / "code_info" → "data_source"
+- "brand_owner" / "brandOwner" / "manufacturer" → "brand_owner"
+- "brand_name" / "brandName" / "brand" → "brand_name"
+- "serving_size" / "servingSize" → "serving_size"
+- "serving_size_unit" / "servingSizeUnit" → "serving_size_unit"
+- "ingredient_statement" / "ingredientStatement" / "ingredients" → "ingredients"
+
+Note: Source columns may use camelCase (brandOwner), snake_case (brand_owner), or PascalCase — treat these as semantically equivalent and map to the corresponding snake_case unified column.
 
 ## Special Cases
 
