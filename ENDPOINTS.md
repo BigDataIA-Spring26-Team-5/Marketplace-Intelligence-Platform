@@ -8,7 +8,7 @@
 |---------|-----|-------------|
 | UC2 Observability (Streamlit) | http://35.239.47.242:8502 | — |
 | Grafana | http://35.239.47.242:3000 | admin / mip_admin |
-| MCP Server (FastAPI, 7 tools) | http://35.239.47.242:8001/tools | — |
+| MCP Server (FastAPI, 8 tools) | http://35.239.47.242:8001/tools | — |
 | MCP Server — Swagger Docs | http://35.239.47.242:8001/docs | — |
 | Prometheus | http://35.239.47.242:9090 | — |
 | Pushgateway | http://35.239.47.242:9091 | — |
@@ -51,7 +51,7 @@
 | OFF producer (→ GCS) | DONE — `docker exec mip_airflow_1 cat /tmp/off_out.txt \| tail -5` |
 | kafka_to_pg consumer | `tail -f /tmp/kafka_to_pg.log` |
 | MCP Server | `tail -f /tmp/mcp_server.log` |
-| UC2 Streamlit | `tail -f /tmp/uc2_streamlit.log` |
+| UC2 Streamlit | `tail -f /tmp/streamlit.log` |
 | Chunker (audit → ChromaDB) | `tail -f /tmp/chunker.log` |
 | Anomaly Detector | `tail -f /tmp/anomaly_detector.log` |
 | USDA Airflow DAG | http://35.239.47.242:8080 |
