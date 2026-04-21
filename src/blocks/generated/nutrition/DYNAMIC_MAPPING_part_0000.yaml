@@ -1,4 +1,17 @@
 column_operations:
+<<<<<<< HEAD
+=======
+- source: fdcId
+  action: drop_column
+- source: dataType
+  action: drop_column
+- source: gtinUpc
+  action: drop_column
+- source: _dataType
+  action: drop_column
+- source: foodNutrients
+  action: drop_column
+>>>>>>> origin/aqeel
 - target: brand_name
   type: string
   action: set_null
@@ -23,6 +36,7 @@ column_operations:
   type: string
   action: set_default
   default_value: USDA
+<<<<<<< HEAD
 - source: fdcId
   action: drop_column
 - source: dataType
@@ -31,3 +45,5 @@ column_operations:
   action: drop_column
 - source: _dataType
   action: drop_column
+=======
+>>>>>>> origin/aqeel
