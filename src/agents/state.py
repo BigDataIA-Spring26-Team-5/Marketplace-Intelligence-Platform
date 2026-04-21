@@ -103,6 +103,9 @@ class PipelineState(TypedDict, total=False):
     audit_log: list[dict]
     errors: list[str]
 
+    # Agent flags
+    with_critic: bool  # When False (default), skip Agent 2 (Critic) entirely
+
     # Cache layer
     cache_client: Optional[Any]  # CacheClient instance; None = no-cache mode
     cache_yaml_hit: bool  # True when analyze_schema loaded from Redis (skips critique_schema)

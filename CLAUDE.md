@@ -106,6 +106,9 @@ Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THR
 ## Active Technologies
 - Python 3.11 + `redis-py` (new), `numpy` (existing, for embedding serialization), `hashlib` (stdlib), `argparse` (stdlib) (009-redis-cache-layer)
 - Redis at `localhost:6379` (new); FAISS index (existing, unaffected) (009-redis-cache-layer)
+- Python 3.11 + `redis-py` (existing cache), `litellm` (existing LLM routing), `pandas` (existing), `streamlit` (existing UI) (010-observability-rag-chatbot)
+- Local JSON files in `output/run_logs/` (gitignored) (010-observability-rag-chatbot)
+- Python 3.11 + `kafka-python`/`confluent-kafka` and `prometheus_client` imported indirectly via UC2 modules; `uuid`, `hashlib`, `time`, `datetime` (stdlib) added directly (010-observability-rag-chatbot)
 
 ## Recent Changes
 - 009-redis-cache-layer: Added Python 3.11 + `redis-py` (new), `numpy` (existing, for embedding serialization), `hashlib` (stdlib), `argparse` (stdlib)

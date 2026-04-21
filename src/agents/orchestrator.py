@@ -363,8 +363,9 @@ def analyze_schema_node(state: PipelineState) -> dict:
             and u["target_column"] not in alias_targets
         ]
         if truly_unresolvable:
+            _critic_label = "preliminary — Agent 2 may correct" if state.get("with_critic", False) else "final — Critic disabled"
             logger.info(
-                f"Agent 1 unresolved columns (preliminary — Agent 2 may correct): "
+                f"Agent 1 unresolved columns ({_critic_label}): "
                 f"{[u['target_column'] for u in truly_unresolvable]}"
             )
         intercepted = [
@@ -447,8 +448,9 @@ def analyze_schema_node(state: PipelineState) -> dict:
             and mc["target_column"] not in alias_targets
         ]
         if truly_missing:
+            _critic_label = "preliminary — Agent 2 may correct" if state.get("with_critic", False) else "final — Critic disabled"
             logger.info(
-                f"Agent 1 unresolved columns (preliminary — Agent 2 may correct): "
+                f"Agent 1 unresolved columns ({_critic_label}): "
                 f"{[mc['target_column'] for mc in truly_missing]}"
             )
 
