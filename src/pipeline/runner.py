@@ -180,9 +180,13 @@ class PipelineRunner:
         chunk_dir = output_dir / ".chunks"
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
-        reader = CsvStreamReader(source_path, chunk_size=chunk_size, delimiter=sep)
+        from src.pipeline.loaders.gcs_loader import is_gcs_uri, GCSSourceLoader
+        if is_gcs_uri(str(source_path)):
+            chunk_iter = GCSSourceLoader(str(source_path)).iter_chunks(chunk_size=chunk_size)
+        else:
+            chunk_iter = CsvStreamReader(source_path, chunk_size=chunk_size, delimiter=sep)
 
-        for i, chunk_df in enumerate(reader):
+        for i, chunk_df in enumerate(chunk_iter):
             logger.info(f"Processing chunk {i + 1} ({len(chunk_df)} rows)")
             chunk_result, chunk_log = self.run(
                 chunk_df,

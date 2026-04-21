@@ -51,54 +51,68 @@ def _detect_enrichment_columns(unified_schema: UnifiedSchema, source_schema: dic
 
 
 def load_source_node(state: PipelineState) -> dict:
-    """Load CSV and compute schema profile with representative sampling."""
+    """Load source data and compute schema profile with representative sampling.
+
+    Supports local CSV files and GCS JSONL partitions (gs:// URIs).
+    For GCS: downloads first partition only for schema analysis.
+    """
     if state.get("source_df") is not None:
         return {}
     source_path = state["source_path"]
     logger.info(f"Loading source: {source_path}")
 
-    _NULL_SENTINELS = [
-        "na",
-        "Na",
-        "NA",
-        "n/a",
-        "N/A",
-        "n.a.",
-        "N.A.",
-        "none",
-        "None",
-        "NONE",
-        "null",
-        "Null",
-        "NULL",
-        "nan",
-        "NaN",
-        "NAN",
-        "-",
-        "--",
-        "not available",
-        "not applicable",
-        "unknown",
-        "Unknown",
-        "UNKNOWN",
-    ]
-    import csv as _csv
-    with open(source_path, newline="", encoding="utf-8", errors="replace") as _f:
-        _sample = _f.read(8192)
-    try:
-        _sep = _csv.Sniffer().sniff(_sample, delimiters=",\t|").delimiter
-    except _csv.Error:
-        _sep = "\t" if _sample.count("\t") > _sample.count(",") else ","
-    df = pd.read_csv(
-        source_path,
-        sep=_sep,
-        na_values=_NULL_SENTINELS,
-        keep_default_na=True,
-        nrows=_SCHEMA_SAMPLE_ROWS,
-        low_memory=False,
-        on_bad_lines="skip",
-    )
-    logger.info(f"Schema sample: {len(df)} rows loaded for schema analysis (full data streamed during pipeline)")
+    from src.pipeline.loaders.gcs_loader import is_gcs_uri, GCSSourceLoader
+
+    if is_gcs_uri(source_path):
+        loader = GCSSourceLoader(source_path)
+        df = loader.load_sample(n_rows=_SCHEMA_SAMPLE_ROWS)
+        if df.empty:
+            raise ValueError(f"No data loaded from GCS URI: {source_path}")
+        _sep = ","  # JSONL has no separator concept; set sentinel for downstream
+        logger.info(f"GCS schema sample: {len(df)} rows loaded for schema analysis")
+    else:
+        _NULL_SENTINELS = [
+            "na",
+            "Na",
+            "NA",
+            "n/a",
+            "N/A",
+            "n.a.",
+            "N.A.",
+            "none",
+            "None",
+            "NONE",
+            "null",
+            "Null",
+            "NULL",
+            "nan",
+            "NaN",
+            "NAN",
+            "-",
+            "--",
+            "not available",
+            "not applicable",
+            "unknown",
+            "Unknown",
+            "UNKNOWN",
+        ]
+        import csv as _csv
+        with open(source_path, newline="", encoding="utf-8", errors="replace") as _f:
+            _sample = _f.read(8192)
+        try:
+            _sep = _csv.Sniffer().sniff(_sample, delimiters=",\t|").delimiter
+        except _csv.Error:
+            _sep = "\t" if _sample.count("\t") > _sample.count(",") else ","
+        df = pd.read_csv(
+            source_path,
+            sep=_sep,
+            na_values=_NULL_SENTINELS,
+            keep_default_na=True,
+            nrows=_SCHEMA_SAMPLE_ROWS,
+            low_memory=False,
+            on_bad_lines="skip",
+        )
+        logger.info(f"Schema sample: {len(df)} rows loaded for schema analysis (full data streamed during pipeline)")
 
     # Use adaptive sampling for representative row selection
     sampled_df, sampling_strategy = adaptive_sample(df, seed=42)
