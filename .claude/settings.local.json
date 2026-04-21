@@ -59,7 +59,22 @@
       "Bash(curl -s --max-time 5 https://huggingface.co)",
       "Bash(gcloud projects *)",
       "Bash(bq show *)",
-      "Bash(bq query *)"
+      "Bash(bq query *)",
+      "Bash(awk '{print $2}')",
+      "Bash(xargs -r sudo kill -9)",
+      "Bash(docker stats *)",
+      "Bash(rmdir /home/bhavyalikhitha_bbl/bhavya-workspace/config/prometheus.yml)",
+      "Bash(cat)",
+      "Bash(gcloud compute *)",
+      "Bash(echo \"exit_code=$?\")",
+      "Bash(pip3 install *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(curl -s -X POST http://admin:mip_admin@localhost:3000/api/datasources -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s -X POST http://admin:mip_admin@localhost:3000/api/dashboards/db -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(echo \"MCP PID: $!\")",
+      "Bash(curl -s http://localhost:8001/tools)",
+      "Bash(echo \"Streamlit PID: $!\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8502)"
     ]
   }
 }
