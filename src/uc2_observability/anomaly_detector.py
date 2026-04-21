@@ -48,10 +48,9 @@ _FEATURE_QUERIES: list[tuple[str, str]] = [
 
 _INSERT_ANOMALY = """
 INSERT INTO anomaly_reports
-    (run_id, source, anomaly_score, features, flagged_signals, detected_at)
+    (run_id, source, signal, score, details, ts)
 VALUES
-    (%(run_id)s, %(source)s, %(anomaly_score)s, %(features)s,
-     %(flagged_signals)s, %(detected_at)s)
+    (%(run_id)s, %(source)s, %(signal)s, %(score)s, %(details)s, %(ts)s)
 ON CONFLICT DO NOTHING;
 """
 
@@ -61,40 +60,33 @@ RANDOM_STATE = 42
 
 # ── Prometheus helpers ─────────────────────────────────────────────────────────
 
-def _prom_query_range(query: str, n_runs: int) -> list[tuple[float, float]]:
+def _prom_query_all_runs(query: str) -> dict[str, float]:
     """
-    Execute a Prometheus instant-range query and return up to n_runs
-    (timestamp, value) pairs from the result vector.
+    Instant query returning {run_id: value} for every run_id label found.
+    Each push to Pushgateway with a distinct run_id creates a separate
+    time-series — this collects the latest value per run_id.
     """
-    end = time.time()
-    start = end - n_runs * 3600  # look back n_runs hours as a proxy
-    step = max((end - start) / n_runs, 15)
-
-    params = {
-        "query": query,
-        "start": start,
-        "end":   end,
-        "step":  step,
-    }
     try:
         resp = requests.get(
-            f"{PROMETHEUS_URL}/api/v1/query_range",
-            params=params,
+            f"{PROMETHEUS_URL}/api/v1/query",
+            params={"query": query},
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
         if data.get("status") != "success":
-            return []
+            return {}
         results = data.get("data", {}).get("result", [])
-        if not results:
-            return []
-        # Take the first matching time-series
-        values = results[0].get("values", [])
-        return [(float(ts), float(v)) for ts, v in values if v != "NaN"]
+        out = {}
+        for series in results:
+            run_id = series.get("metric", {}).get("run_id", series.get("metric", {}).get("instance", str(len(out))))
+            val = series.get("value", [None, "NaN"])[1]
+            if val != "NaN":
+                out[run_id] = float(val)
+        return out
     except Exception as exc:
         logger.warning("Prometheus query failed (%r): %s", query, exc)
-        return []
+        return {}
 
 
 def _prom_instant(query: str) -> float | None:
@@ -120,48 +112,45 @@ def _prom_instant(query: str) -> float | None:
 
 # ── feature matrix builder ─────────────────────────────────────────────────────
 
-def _build_feature_matrix(source: str, n_runs: int) -> tuple[np.ndarray, list[str], list[float]]:
+def _build_feature_matrix(source: str, n_runs: int) -> tuple[np.ndarray, list[str], list[str]]:
     """
-    Query Prometheus for each feature over the last n_runs time windows.
+    Query Prometheus for each feature across all run_ids for this source.
+    Each distinct run_id pushed to Pushgateway becomes one row in the matrix.
+
     Returns:
-        matrix  — shape (n_samples, n_features), aligned by time-bucket
+        matrix       — shape (n_samples, n_features)
         feature_names
-        timestamps  — approximate Unix timestamp per sample
+        run_ids      — run_id label per row
     """
-    series: dict[str, list[tuple[float, float]]] = {}
+    feature_names = [f for f, _ in _FEATURE_QUERIES]
+
+    # For each feature, get {run_id: value} from Prometheus instant query
+    per_feature: dict[str, dict[str, float]] = {}
     for feat_name, query_template in _FEATURE_QUERIES:
         query = query_template.format(source=source)
-        pairs = _prom_query_range(query, n_runs)
-        series[feat_name] = pairs
+        per_feature[feat_name] = _prom_query_all_runs(query)
 
-    if not any(series.values()):
-        return np.empty((0, len(_FEATURE_QUERIES))), [f for f, _ in _FEATURE_QUERIES], []
+    # Union of all run_ids seen across any feature
+    all_run_ids: list[str] = sorted(
+        {rid for vals in per_feature.values() for rid in vals}
+    )[-n_runs:]
 
-    # Align all series by round-bucketing timestamps to the nearest 300s
-    bucket_size = 300
-    buckets: dict[int, dict[str, float]] = {}
-    for feat_name, pairs in series.items():
-        for ts, val in pairs:
-            bucket = int(ts // bucket_size) * bucket_size
-            buckets.setdefault(bucket, {})[feat_name] = val
+    if not all_run_ids:
+        return np.empty((0, len(feature_names))), feature_names, []
 
-    feature_names = [f for f, _ in _FEATURE_QUERIES]
-    sorted_buckets = sorted(buckets.keys())[-n_runs:]
     rows = []
-    timestamps = []
-    for bucket in sorted_buckets:
-        row_vals = buckets[bucket]
-        row = [row_vals.get(f, np.nan) for f in feature_names]
+    for run_id in all_run_ids:
+        row = [per_feature[f].get(run_id, np.nan) for f in feature_names]
         rows.append(row)
-        timestamps.append(float(bucket))
 
     matrix = np.array(rows, dtype=float)
-    # Impute NaN with column means
-    col_means = np.nanmean(matrix, axis=0)
-    inds = np.where(np.isnan(matrix))
-    matrix[inds] = np.take(col_means, inds[1])
+    # Impute NaN with column means so IsolationForest doesn't fail
+    if matrix.shape[0] > 1:
+        col_means = np.nanmean(matrix, axis=0)
+        inds = np.where(np.isnan(matrix))
+        matrix[inds] = np.take(col_means, inds[1])
 
-    return matrix, feature_names, timestamps
+    return matrix, feature_names, all_run_ids
 
 
 # ── main detector class ────────────────────────────────────────────────────────
@@ -189,18 +178,23 @@ class AnomalyDetector:
         feature_values: list[float],
         flagged_signals: list[str],
     ) -> None:
-        features_json = json.dumps(dict(zip(feature_names, feature_values)))
-        signals_json = json.dumps(flagged_signals)
+        details_json = json.dumps({
+            "features":        dict(zip(feature_names, feature_values)),
+            "flagged_signals": flagged_signals,
+            "anomaly_score":   anomaly_score,
+        })
+        # One row per flagged signal (matches table schema: one signal per row)
+        signal_str = ", ".join(flagged_signals) if flagged_signals else "general_outlier"
         pg_conn = psycopg2.connect(PG_DSN)
         try:
             with pg_conn.cursor() as cur:
                 cur.execute(_INSERT_ANOMALY, {
-                    "run_id":          run_id,
-                    "source":          source,
-                    "anomaly_score":   anomaly_score,
-                    "features":        features_json,
-                    "flagged_signals": signals_json,
-                    "detected_at":     datetime.now(timezone.utc),
+                    "run_id":  run_id,
+                    "source":  source,
+                    "signal":  signal_str[:500],
+                    "score":   anomaly_score,
+                    "details": details_json,
+                    "ts":      datetime.now(timezone.utc),
                 })
             pg_conn.commit()
             logger.info("Inserted anomaly_report for run_id=%s source=%s", run_id, source)
@@ -238,7 +232,7 @@ class AnomalyDetector:
 
         Returns a list of anomaly report dicts (may be empty if no outliers).
         """
-        matrix, feature_names, timestamps = _build_feature_matrix(source, n_runs)
+        matrix, feature_names, run_ids = _build_feature_matrix(source, n_runs)
 
         if matrix.shape[0] < 5:
             logger.warning(
@@ -267,9 +261,7 @@ class AnomalyDetector:
             if pred != -1:
                 continue
 
-            # Use timestamp as a synthetic run_id if we don't have a real one
-            ts = timestamps[i] if i < len(timestamps) else time.time()
-            run_id = f"{source}_ts{int(ts)}"
+            run_id = run_ids[i] if i < len(run_ids) else f"{source}_ts{int(time.time())}"
             feature_values = matrix[i]
             signals = self._identify_signals(feature_names, feature_values, matrix)
 
