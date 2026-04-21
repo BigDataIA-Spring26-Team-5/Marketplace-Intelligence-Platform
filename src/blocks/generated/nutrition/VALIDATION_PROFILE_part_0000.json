@@ -1,0 +1,54 @@
+{
+  "product_name": {
+    "status": "derived",
+    "required": false
+  },
+  "brand_owner": {
+    "status": "absent",
+    "required": false
+  },
+  "brand_name": {
+    "status": "mapped",
+    "required": true
+  },
+  "ingredients": {
+    "status": "derived",
+    "required": false
+  },
+  "category": {
+    "status": "enriched",
+    "required": false
+  },
+  "serving_size": {
+    "status": "mapped",
+    "required": false
+  },
+  "serving_size_unit": {
+    "status": "derived",
+    "required": false
+  },
+  "published_date": {
+    "status": "derived",
+    "required": false
+  },
+  "data_source": {
+    "status": "mapped",
+    "required": true
+  },
+  "allergens": {
+    "status": "absent",
+    "required": false
+  },
+  "primary_category": {
+    "status": "enriched",
+    "required": false
+  },
+  "dietary_tags": {
+    "status": "enriched",
+    "required": false
+  },
+  "is_organic": {
+    "status": "enriched",
+    "required": false
+  }
+}

@@ -207,7 +207,7 @@ _YAML_CACHE_FIELDS = (
     "column_mapping", "operations", "revised_operations", "mapping_yaml_path",
     "block_sequence", "enrichment_columns_to_generate", "enrich_alias_ops",
     "derivable_gaps", "missing_columns", "gaps", "unresolvable_gaps",
-    "mapping_warnings", "enrich_alias_ops",
+    "mapping_warnings", "enrich_alias_ops", "validation_profile",
 )
 
 
@@ -584,8 +584,15 @@ def _deterministic_corrections(
         corrected.append(op)
     operations = corrected
 
+    # Guard: never DELETE columns that downstream pipeline blocks consume
+    _protected = set(_BLOCK_COLUMN_PROVIDERS.keys())
+    operations = [
+        op for op in operations
+        if not (op.get("primitive") == "DELETE" and op.get("source_column") in _protected)
+    ]
+
     # --- Rule 6: DELETE completeness ---
-    consumed_sources: set[str] = set(column_mapping.keys())
+    consumed_sources: set[str] = set(column_mapping.keys()) | set(_BLOCK_COLUMN_PROVIDERS.keys())
     for op in operations:
         src = op.get("source_column")
         if src:
@@ -648,7 +655,10 @@ def check_registry_node(state: PipelineState) -> dict:
 
     block_reg = BlockRegistry.instance()
     domain = state.get("domain", "nutrition")
-    dataset_name = Path(state.get("source_path", "unknown")).stem
+    _raw_source = state.get("source_path", "unknown")
+    dataset_name = state.get("resolved_source_name") or Path(_raw_source).stem
+    if "*" in dataset_name:
+        dataset_name = "glob"
     column_mapping = state.get("column_mapping", {})
     missing_columns = state.get("missing_columns", [])
     derivable_gaps = state.get("derivable_gaps", [])
@@ -907,6 +917,51 @@ def check_registry_node(state: PipelineState) -> dict:
     else:
         mapping_yaml_path = None
 
+    # Build source validation profile — classifies each non-computed unified col
+    # so quarantine can skip columns this source structurally cannot populate.
+    _unified = get_unified_schema()
+    _mapped_unified = set(column_mapping.values())
+    _derived_unified = {g["target_column"] for g in state.get("derivable_gaps", [])}
+    _enriched_unified = set(state.get("enrichment_columns_to_generate", []))
+    _enriched_unified.update(op["target"] for op in enrich_alias_ops)
+    _absent_unified = {m["target_column"] for m in state.get("missing_columns", [])}
+
+    validation_profile: dict = {}
+    for _col, _spec in _unified.columns.items():
+        if _spec.computed:
+            continue
+        _global_req = _spec.required
+        if _col in _mapped_unified:
+            _status, _req = "mapped", _global_req
+        elif _col in _derived_unified:
+            _status, _req = "derived", False   # derivations can fail; don't quarantine
+        elif _col in _enriched_unified:
+            _status, _req = "enriched", _global_req
+        elif _col in _absent_unified:
+            _status, _req = "absent", False    # source can't provide this
+        else:
+            _status, _req = "absent", False    # unclassified → safe default
+        validation_profile[_col] = {"status": _status, "required": _req}
+
+    logger.info(
+        f"Validation profile: "
+        f"{sum(1 for v in validation_profile.values() if v['required'])} required columns, "
+        f"{sum(1 for v in validation_profile.values() if v['status'] == 'absent')} absent (auto-optional)"
+    )
+
+    # Write profile JSON alongside YAML for inspection and RAG reference
+    if mapping_yaml_path:
+        import json as _json_vp
+        _profile_path = mapping_yaml_path.replace(
+            "DYNAMIC_MAPPING_", "VALIDATION_PROFILE_"
+        ).replace(".yaml", ".json")
+        try:
+            with open(_profile_path, "w") as _f:
+                _json_vp.dump(validation_profile, _f, indent=2)
+            logger.info(f"Wrote validation profile: {_profile_path}")
+        except Exception as _e:
+            logger.warning(f"Could not write validation profile: {_e}")
+
     # Accurate final coverage check — fires after Agent 2 corrections and alias resolution
     yaml_covered = {op["target"] for op in yaml_operations if "target" in op}
     block_covered = set(block_hits.keys())
@@ -929,6 +984,7 @@ def check_registry_node(state: PipelineState) -> dict:
         "mapping_yaml_path": mapping_yaml_path,
         "enrich_alias_ops": enrich_alias_ops,
         "excluded_columns": excluded_columns,
+        "validation_profile": validation_profile,
     }
 
 
@@ -1017,6 +1073,7 @@ def _llm_op_to_yaml(op: dict, column_mapping: dict) -> dict | None:
             "group",
             "mapping",
             "default",
+            "keep_source",
         ):
             if k in op:
                 result[k] = op[k]

@@ -89,6 +89,7 @@ def run_pipeline(
     force_fresh: bool = False,
     chunk_size: int = 10000,
     with_critic: bool = False,
+    pipeline_mode: str = "full",
 ) -> dict:
     """Execute the pipeline with checkpoint support."""
     gcs_source = is_gcs_uri(source_path)
@@ -144,12 +145,28 @@ def run_pipeline(
 
     graph = build_graph()
 
+    # Resolve glob → first blob's parent folder for stable dataset_name and Silver path
+    resolved_source_name = None
+    if is_gcs_uri(source_path) and "*" in source_path:
+        from src.pipeline.loaders.gcs_loader import GCSSourceLoader
+        try:
+            _loader = GCSSourceLoader(source_path)
+            _first_blob = _loader._list_blobs()[0]
+            _blob_parts = _first_blob.name.rstrip("/").split("/")
+            resolved_source_name = (
+                _blob_parts[-2] if len(_blob_parts) >= 2 else Path(_blob_parts[-1]).stem
+            )
+        except Exception as _e:
+            logger.warning(f"Could not resolve glob to first blob: {_e}")
+
     result = graph.invoke({
         "source_path": source_path,
+        "resolved_source_name": resolved_source_name,
         "domain": domain,
         "missing_column_decisions": {},
         "chunk_size": chunk_size,
         "with_critic": with_critic,
+        "pipeline_mode": pipeline_mode,
     })
 
     try:
@@ -210,6 +227,17 @@ def main():
         action="store_true",
         help="Enable Agent 2 (Critic) for schema correction review. Off by default.",
     )
+    parser.add_argument(
+        "--mode",
+        default="full",
+        choices=["full", "silver", "gold"],
+        help=(
+            "Pipeline mode: "
+            "'full' (default) = schema transform + dedup + enrichment; "
+            "'silver' = schema transform only, output written to GCS Silver as Parquet; "
+            "'gold' = read Silver Parquet, run dedup + enrichment, write to BigQuery."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -220,6 +248,7 @@ def main():
         force_fresh=args.force_fresh,
         chunk_size=args.chunk_size,
         with_critic=args.with_critic,
+        pipeline_mode=args.mode,
     )
 
     rows = len(result.get("working_df", []))

@@ -1,30 +1,21 @@
 """
 Reference corpus for KNN-based primary_category enrichment.
 
-Manages a persistent FAISS index of (embedding, category) pairs.
-The corpus is seeded on first use and grows as new rows are enriched
-with high-confidence category assignments.
-
-Index is stored at: corpus/faiss_index.bin
-Metadata is stored at: corpus/corpus_metadata.json
-(both relative to project root, created automatically)
+Backed by ChromaDB (HTTP client at localhost:8000). Persists automatically —
+no file-based index management. Public API unchanged from FAISS version so
+embedding.py and llm_tier.py call sites need no modification.
 """
 
 import hashlib
 import json
 import logging
 import os
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
-
-CORPUS_DIR = Path("corpus")
-INDEX_PATH = CORPUS_DIR / "faiss_index.bin"
-META_PATH = CORPUS_DIR / "corpus_metadata.json"
 
 # Minimum similarity for a KNN result to count as a vote
 VOTE_SIMILARITY_THRESHOLD = 0.45
@@ -38,6 +29,11 @@ K_NEIGHBORS = 5
 # Minimum corpus size before KNN is attempted (below this, skip to S3)
 MIN_CORPUS_SIZE = 10
 
+_COLLECTION_NAME = "product_corpus"
+
+_MODEL = None
+_MODEL_NAME = "all-MiniLM-L6-v2"
+
 
 def _get_model():
     """Lazy-load sentence transformer. Cached globally."""
@@ -45,21 +41,35 @@ def _get_model():
     try:
         if _MODEL is None:
             from sentence_transformers import SentenceTransformer
-            _MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+            _MODEL = SentenceTransformer(_MODEL_NAME)
     except Exception as e:
         logger.error(f"Failed to load sentence transformer: {e}")
         _MODEL = None
     return _MODEL
 
-_MODEL = None
 
-_MODEL_NAME = "all-MiniLM-L6-v2"
+def _get_collection():
+    """Get or create the ChromaDB product corpus collection."""
+    import chromadb
+    client = chromadb.HttpClient(
+        host=os.environ.get("CHROMA_HOST", "localhost"),
+        port=int(os.environ.get("CHROMA_PORT", "8000")),
+    )
+    return client.get_or_create_collection(
+        _COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+    )
 
 
 def _compute_embedding_key(model_name: str, text: str) -> str:
-    """SHA-256-16 of (model_name, text)."""
+    """SHA-256-16 of (model_name, text) — for Redis embedding cache."""
     raw = json.dumps({"model": model_name, "text": text})
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _make_vector_id(text: str, category: str) -> str:
+    """Stable ID for a (text, category) pair — enables upsert deduplication."""
+    return hashlib.sha256(f"{text.strip()}{category}".encode()).hexdigest()[:16]
 
 
 def _build_row_text(row: pd.Series) -> str:
@@ -72,97 +82,13 @@ def _build_row_text(row: pd.Series) -> str:
     return " ".join(parts)
 
 
-def load_corpus() -> tuple[Optional[object], list[dict]]:
-    """
-    Load the FAISS index and metadata from disk.
-    Returns (index, metadata_list) or (None, []) if not found.
-    metadata_list entries: {"category": str, "product_name": str}
-    """
-    try:
-        import faiss
-        if INDEX_PATH.exists() and META_PATH.exists():
-            index = faiss.read_index(str(INDEX_PATH))
-            with open(META_PATH) as f:
-                metadata = json.load(f)
-            logger.info(f"Loaded corpus: {index.ntotal} vectors")
-            return index, metadata
-    except Exception as e:
-        logger.warning(f"Could not load corpus: {e}")
-    return None, []
-
-
-def save_corpus(index, metadata: list[dict]) -> None:
-    """Persist the FAISS index and metadata to disk."""
-    try:
-        import faiss
-        CORPUS_DIR.mkdir(exist_ok=True)
-        faiss.write_index(index, str(INDEX_PATH))
-        with open(META_PATH, "w") as f:
-            json.dump(metadata, f)
-        logger.info(f"Saved corpus: {index.ntotal} vectors")
-    except Exception as e:
-        logger.warning(f"Could not save corpus: {e}")
-
-
-def build_seed_corpus(df: pd.DataFrame) -> None:
-    """
-    Seed the corpus from rows in df that already have primary_category.
-    Called once when the corpus is empty. Uses S1-resolved rows as the seed.
-    If fewer than MIN_CORPUS_SIZE rows have a category, logs a warning and skips.
-    """
-    import faiss
-
-    model = _get_model()
-    if model is None:
-        return
-
-    labeled = df[df["primary_category"].notna()].copy()
-    if len(labeled) < MIN_CORPUS_SIZE:
-        logger.warning(
-            f"Corpus seed skipped: only {len(labeled)} labeled rows "
-            f"(need {MIN_CORPUS_SIZE})"
-        )
-        return
-
-    texts = labeled.apply(_build_row_text, axis=1).tolist()
-    categories = labeled["primary_category"].tolist()
-    product_names = labeled.get("product_name", pd.Series([""] * len(labeled))).tolist()
-
-    embeddings = model.encode(texts, batch_size=64, show_progress_bar=False)
-    embeddings = embeddings.astype(np.float32)
-
-    # L2-normalize for cosine similarity via inner product
-    faiss.normalize_L2(embeddings)
-
-    dim = embeddings.shape[1]
-    index = faiss.IndexFlatIP(dim)  # Inner product on normalized = cosine
-    index.add(embeddings)
-
-    metadata = [
-        {"category": cat, "product_name": pn}
-        for cat, pn in zip(categories, product_names)
-    ]
-
-    save_corpus(index, metadata)
-    logger.info(f"Corpus seeded with {len(metadata)} labeled rows")
-
-
-def _score_from_search_result(
-    similarities: np.ndarray,
-    indices: np.ndarray,
-    metadata: list[dict],
+def _score_from_neighbors(
+    neighbors: list[dict],
 ) -> tuple[Optional[str], float, list[dict]]:
-    """Shared scoring logic: votes neighbors, returns (category, confidence, top-3)."""
-    neighbors = []
-    for sim, idx in zip(similarities, indices):
-        if idx < 0:
-            continue
-        neighbors.append({
-            "category": metadata[idx]["category"],
-            "product_name": metadata[idx]["product_name"],
-            "similarity": float(sim),
-        })
-
+    """
+    Shared scoring logic: vote over neighbors, return (category, confidence, top-3).
+    neighbors: list of {"category", "product_name", "similarity"}
+    """
     votes: dict[str, float] = {}
     for n in neighbors:
         if n["similarity"] >= VOTE_SIMILARITY_THRESHOLD:
@@ -175,8 +101,7 @@ def _score_from_search_result(
     winner_sims = [
         n["similarity"]
         for n in neighbors
-        if n["category"] == best_category
-        and n["similarity"] >= VOTE_SIMILARITY_THRESHOLD
+        if n["category"] == best_category and n["similarity"] >= VOTE_SIMILARITY_THRESHOLD
     ]
     confidence = sum(winner_sims) / len(winner_sims) if winner_sims else 0.0
 
@@ -184,6 +109,78 @@ def _score_from_search_result(
         return None, confidence, neighbors[:3]
 
     return best_category, confidence, neighbors[:3]
+
+
+def load_corpus() -> tuple[Optional[object], list[dict]]:
+    """
+    Load the ChromaDB product corpus collection.
+    Returns (collection, []) — metadata list is unused (ChromaDB stores its own).
+    Returns (None, []) if ChromaDB is unreachable.
+    """
+    try:
+        collection = _get_collection()
+        n = collection.count()
+        logger.info(f"Loaded corpus: {n} vectors")
+        return collection, []
+    except Exception as e:
+        logger.warning(f"Could not connect to ChromaDB corpus: {e}")
+        return None, []
+
+
+def save_corpus(index, metadata: list[dict]) -> None:
+    """No-op — ChromaDB auto-persists. Kept for API compatibility."""
+    if index is not None:
+        try:
+            logger.info(f"Saved corpus: {index.count()} vectors")
+        except Exception:
+            pass
+
+
+def build_seed_corpus(df: pd.DataFrame) -> None:
+    """
+    Seed the corpus from rows in df that already have primary_category.
+    Called once when the corpus is empty. Uses S1-resolved rows as the seed.
+    """
+    model = _get_model()
+    if model is None:
+        return
+
+    labeled = df[df["primary_category"].notna()].copy()
+    if len(labeled) < MIN_CORPUS_SIZE:
+        logger.warning(
+            f"Corpus seed skipped: only {len(labeled)} labeled rows "
+            f"(need {MIN_CORPUS_SIZE})"
+        )
+        return
+
+    try:
+        collection = _get_collection()
+    except Exception as e:
+        logger.warning(f"ChromaDB unavailable for corpus seed: {e}")
+        return
+
+    texts = labeled.apply(_build_row_text, axis=1).tolist()
+    categories = labeled["primary_category"].tolist()
+    product_names = labeled.get("product_name", pd.Series([""] * len(labeled))).tolist()
+
+    embeddings = model.encode(texts, batch_size=64, show_progress_bar=False).astype(np.float32)
+
+    ids = [_make_vector_id(t, c) for t, c in zip(texts, categories)]
+    metadatas = [
+        {"category": cat, "product_name": pn}
+        for cat, pn in zip(categories, product_names)
+    ]
+
+    # Upsert in chunks to avoid payload size limits
+    chunk = 500
+    for i in range(0, len(ids), chunk):
+        collection.upsert(
+            embeddings=embeddings[i:i + chunk].tolist(),
+            metadatas=metadatas[i:i + chunk],
+            ids=ids[i:i + chunk],
+        )
+
+    logger.info(f"Corpus seeded with {len(ids)} labeled rows")
 
 
 def knn_search(
@@ -197,28 +194,41 @@ def knn_search(
 
     Returns:
         (category, confidence, neighbors) where:
-        - category: the majority-voted category string, or None if below threshold
-        - confidence: average cosine similarity of votes that passed VOTE_SIMILARITY_THRESHOLD
-        - neighbors: list of {"category", "product_name", "similarity"} dicts
-                     (top-3 for use in S3 RAG prompt)
+        - category: majority-voted category or None if below threshold
+        - confidence: average cosine similarity of votes
+        - neighbors: list of {"category", "product_name", "similarity"} (top-3)
     """
     model = _get_model()
-    if model is None or index is None or index.ntotal < MIN_CORPUS_SIZE:
+    if model is None or index is None or index.count() < MIN_CORPUS_SIZE:
         return None, 0.0, []
-
-    import faiss
 
     text = _build_row_text(row)
     if not text.strip():
         return None, 0.0, []
 
     embedding = model.encode([text], show_progress_bar=False).astype(np.float32)
-    faiss.normalize_L2(embedding)
+    k_actual = min(k, index.count())
 
-    k_actual = min(k, index.ntotal)
-    similarities, indices = index.search(embedding, k_actual)
+    try:
+        results = index.query(
+            query_embeddings=[embedding[0].tolist()],
+            n_results=k_actual,
+        )
+    except Exception as e:
+        logger.warning(f"ChromaDB query failed: {e}")
+        return None, 0.0, []
 
-    return _score_from_search_result(similarities[0], indices[0], metadata)
+    metadatas_list = results["metadatas"][0]
+    distances = results["distances"][0]
+    neighbors = [
+        {
+            "category": m["category"],
+            "product_name": m["product_name"],
+            "similarity": float(1.0 - d),
+        }
+        for m, d in zip(metadatas_list, distances)
+    ]
+    return _score_from_neighbors(neighbors)
 
 
 def knn_search_batch(
@@ -233,12 +243,12 @@ def knn_search_batch(
 
     Returns list of (category, confidence, neighbors) tuples, one per input row.
     Rows with empty text return (None, 0.0, []).
+    Embedding results are cached in Redis if cache_client is provided.
     """
     model = _get_model()
-    if model is None or index is None or index.ntotal < MIN_CORPUS_SIZE:
+    if model is None or index is None or index.count() < MIN_CORPUS_SIZE:
         return [(None, 0.0, []) for _ in rows]
 
-    import faiss
     from src.cache.client import CACHE_TTL_EMB
 
     texts = [_build_row_text(row) for row in rows]
@@ -249,9 +259,9 @@ def knn_search_batch(
 
     valid_texts = [t for t, v in zip(texts, valid_mask) if v]
 
-    # Split valid_texts into cached and uncached embeddings
+    # Split into cached and uncached embeddings
     embedding_dim = model.get_sentence_embedding_dimension()
-    cached_embeddings: dict[int, np.ndarray] = {}  # position in valid_texts → vector
+    cached_embeddings: dict[int, np.ndarray] = {}
     uncached_positions: list[int] = []
     uncached_texts: list[str] = []
 
@@ -284,25 +294,43 @@ def knn_search_batch(
                     cache_client.set("emb", key, vec.tobytes(), ttl=CACHE_TTL_EMB)
                 except Exception:
                     pass
-    else:
-        fresh_embeddings = np.empty((0, embedding_dim), dtype=np.float32)
 
     if uncached_texts:
-        logger.debug(f"Embedding cache: {len(cached_embeddings) - len(uncached_positions)} hits, {len(uncached_texts)} new encodings")
+        logger.debug(
+            f"Embedding cache: {len(cached_embeddings) - len(uncached_texts)} hits, "
+            f"{len(uncached_texts)} new encodings"
+        )
 
-    # Reassemble full embedding matrix in original order
     embeddings = np.stack([cached_embeddings[i] for i in range(len(valid_texts))]).astype(np.float32)
-    faiss.normalize_L2(embeddings)
 
-    k_actual = min(k, index.ntotal)
-    all_similarities, all_indices = index.search(embeddings, k_actual)
+    k_actual = min(k, index.count())
+
+    try:
+        batch_results = index.query(
+            query_embeddings=embeddings.tolist(),
+            n_results=k_actual,
+        )
+    except Exception as e:
+        logger.warning(f"ChromaDB batch query failed: {e}")
+        return [(None, 0.0, []) for _ in rows]
 
     results: list[tuple[Optional[str], float, list[dict]]] = []
-    valid_iter = iter(zip(all_similarities, all_indices))
+    valid_iter = iter(range(len(valid_texts)))
+    vi = 0
     for is_valid in valid_mask:
         if is_valid:
-            sims, idxs = next(valid_iter)
-            results.append(_score_from_search_result(sims, idxs, metadata))
+            metadatas_list = batch_results["metadatas"][vi]
+            distances = batch_results["distances"][vi]
+            neighbors = [
+                {
+                    "category": m["category"],
+                    "product_name": m["product_name"],
+                    "similarity": float(1.0 - d),
+                }
+                for m, d in zip(metadatas_list, distances)
+            ]
+            results.append(_score_from_neighbors(neighbors))
+            vi += 1
         else:
             results.append((None, 0.0, []))
 
@@ -316,24 +344,26 @@ def add_to_corpus(
     metadata: list[dict],
 ) -> None:
     """
-    Add a newly enriched row to the in-memory FAISS index and metadata list.
-    The caller is responsible for calling save_corpus() after a batch.
-    Modifies index and metadata in place.
+    Add a newly enriched row to the ChromaDB corpus.
+    Upsert-safe: duplicate (text, category) pairs are silently ignored.
+    `metadata` param is unused (ChromaDB stores its own) — kept for API compat.
     """
     model = _get_model()
     if model is None or index is None:
         return
-
-    import faiss
 
     text = _build_row_text(row)
     if not text.strip():
         return
 
     embedding = model.encode([text], show_progress_bar=False).astype(np.float32)
-    faiss.normalize_L2(embedding)
-    index.add(embedding)
-    metadata.append({
-        "category": category,
-        "product_name": str(row.get("product_name", "")),
-    })
+    vector_id = _make_vector_id(text, category)
+
+    try:
+        index.upsert(
+            embeddings=[embedding[0].tolist()],
+            metadatas=[{"category": category, "product_name": str(row.get("product_name", ""))}],
+            ids=[vector_id],
+        )
+    except Exception as e:
+        logger.warning(f"ChromaDB add_to_corpus failed: {e}")

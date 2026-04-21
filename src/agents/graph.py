@@ -72,6 +72,15 @@ def plan_sequence_node(state: PipelineState) -> dict:
 
     block_reg = BlockRegistry.instance()
 
+    pipeline_mode = state.get("pipeline_mode") or "full"
+    if pipeline_mode == "silver":
+        pool = block_reg.get_silver_sequence(domain=domain)
+        logger.info(f"Silver mode: using silver sequence ({len(pool)} blocks)")
+        return {
+            "block_sequence": pool,
+            "sequence_reasoning": "silver mode — schema transform only, no dedup/enrichment",
+        }
+
     pool = block_reg.get_default_sequence(
         domain=domain,
         unified_schema=get_unified_schema(),
@@ -175,6 +184,7 @@ def plan_sequence_node(state: PipelineState) -> dict:
                 "unresolvable_gaps": state.get("unresolvable_gaps", []),
                 "mapping_warnings": state.get("mapping_warnings", []),
                 "excluded_columns": state.get("excluded_columns", []),
+                "validation_profile": state.get("validation_profile"),
                 "__yaml_text__": yaml_text,
             }
             cache_client.set("yaml", fingerprint, _json.dumps(cacheable).encode(), ttl=CACHE_TTL_YAML)
@@ -210,7 +220,9 @@ def run_pipeline_node(state: PipelineState) -> dict:
     source_path = state.get("source_path")
     if source_path is None:
         raise ValueError("Missing 'source_path' in state — cannot stream data for pipeline execution.")
-    source_name = Path(source_path).stem
+    source_name = state.get("resolved_source_name") or Path(source_path).stem
+    if "*" in source_name:
+        source_name = "glob"
     column_mapping = state.get("column_mapping", {})
 
     # UC2: generate run_id, thread into config, reset LLM counter
@@ -219,6 +231,7 @@ def run_pipeline_node(state: PipelineState) -> dict:
     reset_llm_counter()
     config["run_id"] = run_id
     config["source_name"] = source_name
+    config["pipeline_mode"] = state.get("pipeline_mode") or "full"
 
     # UC2: emit run_started
     if _UC2_AVAILABLE:
@@ -293,7 +306,24 @@ def run_pipeline_node(state: PipelineState) -> dict:
             result_df[tgt] = result_df[src].copy()
 
     excluded = set(state.get("excluded_columns") or [])
-    required_cols = sorted(unified.required_columns - excluded)
+    validation_profile = state.get("validation_profile")
+
+    if validation_profile:
+        required_cols = sorted([
+            col for col, spec in validation_profile.items()
+            if spec["required"] and col not in excluded
+        ])
+        absent_skipped = [
+            col for col, spec in validation_profile.items()
+            if spec["status"] == "absent" and col in unified.required_columns and col not in excluded
+        ]
+        if absent_skipped:
+            logger.info(
+                f"Quarantine: skipping {len(absent_skipped)} structurally absent "
+                f"required columns for this source: {absent_skipped}"
+            )
+    else:
+        required_cols = sorted(unified.required_columns - excluded)
 
     existing_required = [c for c in required_cols if c in result_df.columns]
     missing_cols = [c for c in required_cols if c not in result_df.columns]
@@ -370,6 +400,17 @@ def run_pipeline_node(state: PipelineState) -> dict:
         logger.info(
             f"Quarantine: {len(quarantined_df)} rows failed post-enrichment validation"
         )
+        for _col in required_cols:
+            if _col in result_df.columns:
+                _nulls = int(result_df[_col].isna().sum())
+                if _nulls > 0:
+                    _vstatus = (validation_profile or {}).get(_col, {}).get("status", "unknown")
+                    logger.info(
+                        f"Quarantine trigger: '{_col}' (status={_vstatus}) — {_nulls} null rows"
+                    )
+    logger.info(
+        f"Validation: {len(clean_df)} rows passed, {len(quarantined_df)} rows quarantined"
+    )
 
     # UC2: emit dedup_cluster events for Stage B clusters
     if _UC2_AVAILABLE:
@@ -408,22 +449,54 @@ def run_pipeline_node(state: PipelineState) -> dict:
 
 
 def save_output_node(state: PipelineState) -> dict:
-    """Save the final DataFrame to output/."""
+    """Save the final DataFrame — Parquet to GCS Silver (silver mode) or CSV locally (full mode)."""
     from src.uc2_observability.log_writer import RunLogWriter
     from src.uc2_observability.metrics_exporter import MetricsExporter
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     source_path = state.get("source_path", "unknown")
-    source_name = Path(source_path).stem
-    output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
+    source_name = state.get("resolved_source_name") or Path(source_path).stem
+    if "*" in source_name:
+        source_name = Path(source_path.replace("*", "")).parent.name or "unknown"
+    pipeline_mode = state.get("pipeline_mode") or "full"
     _run_start = state.get("_run_start_time")
+
+    # Derive date partition and logical source name from GCS URI
+    # Bronze URI pattern: gs://bucket/{source}/{YYYY}/{MM}/{DD}/part_NNNN.jsonl
+    # For glob paths, resolved_source_name is already the correct folder name.
+    _silver_date: str | None = None
+    _silver_source: str = source_name  # already resolved above
+    if pipeline_mode == "silver":
+        import re as _re
+        _m = _re.search(r"gs://[^/]+/([^/]+)/(\d{4}/\d{2}/\d{2})", source_path)
+        if _m:
+            # Override source only when no resolved name (single-file, non-glob paths)
+            if not state.get("resolved_source_name"):
+                _silver_source = _m.group(1)
+            _silver_date = _m.group(2)
+        elif state.get("resolved_source_name"):
+            # Glob path: date is embedded deeper; extract it from anywhere in the URI
+            _dm = _re.search(r"/(\d{4}/\d{2}/\d{2})(?:/|$)", source_path)
+            if _dm:
+                _silver_date = _dm.group(1)
+
+    output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
+    silver_uri: str | None = None
 
     try:
         df = state.get("working_df")
         if df is None:
             raise ValueError("Missing 'working_df' in state — run_pipeline_node did not complete successfully.")
-        df.to_csv(output_path, index=False)
-        logger.info(f"Output saved to {output_path} ({len(df)} rows)")
+
+        if pipeline_mode == "silver":
+            from src.pipeline.writers.gcs_silver_writer import GCSSilverWriter
+            writer = GCSSilverWriter()
+            silver_uri = writer.write(df, source_name=_silver_source, date=_silver_date, chunk_idx=0)
+            if _silver_date:
+                writer.update_watermark(_silver_source, _silver_date)
+        else:
+            df.to_csv(output_path, index=False)
+            logger.info(f"Output saved to {output_path} ({len(df)} rows)")
 
         cache_client = state.get("cache_client")
         if cache_client is not None:
@@ -499,7 +572,10 @@ def save_output_node(state: PipelineState) -> dict:
             logger.warning(f"RunLogWriter.save (partial) failed: {inner}")
         raise
 
-    return {"output_path": str(output_path)}
+    return {
+        "output_path": silver_uri or str(output_path),
+        "silver_output_uri": silver_uri,
+    }
 
 
 

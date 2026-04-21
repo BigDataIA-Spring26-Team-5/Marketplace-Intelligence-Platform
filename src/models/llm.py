@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 
 import litellm
 from dotenv import load_dotenv
@@ -16,35 +17,37 @@ litellm.suppress_debug_info = True
 for _name in ("LiteLLM", "litellm", "httpx", "httpcore"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
+# ── Model routing — override via env vars ────────────────────────────
+_ORCHESTRATOR_MODEL  = os.environ.get("ORCHESTRATOR_LLM",  "claude-sonnet-4-20250514")
+_CODEGEN_MODEL       = os.environ.get("CODEGEN_LLM",       "deepseek/deepseek-chat")
+_ENRICHMENT_MODEL    = os.environ.get("ENRICHMENT_LLM",    "groq/llama-3.3-70b-versatile")
+_CRITIC_MODEL        = os.environ.get("CRITIC_LLM",        "anthropic/claude-sonnet-4-6")
+_OBSERVABILITY_MODEL = os.environ.get("OBSERVABILITY_LLM", "groq/llama-3.1-8b-instant")
+
 
 def get_orchestrator_llm() -> str:
     """Model string for Agent 1 — schema analysis, gap detection."""
-    return "deepseek/deepseek-chat"
+    return _ORCHESTRATOR_MODEL
 
 
 def get_codegen_llm() -> str:
     """Model string for Agent 2 — code generation."""
-    return "deepseek/deepseek-chat"
+    return _CODEGEN_MODEL
 
 
 def get_enrichment_llm() -> str:
-    """Model string for Tier 4 enrichment."""
-    return "deepseek/deepseek-chat"
+    """Model string for S3 RAG-LLM enrichment."""
+    return _ENRICHMENT_MODEL
 
 
 def get_critic_llm() -> str:
-    """Model string for Agent 2 — gap analysis critic.
+    """Model string for Agent 2 — gap analysis critic."""
+    return _CRITIC_MODEL
 
-    Uses a reasoning model for higher accuracy on verification tasks.
-    Falls back to orchestrator model if reasoning model unavailable.
-    """
-    try:
-        return "deepseek/deepseek-reasoner"
-    except Exception:
-        logger.warning(
-            "deepseek-reasoner unavailable — critic running on non-reasoning model"
-        )
-        return get_orchestrator_llm()
+
+def get_observability_llm() -> str:
+    """Model string for UC2 observability queries."""
+    return _OBSERVABILITY_MODEL
 
 
 def call_llm(model: str, messages: list[dict], temperature: float = 0.0) -> str:
@@ -70,6 +73,22 @@ def call_llm_json(model: str, messages: list[dict], temperature: float = 0.0) ->
         raise
 
 
+async def async_call_llm_json(model: str, messages: list[dict], temperature: float = 0.0) -> dict:
+    """Async LLM call via litellm.acompletion. Same JSON parsing as call_llm_json."""
+    import re
+    global _llm_call_counter
+    response = await litellm.acompletion(model=model, messages=messages, temperature=temperature)
+    raw = response.choices[0].message.content
+    _llm_call_counter += 1
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        m = re.search(r'```(?:json)?\s*([\s\S]*?)```', raw)
+        if m:
+            return json.loads(m.group(1).strip())
+        raise
+
+
 # ── LLM call counter (UC2 observability) ─────────────────────────────
 
 _llm_call_counter: int = 0
@@ -82,11 +101,6 @@ def reset_llm_counter() -> None:
 
 def get_llm_call_count() -> int:
     return _llm_call_counter
-
-
-def get_observability_llm() -> str:
-    """Model string for UC2 observability queries."""
-    return get_enrichment_llm()
 
 
 # Patch call_llm to increment counter
