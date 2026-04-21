@@ -220,7 +220,9 @@ def run_pipeline_node(state: PipelineState) -> dict:
     source_path = state.get("source_path")
     if source_path is None:
         raise ValueError("Missing 'source_path' in state — cannot stream data for pipeline execution.")
-    source_name = Path(source_path).stem
+    source_name = state.get("resolved_source_name") or Path(source_path).stem
+    if "*" in source_name:
+        source_name = "glob"
     column_mapping = state.get("column_mapping", {})
 
     # UC2: generate run_id, thread into config, reset LLM counter
@@ -453,20 +455,30 @@ def save_output_node(state: PipelineState) -> dict:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     source_path = state.get("source_path", "unknown")
-    source_name = Path(source_path).stem
+    source_name = state.get("resolved_source_name") or Path(source_path).stem
+    if "*" in source_name:
+        source_name = Path(source_path.replace("*", "")).parent.name or "unknown"
     pipeline_mode = state.get("pipeline_mode") or "full"
     _run_start = state.get("_run_start_time")
 
     # Derive date partition and logical source name from GCS URI
     # Bronze URI pattern: gs://bucket/{source}/{YYYY}/{MM}/{DD}/part_NNNN.jsonl
+    # For glob paths, resolved_source_name is already the correct folder name.
     _silver_date: str | None = None
-    _silver_source: str = source_name  # fallback
+    _silver_source: str = source_name  # already resolved above
     if pipeline_mode == "silver":
         import re as _re
         _m = _re.search(r"gs://[^/]+/([^/]+)/(\d{4}/\d{2}/\d{2})", source_path)
         if _m:
-            _silver_source = _m.group(1)   # e.g. "off"
-            _silver_date   = _m.group(2)   # e.g. "2026/04/21"
+            # Override source only when no resolved name (single-file, non-glob paths)
+            if not state.get("resolved_source_name"):
+                _silver_source = _m.group(1)
+            _silver_date = _m.group(2)
+        elif state.get("resolved_source_name"):
+            # Glob path: date is embedded deeper; extract it from anywhere in the URI
+            _dm = _re.search(r"/(\d{4}/\d{2}/\d{2})(?:/|$)", source_path)
+            if _dm:
+                _silver_date = _dm.group(1)
 
     output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
     silver_uri: str | None = None

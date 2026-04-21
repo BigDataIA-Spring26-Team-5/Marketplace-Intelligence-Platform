@@ -655,7 +655,10 @@ def check_registry_node(state: PipelineState) -> dict:
 
     block_reg = BlockRegistry.instance()
     domain = state.get("domain", "nutrition")
-    dataset_name = Path(state.get("source_path", "unknown")).stem
+    _raw_source = state.get("source_path", "unknown")
+    dataset_name = state.get("resolved_source_name") or Path(_raw_source).stem
+    if "*" in dataset_name:
+        dataset_name = "glob"
     column_mapping = state.get("column_mapping", {})
     missing_columns = state.get("missing_columns", [])
     derivable_gaps = state.get("derivable_gaps", [])
