@@ -72,6 +72,15 @@ def plan_sequence_node(state: PipelineState) -> dict:
 
     block_reg = BlockRegistry.instance()
 
+    pipeline_mode = state.get("pipeline_mode") or "full"
+    if pipeline_mode == "silver":
+        pool = block_reg.get_silver_sequence(domain=domain)
+        logger.info(f"Silver mode: using silver sequence ({len(pool)} blocks)")
+        return {
+            "block_sequence": pool,
+            "sequence_reasoning": "silver mode — schema transform only, no dedup/enrichment",
+        }
+
     pool = block_reg.get_default_sequence(
         domain=domain,
         unified_schema=get_unified_schema(),
@@ -437,22 +446,41 @@ def run_pipeline_node(state: PipelineState) -> dict:
 
 
 def save_output_node(state: PipelineState) -> dict:
-    """Save the final DataFrame to output/."""
+    """Save the final DataFrame — Parquet to GCS Silver (silver mode) or CSV locally (full mode)."""
     from src.uc2_observability.log_writer import RunLogWriter
     from src.uc2_observability.metrics_exporter import MetricsExporter
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     source_path = state.get("source_path", "unknown")
     source_name = Path(source_path).stem
-    output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
+    pipeline_mode = state.get("pipeline_mode") or "full"
     _run_start = state.get("_run_start_time")
+
+    # Derive date partition from source URI if possible (Bronze path: .../YYYY/MM/DD/...)
+    _silver_date: str | None = None
+    if pipeline_mode == "silver":
+        import re as _re
+        _m = _re.search(r"(\d{4}/\d{2}/\d{2})", source_path)
+        if _m:
+            _silver_date = _m.group(1)
+
+    output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
+    silver_uri: str | None = None
 
     try:
         df = state.get("working_df")
         if df is None:
             raise ValueError("Missing 'working_df' in state — run_pipeline_node did not complete successfully.")
-        df.to_csv(output_path, index=False)
-        logger.info(f"Output saved to {output_path} ({len(df)} rows)")
+
+        if pipeline_mode == "silver":
+            from src.pipeline.writers.gcs_silver_writer import GCSSilverWriter
+            writer = GCSSilverWriter()
+            silver_uri = writer.write(df, source_name=source_name, date=_silver_date, chunk_idx=0)
+            if _silver_date:
+                writer.update_watermark(source_name, _silver_date)
+        else:
+            df.to_csv(output_path, index=False)
+            logger.info(f"Output saved to {output_path} ({len(df)} rows)")
 
         cache_client = state.get("cache_client")
         if cache_client is not None:
@@ -528,7 +556,10 @@ def save_output_node(state: PipelineState) -> dict:
             logger.warning(f"RunLogWriter.save (partial) failed: {inner}")
         raise
 
-    return {"output_path": str(output_path)}
+    return {
+        "output_path": silver_uri or str(output_path),
+        "silver_output_uri": silver_uri,
+    }
 
 
 

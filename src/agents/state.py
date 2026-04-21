@@ -114,6 +114,10 @@ class PipelineState(TypedDict, total=False):
     # Source validation profile (set by check_registry_node)
     validation_profile: Optional[dict[str, dict]]  # col -> {status, required}
 
+    # Medallion layer mode
+    pipeline_mode: Optional[str]      # "silver" | "gold" | "full" (None = "full")
+    silver_output_uri: Optional[str]  # gs:// URI written by save_output_node in silver mode
+
     # UC2 observability
     _run_id: str  # UUID4 generated at start of run_pipeline_node; threaded to all emission points
     _run_start_time: float  # time.perf_counter() at run start; used for block_duration_seconds metric

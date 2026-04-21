@@ -186,6 +186,36 @@ class BlockRegistry:
         base.append("dq_score_post")
         return base
 
+    def get_silver_sequence(self, domain: str = "nutrition") -> list[str]:
+        """
+        Block sequence for Bronze→Silver: schema transform only.
+        Stops before dedup and enrichment — Silver contains all rows.
+        """
+        base = [
+            "dq_score_pre",
+            "__generated__",
+            "strip_whitespace",
+            "lowercase_brand",
+            "remove_noise_words",
+            "strip_punctuation",
+        ]
+        if domain == "pricing":
+            base.append("keep_quantity_in_name")
+        else:
+            base.append("extract_quantity_column")
+        return base
+
+    def get_gold_sequence(self, domain: str = "nutrition") -> list[str]:
+        """
+        Block sequence for Silver→Gold: dedup + enrichment + final DQ score.
+        Reads Silver Parquet (already schema-transformed).
+        """
+        base = ["dedup_stage"]
+        if domain in ("nutrition", "safety"):
+            base.append("enrich_stage")
+        base.append("dq_score_post")
+        return base
+
     def get_blocks_with_metadata(self, block_names: list[str]) -> list[dict]:
         """Return metadata dicts for the given block names (preserving order).
 
