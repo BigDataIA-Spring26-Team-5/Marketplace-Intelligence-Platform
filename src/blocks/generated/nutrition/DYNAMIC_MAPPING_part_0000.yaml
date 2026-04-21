@@ -1,20 +1,5 @@
 column_operations:
-- target: brand_name
-  type: string
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: ingredients
-  type: string
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: serving_size
-  type: float
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: serving_size_unit
+- target: brand_owner
   type: string
   action: set_null
   status: missing
@@ -22,14 +7,53 @@ column_operations:
 - target: data_source
   type: string
   action: set_default
-  default_value: USDA
-- source: fdcId
+  default_value: OpenFoodFacts
+- target: product_name
+  type: string
+  action: format_transform
+  source: product_name
+  normalize_before_dedup: true
+- target: ingredients
+  type: string
+  action: format_transform
+  source: ingredients_text
+- target: serving_size
+  type: float
+  action: regex_extract
+  source: serving_size
+  pattern: ([0-9]+\.?[0-9]*)
+- target: serving_size_unit
+  type: string
+  action: regex_extract
+  source: serving_size
+  pattern: '[0-9]+\.?[0-9]*\s*([a-zA-Z]+)'
+- target: published_date
+  type: string
+  action: parse_date
+  source: published_date
+- source: pnns_groups_1
   action: drop_column
-- source: dataType
+- source: pnns_groups_2
   action: drop_column
-- source: gtinUpc
+- source: allergens
   action: drop_column
-- source: foodNutrients
+- source: traces
   action: drop_column
-- source: _dataType
+- source: countries
+  action: drop_column
+- source: energy_100g
+  action: drop_column
+- source: fat_100g
+  action: drop_column
+- source: carbohydrates_100g
+  action: drop_column
+- source: proteins_100g
+  action: drop_column
+- source: salt_100g
+  action: drop_column
+- source: nova_group
+  action: drop_column
+- source: nutriscore_grade
+  action: drop_column
+- source: data_quality_tags
   action: drop_column
