@@ -48,6 +48,41 @@ A user opens the Grafana dashboard and sees visual panels for pipeline health ov
 
 **Independent Test**: Given 5+ completed pipeline runs, a user opens the Grafana dashboard and sees a time-series panel for `dq_delta` showing correct values per run without any manual data entry.
 
+**Testing Approach**: Two-tier:
+1. **Unit** (automated): `MetricsExporter.push()` is covered by `tests/uc2_observability/test_metrics_exporter.py` — no Docker required. Run with `poetry run pytest tests/uc2_observability/test_metrics_exporter.py -v`.
+2. **Docker smoke test** (manual, E2E): Execute the following checklist end-to-end:
+
+```
+# 1. Start the observability stack
+cd grafana && docker compose up -d
+# Verify: http://localhost:9091 (Pushgateway), http://localhost:9090 (Prometheus), http://localhost:3000 (Grafana)
+
+# 2. Generate run data (from repo root)
+cd .. && poetry run python demo.py
+# Expected: 3 pipeline runs execute; output/run_logs/ contains 3 run_*.json files
+
+# 3. Verify metrics reached Pushgateway
+curl -s http://localhost:9091/metrics | grep etl_dq_score_post
+# Expected: gauge lines with source_name and run_id labels
+
+# 4. Verify Prometheus scraped from Pushgateway
+# Open http://localhost:9090/graph → query: etl_dq_score_post
+# Expected: data points visible for each run
+
+# 5. Open Grafana dashboard
+# http://localhost:3000 → Dashboards → "Pipeline Observability"
+# Check SC-008: all 3 runs appear in DQ Scores panel within 30s of demo.py completing
+
+# 6. Verify enrichment tier panel
+# Expected: S1/S2/S3/unresolved stacked bars per run with non-zero values
+
+# 7. Test source filter variable
+# Select source_name = "usda_fooddata_sample" → all panels filter to USDA runs only
+
+# 8. Tear down
+cd grafana && docker compose down
+```
+
 **Acceptance Scenarios**:
 
 1. **Given** pipeline runs have completed and metrics are published, **When** a user opens the Grafana dashboard, **Then** they see a time-series panel showing DQ score (pre/post/delta) per run ordered by timestamp.
@@ -151,3 +186,7 @@ A user can ask comparative questions across runs — "Is DQ score improving over
 - Q: Is the chatbot stateless or multi-turn? → A: Multi-turn — retains conversation history within a session.
 - Q: What is the run log retention policy? → A: Keep all runs indefinitely; no automatic deletion in v1.
 - Scope addition (user-directed): Grafana dashboard added as User Story 3 (P3). Prometheus is the data source (already in use via UC2). Dashboard provisioned as JSON; Grafana install is out of scope. FR-010, FR-011, SC-008 added.
+
+### Session 2026-04-21 (follow-up)
+
+- Q: What level of Grafana testing should be documented in the spec? → A: Unit tests (MetricsExporter covered by pytest) + Docker smoke-test checklist for dashboard visual verification; no automated E2E UI test required.
