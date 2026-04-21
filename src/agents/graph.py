@@ -175,6 +175,7 @@ def plan_sequence_node(state: PipelineState) -> dict:
                 "unresolvable_gaps": state.get("unresolvable_gaps", []),
                 "mapping_warnings": state.get("mapping_warnings", []),
                 "excluded_columns": state.get("excluded_columns", []),
+                "validation_profile": state.get("validation_profile"),
                 "__yaml_text__": yaml_text,
             }
             cache_client.set("yaml", fingerprint, _json.dumps(cacheable).encode(), ttl=CACHE_TTL_YAML)
@@ -293,7 +294,24 @@ def run_pipeline_node(state: PipelineState) -> dict:
             result_df[tgt] = result_df[src].copy()
 
     excluded = set(state.get("excluded_columns") or [])
-    required_cols = sorted(unified.required_columns - excluded)
+    validation_profile = state.get("validation_profile")
+
+    if validation_profile:
+        required_cols = sorted([
+            col for col, spec in validation_profile.items()
+            if spec["required"] and col not in excluded
+        ])
+        absent_skipped = [
+            col for col, spec in validation_profile.items()
+            if spec["status"] == "absent" and col in unified.required_columns and col not in excluded
+        ]
+        if absent_skipped:
+            logger.info(
+                f"Quarantine: skipping {len(absent_skipped)} structurally absent "
+                f"required columns for this source: {absent_skipped}"
+            )
+    else:
+        required_cols = sorted(unified.required_columns - excluded)
 
     existing_required = [c for c in required_cols if c in result_df.columns]
     missing_cols = [c for c in required_cols if c not in result_df.columns]
@@ -370,6 +388,17 @@ def run_pipeline_node(state: PipelineState) -> dict:
         logger.info(
             f"Quarantine: {len(quarantined_df)} rows failed post-enrichment validation"
         )
+        for _col in required_cols:
+            if _col in result_df.columns:
+                _nulls = int(result_df[_col].isna().sum())
+                if _nulls > 0:
+                    _vstatus = (validation_profile or {}).get(_col, {}).get("status", "unknown")
+                    logger.info(
+                        f"Quarantine trigger: '{_col}' (status={_vstatus}) — {_nulls} null rows"
+                    )
+    logger.info(
+        f"Validation: {len(clean_df)} rows passed, {len(quarantined_df)} rows quarantined"
+    )
 
     # UC2: emit dedup_cluster events for Stage B clusters
     if _UC2_AVAILABLE:
