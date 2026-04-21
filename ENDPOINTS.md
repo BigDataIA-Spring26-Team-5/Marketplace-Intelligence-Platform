@@ -14,6 +14,7 @@
 | Pushgateway | http://35.239.47.242:9091 | — |
 | ChromaDB | http://35.239.47.242:8000 | — |
 | Redis (MCP cache) | 35.239.47.242:6379 | no auth |
+| MLflow | http://35.239.47.242:5000 | — |
 
 ## UC1 Pipeline
 

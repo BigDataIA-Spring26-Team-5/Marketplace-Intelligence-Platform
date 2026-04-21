@@ -100,7 +100,17 @@
       "Bash(curl -s -u admin:mip_admin -X POST http://localhost:3000/api/dashboards/db -H 'Content-Type: application/json' -d @-)",
       "Bash(curl -s -X POST http://localhost:8001/tools/list_runs -H 'Content-Type: application/json' -d '{\"source\": \"OFF\"}')",
       "Bash(pkill -f \"streamlit run\")",
-      "Bash(awk '{print $11, $12}')"
+      "Bash(awk '{print $11, $12}')",
+      "Bash(docker restart *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8080/health)",
+      "Bash(curl -s \"http://localhost:9090/api/v1/label/__name__/values\")",
+      "Bash(curl -s \"http://localhost:9090/api/v1/query?query=uc1_rows_in\")",
+      "Bash(docker-compose -p mip up -d airflow)",
+      "Bash(docker compose *)",
+      "Bash(curl -s \"http://localhost:9090/api/v1/query?query=uc1_rows_in%7Bsource%3D%22TEST%22%7D\")",
+      "WebFetch(domain:medium.com)",
+      "Bash(curl -s http://localhost:9091/api/v1/metrics)",
+      "Bash(bash)"
     ]
   }
 }
