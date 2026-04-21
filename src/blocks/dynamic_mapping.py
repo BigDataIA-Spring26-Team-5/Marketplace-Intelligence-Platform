@@ -321,7 +321,13 @@ def _handle_regex_extract(df: pd.DataFrame, op: dict) -> pd.DataFrame:
     has_group = bool(re.search(r'(?<!\\)\((?!\?)', pattern))
     extract_pattern = pattern if has_group else f"({pattern})"
     extracted = df[source].astype("string").str.extract(extract_pattern, expand=False)
-    df[target] = extracted
+    col_type = op.get("type", "string")
+    if col_type in ("float", "float64", "Float64"):
+        df[target] = pd.to_numeric(extracted, errors="coerce")
+    elif col_type in ("integer", "int", "int64", "Int64"):
+        df[target] = pd.to_numeric(extracted, errors="coerce").astype("Int64")
+    else:
+        df[target] = extracted
     if source != target and source in df.columns and not op.get("keep_source", False):
         df = df.drop(columns=[source])
     return df
@@ -623,7 +629,7 @@ def _handle_extract_json_field(df: pd.DataFrame, op: dict) -> pd.DataFrame:
             return None
         parsed = _try_parse(str(v))
         if parsed is None:
-            return None
+            return str(v)  # plain string fallback — return raw value for non-JSON rows
         if isinstance(parsed, dict):
             return parsed.get(key)
         if isinstance(parsed, list):
@@ -645,6 +651,9 @@ def _handle_extract_json_field(df: pd.DataFrame, op: dict) -> pd.DataFrame:
             df[target] = df[target].astype("Int64")
     else:
         df[target] = raw.astype("string")
+
+    if source != target and source in df.columns:
+        df = df.drop(columns=[source])
 
     logger.debug(f"extract_json_field: '{source}'[{key}] → '{target}'")
     return df

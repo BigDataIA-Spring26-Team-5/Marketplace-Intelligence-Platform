@@ -584,8 +584,15 @@ def _deterministic_corrections(
         corrected.append(op)
     operations = corrected
 
+    # Guard: never DELETE columns that downstream pipeline blocks consume
+    _protected = set(_BLOCK_COLUMN_PROVIDERS.keys())
+    operations = [
+        op for op in operations
+        if not (op.get("primitive") == "DELETE" and op.get("source_column") in _protected)
+    ]
+
     # --- Rule 6: DELETE completeness ---
-    consumed_sources: set[str] = set(column_mapping.keys())
+    consumed_sources: set[str] = set(column_mapping.keys()) | set(_BLOCK_COLUMN_PROVIDERS.keys())
     for op in operations:
         src = op.get("source_column")
         if src:
