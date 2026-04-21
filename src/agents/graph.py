@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import time
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
 from langgraph.graph import StateGraph, END
@@ -17,9 +21,17 @@ from src.agents.orchestrator import (
 )
 from src.agents.critic import critique_schema_node
 from src.agents.prompts import SEQUENCE_PLANNING_PROMPT
-from src.models.llm import call_llm_json, get_orchestrator_llm
+from src.models.llm import (
+    call_llm_json,
+    get_orchestrator_llm,
+    _UC2_AVAILABLE,
+    _emit_event,
+    _MetricsCollector,
+    reset_llm_counter,
+    get_llm_call_count,
+)
 from src.registry.block_registry import BlockRegistry
-from src.pipeline.runner import PipelineRunner, DEFAULT_CHUNK_SIZE
+from src.pipeline.runner import PipelineRunner, DEFAULT_CHUNK_SIZE, NULL_RATE_COLUMNS
 from src.schema.analyzer import get_unified_schema
 
 logger = logging.getLogger(__name__)
@@ -29,6 +41,16 @@ OUTPUT_DIR = PROJECT_ROOT / "output"
 
 
 # ── Pipeline execution nodes ─────────────────────────────────────────
+
+
+def route_after_analyze_schema(state: PipelineState) -> str:
+    """Skip critique_schema when YAML mapping was loaded from Redis cache, or when Critic is disabled."""
+    if state.get("cache_yaml_hit"):
+        return "check_registry"
+    if not state.get("with_critic", False):
+        logger.info("Agent 2 (Critic) skipped — use --with-critic to enable")
+        return "check_registry"
+    return "critique_schema"
 
 
 def plan_sequence_node(state: PipelineState) -> dict:
@@ -117,10 +139,50 @@ def plan_sequence_node(state: PipelineState) -> dict:
     if reasoning:
         logger.info(f"Agent 3 reasoning: {reasoning}")
 
-    return {
+    result: dict = {
         "block_sequence": sequence,
         "sequence_reasoning": reasoning,
     }
+
+    # Write complete YAML cache entry now that all three agents have run.
+    fingerprint = state.get("_schema_fingerprint")
+    cache_client = state.get("cache_client")
+    if fingerprint and cache_client is not None:
+        try:
+            from src.cache.client import CACHE_TTL_YAML
+            import json as _json
+            yaml_path = state.get("mapping_yaml_path")
+            yaml_text = None
+            if yaml_path:
+                from pathlib import Path as _Path
+                _p = _Path(yaml_path)
+                if _p.exists():
+                    yaml_text = _p.read_text()
+
+            cacheable: dict = {
+                "column_mapping": state.get("column_mapping", {}),
+                "operations": state.get("operations", []),
+                "revised_operations": state.get("revised_operations"),
+                "mapping_yaml_path": yaml_path,
+                "block_registry_hits": state.get("block_registry_hits", {}),
+                "block_sequence": sequence,
+                "sequence_reasoning": reasoning,
+                "enrichment_columns_to_generate": state.get("enrichment_columns_to_generate", []),
+                "enrich_alias_ops": state.get("enrich_alias_ops", []),
+                "gaps": state.get("gaps", []),
+                "derivable_gaps": state.get("derivable_gaps", []),
+                "missing_columns": state.get("missing_columns", []),
+                "unresolvable_gaps": state.get("unresolvable_gaps", []),
+                "mapping_warnings": state.get("mapping_warnings", []),
+                "excluded_columns": state.get("excluded_columns", []),
+                "__yaml_text__": yaml_text,
+            }
+            cache_client.set("yaml", fingerprint, _json.dumps(cacheable).encode(), ttl=CACHE_TTL_YAML)
+            logger.info(f"YAML cache written (fingerprint {fingerprint})")
+        except Exception as e:
+            logger.warning(f"YAML cache write failed: {e}")
+
+    return result
 
 
 def run_pipeline_node(state: PipelineState) -> dict:
@@ -142,21 +204,64 @@ def run_pipeline_node(state: PipelineState) -> dict:
         "dq_weights": unified.dq_weights.model_dump(),
         "domain": domain,
         "unified_schema": unified,
+        "cache_client": state.get("cache_client"),
     }
 
     source_path = state.get("source_path")
     if source_path is None:
         raise ValueError("Missing 'source_path' in state — cannot stream data for pipeline execution.")
+    source_name = Path(source_path).stem
     column_mapping = state.get("column_mapping", {})
 
-    result_df, audit_log = runner.run_chunked(
-        source_path=source_path,
-        block_sequence=block_sequence,
-        column_mapping=column_mapping,
-        config=config,
-        chunk_size=state.get("chunk_size", DEFAULT_CHUNK_SIZE),
-        sep=state.get("source_sep", ","),
-    )
+    # UC2: generate run_id, thread into config, reset LLM counter
+    run_id = str(uuid4())
+    _block_start_time = time.monotonic()
+    reset_llm_counter()
+    config["run_id"] = run_id
+    config["source_name"] = source_name
+
+    # UC2: emit run_started
+    if _UC2_AVAILABLE:
+        try:
+            _emit_event({
+                "event_type": "run_started",
+                "run_id": run_id,
+                "source": source_name,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f"UC2 run_started emit failed: {e}")
+
+    _run_status = "success"
+    result_df = pd.DataFrame()
+    audit_log: list[dict] = []
+
+    try:
+        result_df, audit_log = runner.run_chunked(
+            source_path=source_path,
+            block_sequence=block_sequence,
+            column_mapping=column_mapping,
+            config=config,
+            chunk_size=state.get("chunk_size", DEFAULT_CHUNK_SIZE),
+            sep=state.get("source_sep", ","),
+        )
+    except Exception:
+        _run_status = "failed"
+        raise
+    finally:
+        # UC2: emit run_completed (fires even on failure)
+        if _UC2_AVAILABLE:
+            try:
+                _emit_event({
+                    "event_type": "run_completed",
+                    "run_id": run_id,
+                    "source": source_name,
+                    "status": _run_status,
+                    "total_rows": len(result_df),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception as e:
+                logger.warning(f"UC2 run_completed emit failed: {e}")
 
     dq_pre = (
         float(result_df["dq_score_pre"].mean())
@@ -217,18 +322,77 @@ def run_pipeline_node(state: PipelineState) -> dict:
             c for c in required_cols
             if c in quarantined_df.columns and pd.isna(quarantined_df.at[idx, c])
         ]
+        reason_str = f"Null in required field(s): {', '.join(missing)}"
         quarantine_reasons.append(
             {
                 "row_idx": int(idx),
                 "missing_fields": missing,
-                "reason": f"Null in required field(s): {', '.join(missing)}",
+                "reason": reason_str,
             }
         )
+        # UC2: emit quarantine event per rejected row (fire-and-forget)
+        if _UC2_AVAILABLE and missing:
+            try:
+                row = quarantined_df.loc[idx]
+                offending_field = missing[0]
+
+                def _safe(v: object) -> object:
+                    import pandas as _pd
+                    import numpy as _np
+                    if _pd.isna(v) if not isinstance(v, (list, dict)) else False:
+                        return None
+                    if isinstance(v, _np.generic):
+                        return v.item()
+                    return v
+
+                row_data: dict = {
+                    "product_name": _safe(row.get("product_name") if hasattr(row, "get") else getattr(row, "product_name", None)),
+                    "brand_name": _safe(row.get("brand_name") if hasattr(row, "get") else getattr(row, "brand_name", None)),
+                    "ingredients": _safe(row.get("ingredients") if hasattr(row, "get") else getattr(row, "ingredients", None)),
+                }
+                if offending_field not in row_data:
+                    row_data[offending_field] = _safe(row[offending_field] if offending_field in row.index else None)
+
+                row_hash = hashlib.sha256(str(row.to_dict()).encode()).hexdigest()[:16]
+                _emit_event({
+                    "event_type": "quarantine",
+                    "run_id": run_id,
+                    "source": source_name,
+                    "row_hash": row_hash,
+                    "row_data": row_data,
+                    "reason": reason_str,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception as e:
+                logger.warning(f"UC2 quarantine emit failed: {e}")
 
     if len(quarantined_df) > 0:
         logger.info(
             f"Quarantine: {len(quarantined_df)} rows failed post-enrichment validation"
         )
+
+    # UC2: emit dedup_cluster events for Stage B clusters
+    if _UC2_AVAILABLE:
+        try:
+            dedup_block = block_registry.get("fuzzy_deduplicate")
+            for cluster in getattr(dedup_block, "last_clusters", []):
+                _emit_event({
+                    "event_type": "dedup_cluster",
+                    "run_id": run_id,
+                    "cluster_id": str(cluster.get("cluster_id")),
+                    "members": cluster.get("member_product_names", []),
+                    "canonical": {
+                        "product_name": cluster.get("canonical_product_name"),
+                        "brand_name": cluster.get("canonical_brand_name"),
+                    },
+                    "merge_decisions": {
+                        "size": cluster.get("size"),
+                        "dedup_key": cluster.get("dedup_key"),
+                    },
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+        except Exception as e:
+            logger.warning(f"UC2 dedup_cluster emit failed: {e}")
 
     return {
         "working_df": clean_df,
@@ -239,22 +403,101 @@ def run_pipeline_node(state: PipelineState) -> dict:
         "enrichment_stats": enrichment_stats,
         "dq_score_pre": round(dq_pre, 2),
         "dq_score_post": round(dq_post, 2),
+        "_run_id": run_id,
     }
 
 
 def save_output_node(state: PipelineState) -> dict:
     """Save the final DataFrame to output/."""
+    from src.uc2_observability.log_writer import RunLogWriter
+    from src.uc2_observability.metrics_exporter import MetricsExporter
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     source_path = state.get("source_path", "unknown")
     source_name = Path(source_path).stem
     output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
+    _run_start = state.get("_run_start_time")
 
-    df = state.get("working_df")
-    if df is None:
-        raise ValueError("Missing 'working_df' in state — run_pipeline_node did not complete successfully.")
-    df.to_csv(output_path, index=False)
-    logger.info(f"Output saved to {output_path} ({len(df)} rows)")
+    try:
+        df = state.get("working_df")
+        if df is None:
+            raise ValueError("Missing 'working_df' in state — run_pipeline_node did not complete successfully.")
+        df.to_csv(output_path, index=False)
+        logger.info(f"Output saved to {output_path} ({len(df)} rows)")
+
+        cache_client = state.get("cache_client")
+        if cache_client is not None:
+            cache_client.get_stats().log_all()
+
+        # UC2: push Prometheus metrics (legacy MetricsCollector)
+        if _UC2_AVAILABLE:
+            try:
+                source_df = state.get("source_df")
+                rows_in = len(source_df) if source_df is not None else 0
+                rows_out = len(df)
+
+                null_rate = float(
+                    df[NULL_RATE_COLUMNS].isna().mean().mean()
+                ) if all(c in df.columns for c in NULL_RATE_COLUMNS) else 0.0
+
+                enrichment_stats = state.get("enrichment_stats") or {}
+                llm_calls = get_llm_call_count()
+
+                try:
+                    dedup_block = BlockRegistry.instance().get("fuzzy_deduplicate")
+                    dedup_rate = getattr(dedup_block, "last_dedup_rate", 0.0)
+                except Exception:
+                    dedup_rate = 0.0
+
+                quarantined_df = state.get("quarantined_df")
+                quarantine_rows = len(quarantined_df) if quarantined_df is not None else 0
+
+                dq_score_pre = float(state.get("dq_score_pre") or 0.0)
+                dq_score_post = float(state.get("dq_score_post") or 0.0)
+
+                run_start_t = _run_start or 0.0
+                block_duration = time.monotonic() - run_start_t if run_start_t else 0.0
+
+                metrics = {
+                    "rows_in": rows_in,
+                    "rows_out": rows_out,
+                    "dq_score_pre": dq_score_pre,
+                    "dq_score_post": dq_score_post,
+                    "dq_delta": round(dq_score_post - dq_score_pre, 4),
+                    "null_rate": round(null_rate, 4),
+                    "dedup_rate": round(float(dedup_rate), 4),
+                    "s1_count": int(enrichment_stats.get("deterministic", 0)),
+                    "s2_count": int(enrichment_stats.get("embedding", 0)),
+                    "s3_count": 0,
+                    "s4_count": int(enrichment_stats.get("llm", 0)),
+                    "cost_usd": round(llm_calls * 0.002, 6),
+                    "llm_calls": llm_calls,
+                    "quarantine_rows": quarantine_rows,
+                    "block_duration_seconds": round(block_duration, 3),
+                }
+
+                _MetricsCollector().push(metrics, source=source_name, run_id=state.get("_run_id", "unknown"))
+            except Exception as e:
+                logger.warning(f"UC2 MetricsCollector.push failed: {e}")
+
+        # Write structured run log
+        log_path = RunLogWriter().save(state, status="success", start_time=_run_start)
+
+        # Push Prometheus metrics via Pushgateway
+        if log_path is not None:
+            try:
+                import json as _json
+                run_log_dict = _json.loads(log_path.read_text(encoding="utf-8"))
+                MetricsExporter().push(run_log_dict)
+            except Exception as e:
+                logger.warning(f"MetricsExporter.push failed: {e}")
+
+    except Exception as e:
+        try:
+            RunLogWriter().save(state, status="partial", error=str(e), start_time=_run_start)
+        except Exception as inner:
+            logger.warning(f"RunLogWriter.save (partial) failed: {inner}")
+        raise
 
     return {"output_path": str(output_path)}
 
@@ -302,7 +545,11 @@ def build_graph() -> StateGraph:
     graph.add_node("save_output", save_output_node)
 
     graph.add_edge("load_source", "analyze_schema")
-    graph.add_edge("analyze_schema", "critique_schema")
+    graph.add_conditional_edges(
+        "analyze_schema",
+        route_after_analyze_schema,
+        {"critique_schema": "critique_schema", "check_registry": "check_registry"},
+    )
     graph.add_edge("critique_schema", "check_registry")
     graph.add_edge("check_registry", "plan_sequence")
     graph.add_edge("plan_sequence", "run_pipeline")

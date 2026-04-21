@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +12,14 @@ import pandas as pd
 from src.registry.block_registry import BlockRegistry
 from src.schema.models import UnifiedSchema
 from src.utils.csv_stream import CsvStreamReader, DEFAULT_CHUNK_SIZE
+
+NULL_RATE_COLUMNS: list[str] = ["product_name", "brand_name", "ingredients", "primary_category"]
+
+try:
+    from src.models.llm import _UC2_AVAILABLE, _emit_event  # noqa: PLC0415
+except ImportError:
+    _UC2_AVAILABLE = False  # type: ignore[assignment]
+    _emit_event = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +90,26 @@ class PipelineRunner:
                 "rows_out": len(df),
             })
 
+        run_id = config.get("run_id")
+        source_name = config.get("source_name")
+
         for block_name in expanded_sequence:
             rows_before = len(df)
+            ts_start = time.perf_counter()
+
+            # UC2: block_start
+            if _UC2_AVAILABLE and run_id:
+                try:
+                    _emit_event({
+                        "event_type": "block_start",
+                        "run_id": run_id,
+                        "source": source_name,
+                        "block": block_name,
+                        "rows_in": rows_before,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    })
+                except Exception as e:
+                    logger.warning(f"UC2 block_start emit failed ({block_name}): {e}")
 
             try:
                 block = self.block_registry.get(block_name)
@@ -93,6 +121,29 @@ class PipelineRunner:
                     f"Block '{block_name}' not found in registry. "
                     "Agent 2 should have generated this block — pipeline cannot continue."
                 )
+
+            # UC2: block_end
+            if _UC2_AVAILABLE and run_id:
+                try:
+                    duration_ms = int((time.perf_counter() - ts_start) * 1000)
+                    null_rates = {
+                        col: float(df[col].isna().mean())
+                        for col in NULL_RATE_COLUMNS
+                        if col in df.columns
+                    }
+                    _emit_event({
+                        "event_type": "block_end",
+                        "run_id": run_id,
+                        "source": source_name,
+                        "block": block_name,
+                        "rows_in": rows_before,
+                        "rows_out": len(df),
+                        "duration_ms": duration_ms,
+                        "null_rates": null_rates,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    })
+                except Exception as e:
+                    logger.warning(f"UC2 block_end emit failed ({block_name}): {e}")
 
         return df, audit_log
 

@@ -1,89 +1,123 @@
 # =========================
+
 # Python
+
 # =========================
-__pycache__/
+
+**pycache**/
 *.py[cod]
 *$py.class
 .claude/
 # =========================
+
 # Environment / secrets
+
 # =========================
+
 .env
 .env.*
 !.env.example
 
 # =========================
+
 # Virtual environments
+
 # =========================
+
 .venv/
 venv/
 env/
 
 # =========================
+
 # Testing / coverage
+
 # =========================
+
 .pytest_cache/
 .coverage
 htmlcov/
 
 # =========================
+
 # ML / Data artifacts
+
 # =========================
 
 # Raw & intermediate data
+
 data/
 
 # Generated outputs
+
 output/
 
-# Corpus artifacts (keep JSON, ignore heavy index)
-corpus/faiss_index.bin
+# FAISS / embeddings / large binaries
 
-# Optional: ignore all corpus except metadata
+*.bin
+*.faiss
+*.index
+
+# Specifically ignore your problematic file
+
+corpus/faiss_index.bin
+corpus/corpus_metadata.json
+
+# Optional: ignore entire corpus (uncomment if needed)
+
 # corpus/*
+
 # !corpus/*.json
 
 # =========================
+
 # Build / packaging
+
 # =========================
+
 build/
 dist/
 *.egg-info/
 
 # =========================
+
 # Logs
+
 # =========================
+
 *.log
 
 # =========================
+
 # OS / Editor junk
+
 # =========================
+
 .DS_Store
 Thumbs.db
 
 # VSCode
+
 .vscode/
 
 # JetBrains
+
 .idea/
 
 # =========================
+
 # Claude files
+
 # =========================
+
 .claude/
 CLAUDE.md
 
 # =========================
+
 # Misc
+
 # =========================
+
 *.tmp
 *.bak
-
-# # =========================
-# # Spec Kit
-# # =========================
-# specs
-# .specify
-# .opencode
-# .agents
-# .ruff_cache

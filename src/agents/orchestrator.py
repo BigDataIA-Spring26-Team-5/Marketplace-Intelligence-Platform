@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
+import time
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -42,6 +46,13 @@ _SPLIT_PRIMITIVES = {"SPLIT"}
 _UNIFY_PRIMITIVES = {"UNIFY"}
 # Primitive that drops the source col entirely
 _DELETE_PRIMITIVES = {"DELETE"}
+
+
+def _to_snake(name: str) -> str:
+    """camelCase/PascalCase → snake_case for pre-normalization before LLM schema analysis."""
+    s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', name)
+    s = re.sub(r'([a-z\d])([A-Z])', r'\1_\2', s)
+    return s.lower().replace(" ", "_").replace("-", "_")
 
 
 def _detect_enrichment_columns(unified_schema: UnifiedSchema, source_schema: dict) -> list[str]:
@@ -136,6 +147,7 @@ def load_source_node(state: PipelineState) -> dict:
         "source_df": df,
         "source_sep": _sep,
         "source_schema": schema,
+        "_run_start_time": time.monotonic(),
     }
 
 
@@ -184,6 +196,21 @@ def _parse_llm_response(result: dict) -> tuple[dict, list, list, list]:
     return column_mapping, [], [], gaps
 
 
+def _compute_schema_fingerprint(source_schema: dict, domain: str, schema_version: str) -> str:
+    """SHA-256-16 of sorted source column names + domain + schema version."""
+    cols = sorted(k for k in source_schema.keys() if k != "__meta__")
+    raw = json.dumps({"cols": cols, "domain": domain, "schema_version": schema_version})
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+_YAML_CACHE_FIELDS = (
+    "column_mapping", "operations", "revised_operations", "mapping_yaml_path",
+    "block_sequence", "enrichment_columns_to_generate", "enrich_alias_ops",
+    "derivable_gaps", "missing_columns", "gaps", "unresolvable_gaps",
+    "mapping_warnings", "enrich_alias_ops",
+)
+
+
 def analyze_schema_node(state: PipelineState) -> dict:
     """
     Agent 1 LLM call: analyze source schema against the gold-standard unified schema.
@@ -201,13 +228,43 @@ def analyze_schema_node(state: PipelineState) -> dict:
 
     unified = get_unified_schema()  # raises FileNotFoundError if absent
 
+    # ── YAML cache check ─────────────────────────────────────────────────────
+    cache_client = state.get("cache_client")
+    schema_version = str(getattr(unified, "version", "") or "")
+    _fingerprint = _compute_schema_fingerprint(source_schema, domain, schema_version)
+    if cache_client is not None:
+        from src.cache.client import CACHE_TTL_YAML
+        _cached = cache_client.get("yaml", _fingerprint)
+        if _cached is not None:
+            try:
+                cached_state = json.loads(_cached.decode())
+                # Re-materialize YAML file to disk if it has been deleted
+                yaml_text = cached_state.pop("__yaml_text__", None)
+                yaml_path = cached_state.get("mapping_yaml_path")
+                if yaml_text and yaml_path:
+                    _ypath = Path(yaml_path)
+                    if not _ypath.exists():
+                        _ypath.parent.mkdir(parents=True, exist_ok=True)
+                        _ypath.write_text(yaml_text)
+                        logger.info(f"YAML cache: re-materialized {yaml_path}")
+                logger.info(f"Cache HIT: loading YAML mapping from Redis (schema fingerprint {_fingerprint})")
+                cached_state["cache_yaml_hit"] = True
+                cached_state["unified_schema_existed"] = True
+                return cached_state
+            except Exception as e:
+                logger.warning(f"YAML cache hit but deserialization failed: {e} — running LLM")
+    # ─────────────────────────────────────────────────────────────────────────
+
     logger.info("Unified schema found — diffing against source")
 
     unified_for_prompt = unified.for_prompt()
 
     # Separate __meta__ from per-column profile before sending to LLM
     meta_block = source_schema.get("__meta__", {})
-    columns_only = {k: v for k, v in source_schema.items() if k != "__meta__"}
+    columns_only_raw = {k: v for k, v in source_schema.items() if k != "__meta__"}
+    # Pre-normalize camelCase/PascalCase → snake_case so LLM sees consistent names
+    _norm_map = {_to_snake(k): k for k in columns_only_raw}
+    columns_only = {_to_snake(k): v for k, v in columns_only_raw.items()}
 
     result = call_llm_json(
         model=model,
@@ -224,6 +281,17 @@ def analyze_schema_node(state: PipelineState) -> dict:
     )
 
     column_mapping, operations, unresolvable, legacy_gaps = _parse_llm_response(result)
+
+    # Remap normalized column names back to original source names
+    column_mapping = {_norm_map.get(src, src): tgt for src, tgt in column_mapping.items()}
+    for op in operations:
+        if op.get("source_column") and op["source_column"] in _norm_map:
+            op["source_column"] = _norm_map[op["source_column"]]
+        if isinstance(op.get("sources"), list):
+            op["sources"] = [_norm_map.get(s, s) for s in op["sources"]]
+    for gap in legacy_gaps:
+        if gap.get("source_column") and gap["source_column"] in _norm_map:
+            gap["source_column"] = _norm_map[gap["source_column"]]
 
     # ── Derive backward-compat derivable_gaps / missing_columns from operations ──
     derivable_gaps = []
@@ -319,8 +387,9 @@ def analyze_schema_node(state: PipelineState) -> dict:
             and u["target_column"] not in alias_targets
         ]
         if truly_unresolvable:
+            _critic_label = "preliminary — Agent 2 may correct" if state.get("with_critic", False) else "final — Critic disabled"
             logger.info(
-                f"Agent 1 unresolved columns (preliminary — Agent 2 may correct): "
+                f"Agent 1 unresolved columns ({_critic_label}): "
                 f"{[u['target_column'] for u in truly_unresolvable]}"
             )
         intercepted = [
@@ -403,8 +472,9 @@ def analyze_schema_node(state: PipelineState) -> dict:
             and mc["target_column"] not in alias_targets
         ]
         if truly_missing:
+            _critic_label = "preliminary — Agent 2 may correct" if state.get("with_critic", False) else "final — Critic disabled"
             logger.info(
-                f"Agent 1 unresolved columns (preliminary — Agent 2 may correct): "
+                f"Agent 1 unresolved columns ({_critic_label}): "
                 f"{[mc['target_column'] for mc in truly_missing]}"
             )
 
@@ -455,6 +525,8 @@ def analyze_schema_node(state: PipelineState) -> dict:
         "sampling_strategy": state.get("source_schema", {})
         .get("__meta__", {})
         .get("sampling_strategy", {}),
+        # Carry fingerprint so plan_sequence_node can write the full cache entry
+        "_schema_fingerprint": _fingerprint,
     }
 
 
@@ -565,6 +637,13 @@ def check_registry_node(state: PipelineState) -> dict:
     C. Write YAML and register DynamicMappingBlock
     """
     if "block_registry_hits" in state:
+        # On YAML cache hit the block was never registered in this process — re-register it.
+        yaml_path = state.get("mapping_yaml_path")
+        if yaml_path and Path(yaml_path).exists():
+            _domain = state.get("domain", "nutrition")
+            _block = DynamicMappingBlock(domain=_domain, yaml_path=yaml_path)
+            BlockRegistry.instance().register_block(_block)
+            logger.info(f"Re-registered DynamicMappingBlock from cached YAML: {yaml_path}")
         return {}
 
     block_reg = BlockRegistry.instance()

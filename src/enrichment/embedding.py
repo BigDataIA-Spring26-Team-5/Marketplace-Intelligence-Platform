@@ -29,6 +29,7 @@ def embedding_enrich(
     df: pd.DataFrame,
     enrich_cols: list[str],
     needs_enrichment: pd.Series,
+    cache_client=None,
 ) -> tuple[pd.DataFrame, pd.Series, dict]:
     """
     Use KNN corpus search to assign primary_category to unmatched rows.
@@ -78,7 +79,7 @@ def embedding_enrich(
     unresolved_rows = [df.loc[idx] for idx in unresolved_indices]
 
     try:
-        batch_results = knn_search_batch(unresolved_rows, index, metadata)
+        batch_results = knn_search_batch(unresolved_rows, index, metadata, cache_client=cache_client)
     except ImportError:
         logger.warning("S2 KNN: faiss not installed, skipping Strategy 2")
         needs_enrichment = df[enrich_cols].isna().any(axis=1)
