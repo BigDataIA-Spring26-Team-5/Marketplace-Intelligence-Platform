@@ -111,6 +111,29 @@
 
 ---
 
+### 9. Grafana Dashboard Data Source
+
+**Decision**: Prometheus Pushgateway as the data source for Grafana. After each pipeline run, `MetricsExporter` pushes labelled gauge metrics to a locally-running Pushgateway (`localhost:9091`). Grafana reads from Prometheus (`localhost:9090`), which scrapes Pushgateway.
+
+**Rationale**:
+- The pipeline is a batch process (not a long-running service), so a standard Prometheus scrape endpoint would be empty between runs. Pushgateway is the canonical solution for batch job metrics.
+- `prometheus_client` is already imported via UC2 modules (from `010-uc1-uc2-integration`) — no new dependency needed; only a new `push_to_gateway()` call.
+- Grafana connects to Prometheus as a standard datasource — no Grafana plugins needed.
+- Dashboard definition exported as a provisioned JSON file so it can be committed and loaded automatically on Grafana startup.
+
+**Alternatives considered**:
+- Direct Grafana JSON file datasource plugin: requires a non-default plugin install; less portable.
+- InfluxDB: new time-series DB dependency; overkill for a local school project.
+- Grafana Loki (log aggregation): designed for unstructured logs; less suited to numeric metric panels.
+- Writing metrics to a CSV and using Grafana CSV datasource: fragile; CSV datasource is an enterprise plugin.
+
+**Assumptions for local dev**:
+- Prometheus + Pushgateway + Grafana run via Docker Compose.
+- A `grafana/` directory at repo root holds provisioning config and dashboard JSON.
+- Grafana datasource `prometheus` is provisioned automatically pointing to `http://prometheus:9090`.
+
+---
+
 ### 8. Log Schema Completeness Guarantee
 
 **Decision**: `RunLogWriter` uses `.get()` with explicit defaults for every optional state field. Missing fields log a warning but never raise.
