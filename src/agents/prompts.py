@@ -62,13 +62,61 @@ normalization before deduplication. Add annotation:
   "normalize_before_dedup": true
 This signals the sequence planner that fixed cleaning blocks (whitespace, lowercase) will run before dedup.
 
+### Unix timestamp columns
+When a source column contains Unix epoch timestamps (int64 values like 1617293847) — typically
+column names ending in `_t`, `_at`, `_timestamp`, `_modified`, `_created`:
+  - primitive: FORMAT
+  - action: parse_date
+  - format: unix_timestamp   ← use exactly this string, not "timestamp_to_date" or any other variant
+
+Do NOT use `format_transform` for these columns.
+
+Example:
+  source: last_modified_t, sample_values: [1617293847, 1609459200]
+  → primitive: FORMAT, action: parse_date, format: unix_timestamp
+
+### Composite value columns (number + unit in same cell)
+When a source column contains values that embed both a numeric quantity AND a unit string
+(e.g., "30g", "1.5 oz", "500 ml", "1 TEA BAG (1.5g)"), and the unified schema needs both a
+numeric `serving_size` column AND a `serving_size_unit` column:
+
+Emit TWO separate FORMAT operations in this order:
+
+1. First op — extract the unit (MUST include keep_source: true):
+   {{
+     "primitive": "FORMAT",
+     "source_column": "serving_size",
+     "target_column": "serving_size_unit",
+     "target_type": "string",
+     "action": "regex_extract",
+     "pattern": "(g|oz|ml|l|kg|lb|mg)\\b",
+     "keep_source": true
+   }}
+
+2. Second op — extract the number (source is still intact because of keep_source):
+   {{
+     "primitive": "FORMAT",
+     "source_column": "serving_size",
+     "target_column": "serving_size",
+     "target_type": "float",
+     "action": "regex_extract",
+     "pattern": "([0-9]+(?:\\.[0-9]+)?)"
+   }}
+
+IMPORTANT ordering rules:
+- Unit extraction MUST come before numeric extraction in the operations[] list.
+- The first op MUST have `keep_source: true` — without it, the source column is dropped and the
+  second op has nothing to read from.
+- When source_column == target_column (the numeric op above), keep_source is not needed.
+- Optionally follow with a FORMAT + value_map to normalize unit variants (ONZ→oz, GRM→g, etc.).
+
 ## 8-Primitive Taxonomy
 
 Use EXACTLY these primitive names. Each unified column must appear in exactly one output list.
 
 | Primitive | When to use | Required fields |
 |-----------|-------------|-----------------|
-| RENAME       | Source col maps semantically, same data, no type change needed | source_column, target_column |
+| RENAME       | Source col maps semantically, same data, no type change needed. Use for ALL plain-string copies — product names, ingredient text, descriptions, brand text — even when renaming to a different target name. | source_column, target_column |
 | CAST         | Source col maps semantically but needs type conversion (e.g. int64→string) | source_column, target_column, target_type, source_type, action (one of: type_cast) |
 | FORMAT       | Source col needs value transformation (date parsing, regex, value mapping, etc.) | source_column, target_column, target_type, action (one of: parse_date, regex_replace, regex_extract, truncate_string, pad_string, value_map, format_transform), optional: mapping dict for value_map |
 | DELETE       | Source col has no place in unified schema — drop it | source_column |
@@ -77,6 +125,14 @@ Use EXACTLY these primitive names. Each unified column must appear in exactly on
 | UNIFY        | N source cols → 1 target col (first-non-null, concatenate, template) | sources list, target_column, action (one of: coalesce, concat_columns, string_template) |
 | DERIVE       | Complex extraction or conditional logic (keyword→bool, JSON field extract, arithmetic) | source_column (or sources list), target_column, target_type, action (one of: extract_json_field, conditional_map, expression, contains_flag) |
 | ENRICH_ALIAS | Required col has no source data, but a semantically equivalent enrichment col (enrichment: true) will fill it downstream | target_column, source_enrichment |
+
+**CRITICAL — extract_json_field vs RENAME:**
+- Use `DERIVE` + `extract_json_field` ONLY when `detected_structure` in the source profile is
+  `json_object` or `json_array`. This action calls `json.loads()` on each cell — plain text returns null.
+- For ANY plain-text column (detected_structure = string, plain, or absent) that maps to a unified
+  column: use `RENAME` regardless of whether source_col == target_col or not.
+- Columns like `ingredients_text`, `product_name`, `description`, `brand` — these are plain text.
+  Always RENAME, never DERIVE + extract_json_field.
 
 ## SPLIT action details
 For json_array_extract_multi, target_columns is a dict:
@@ -106,6 +162,13 @@ Additionally, for any required column with no source data path, check if an enri
 - NEVER map nutrient arrays (foodNutrients) to "ingredients" — nutrients are lab measurements, not ingredient lists.
 - Columns marked `"enrichment": true` will be filled by downstream enrichment blocks — do NOT map source columns to them and do NOT include them in operations[].
 - Columns marked `"computed": true` (dq_score_*, dq_delta) — skip entirely.
+- NEVER use DERIVE + extract_json_field for plain-text columns. If detected_structure is not
+  json_object or json_array, use RENAME instead. extract_json_field silently produces 100% null
+  for plain strings because it calls json.loads() internally.
+- For FORMAT + parse_date on Unix timestamps, always set format: unix_timestamp (not
+  "timestamp_to_date" or any other string). This is the only sentinel the mapper recognizes.
+- When emitting multiple FORMAT ops on the same source_column that produce different targets,
+  all ops except the last must include keep_source: true to prevent premature column deletion.
 - For a required non-enrichment column with no source data: if an enrichment column (`"enrichment": true`) semantically covers the same concept (same meaning, compatible type), output ENRICH_ALIAS instead of ADD set_null. Required fields: target_column (the required col), source_enrichment (the enrichment col). Example: `category` (required) has no source data but `primary_category` (enrichment) represents the same concept → ENRICH_ALIAS.
 - Only use ENRICH_ALIAS when you are confident the enrichment column will produce the same data the required column needs. Otherwise use ADD set_null.
 

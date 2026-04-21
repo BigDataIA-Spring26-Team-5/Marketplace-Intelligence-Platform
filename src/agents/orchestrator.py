@@ -1063,6 +1063,7 @@ def _llm_op_to_yaml(op: dict, column_mapping: dict) -> dict | None:
             "group",
             "mapping",
             "default",
+            "keep_source",
         ):
             if k in op:
                 result[k] = op[k]
