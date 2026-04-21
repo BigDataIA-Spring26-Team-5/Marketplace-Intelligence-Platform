@@ -88,6 +88,7 @@ def run_pipeline(
     resume: bool = False,
     force_fresh: bool = False,
     chunk_size: int = 10000,
+    with_critic: bool = False,
 ) -> dict:
     """Execute the pipeline with checkpoint support."""
     gcs_source = is_gcs_uri(source_path)
@@ -148,6 +149,7 @@ def run_pipeline(
         "domain": domain,
         "missing_column_decisions": {},
         "chunk_size": chunk_size,
+        "with_critic": with_critic,
     })
 
     try:
@@ -203,6 +205,11 @@ def main():
         default=10000,
         help="Rows per chunk for large file processing (default: 10000)",
     )
+    parser.add_argument(
+        "--with-critic",
+        action="store_true",
+        help="Enable Agent 2 (Critic) for schema correction review. Off by default.",
+    )
 
     args = parser.parse_args()
 
@@ -212,6 +219,7 @@ def main():
         resume=args.resume,
         force_fresh=args.force_fresh,
         chunk_size=args.chunk_size,
+        with_critic=args.with_critic,
     )
 
     rows = len(result.get("working_df", []))

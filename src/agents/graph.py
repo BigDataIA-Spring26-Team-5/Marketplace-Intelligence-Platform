@@ -32,8 +32,11 @@ OUTPUT_DIR = PROJECT_ROOT / "output"
 
 
 def route_after_analyze_schema(state: PipelineState) -> str:
-    """Skip critique_schema when YAML mapping was loaded from Redis cache."""
+    """Skip critique_schema when YAML mapping was loaded from Redis cache, or when Critic is disabled."""
     if state.get("cache_yaml_hit"):
+        return "check_registry"
+    if not state.get("with_critic", False):
+        logger.info("Agent 2 (Critic) skipped — use --with-critic to enable")
         return "check_registry"
     return "critique_schema"
 
