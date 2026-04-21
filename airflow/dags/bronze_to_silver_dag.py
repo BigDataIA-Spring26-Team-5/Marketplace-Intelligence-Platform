@@ -53,18 +53,23 @@ SOURCE_CONFIG: dict[str, dict[str, Any]] = {
         "domain":          "nutrition",
         "watermark_key":   "_watermarks/off_silver_watermark.json",
         "partition_depth": 3,
+        "partition_filter": None,
     },
     "usda": {
-        "gcs_prefix":      "usda/",
+        # Aqeel's bulk ingest writes to usda/bulk/{YYYY}/{MM}/{DD}/{type}/
+        # partition_depth=4 gives partitions like 2026/04/21/branded
+        "gcs_prefix":      "usda/bulk/",
         "domain":          "nutrition",
         "watermark_key":   "_watermarks/usda_silver_watermark.json",
-        "partition_depth": 3,
+        "partition_depth": 4,
+        "partition_filter": ["branded", "foundation"],  # only relevant food types
     },
     "openfda": {
         "gcs_prefix":      "openfda/",
         "domain":          "safety",
         "watermark_key":   "_watermarks/openfda_silver_watermark.json",
         "partition_depth": 3,
+        "partition_filter": None,
     },
 }
 
@@ -134,6 +139,12 @@ def load_source_to_silver(source: str, **kwargs) -> int:
         return 0
 
     new_partitions = [p for p in all_partitions if last_partition is None or p > last_partition]
+
+    # Filter to allowed partition suffixes if configured (e.g. only branded/foundation for USDA)
+    allowed = cfg.get("partition_filter")
+    if allowed:
+        new_partitions = [p for p in new_partitions if any(p.endswith(f) for f in allowed)]
+
     if not new_partitions:
         print(f"[{source}] Already up to date (watermark={last_partition}).")
         return 0
