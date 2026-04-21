@@ -36,9 +36,6 @@ data/
 # Generated outputs
 output/
 
-# Corpus artifacts (keep JSON, ignore heavy index)
-corpus/faiss_index.bin
-
 # Optional: ignore all corpus except metadata
 # corpus/*
 # !corpus/*.json
