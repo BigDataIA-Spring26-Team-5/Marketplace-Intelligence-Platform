@@ -8,6 +8,7 @@ Run 3 (optional): FDA Recalls again → registry hits, no Agent 2 call ("pipelin
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -28,7 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data"
 
 
-def run_pipeline(source_path: str, domain: str, run_label: str) -> dict:
+def run_pipeline(source_path: str, domain: str, run_label: str, cache_client=None) -> dict:
     """Execute the full LangGraph pipeline for one data source."""
     from src.agents.graph import build_graph
 
@@ -45,6 +46,7 @@ def run_pipeline(source_path: str, domain: str, run_label: str) -> dict:
             "source_path": source_path,
             "domain": domain,
             "missing_column_decisions": {},  # CLI default: accept nulls for all
+            "cache_client": cache_client,
         }
     )
 
@@ -91,6 +93,17 @@ def run_pipeline(source_path: str, domain: str, run_label: str) -> dict:
 
 def main():
     """Run the full demo sequence."""
+    parser = argparse.ArgumentParser(description="ETL pipeline demo")
+    parser.add_argument("--no-cache", action="store_true", help="Bypass Redis cache entirely")
+    parser.add_argument("--flush-cache", action="store_true", help="Clear all pipeline cache keys before running")
+    args = parser.parse_args()
+
+    from src.cache.client import CacheClient
+    cache_client = None if args.no_cache else CacheClient()
+    if args.flush_cache and cache_client is not None:
+        deleted = cache_client.flush_all_prefixes()
+        logger.info(f"Cache flushed: {deleted} keys deleted")
+
     logger.info("Schema-Driven Self-Extending ETL Pipeline — Demo")
     logger.info(f"Project root: {PROJECT_ROOT}")
 
@@ -104,13 +117,13 @@ def main():
             sys.exit(1)
 
     # ── Run 1: USDA FoodData (establishes unified schema) ──
-    result_1 = run_pipeline(usda_path, "nutrition", "Run 1: USDA FoodData")
+    result_1 = run_pipeline(usda_path, "nutrition", "Run 1: USDA FoodData", cache_client=cache_client)
 
     # ── Run 2: FDA Recalls (gap detection + code generation) ──
-    result_2 = run_pipeline(fda_path, "safety", "Run 2: FDA Recalls")
+    result_2 = run_pipeline(fda_path, "safety", "Run 2: FDA Recalls", cache_client=cache_client)
 
     # ── Run 3: FDA Recalls again (registry hits — "pipeline remembered") ──
-    result_3 = run_pipeline(fda_path, "safety", "Run 3: FDA Recalls (replay)")
+    result_3 = run_pipeline(fda_path, "safety", "Run 3: FDA Recalls (replay)", cache_client=cache_client)
 
     # Final summary
     logger.info(f"\n{'=' * 60}")

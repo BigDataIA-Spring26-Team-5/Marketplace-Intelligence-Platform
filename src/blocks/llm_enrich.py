@@ -59,7 +59,7 @@ class LLMEnrichBlock(Block):
         }
 
         # Strategy 2: KNN corpus search (primary_category only)
-        df, needs_enrichment, s2_stats = embedding_enrich(df, enrich_cols, needs_enrichment)
+        df, needs_enrichment, s2_stats = embedding_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"))
         stats["embedding"] = s2_stats["resolved"]
         logger.info(f"  S2 (KNN corpus): resolved {stats['embedding']} rows")
 
@@ -67,7 +67,7 @@ class LLMEnrichBlock(Block):
         unresolved_before_s3 = needs_enrichment.copy()
 
         # Strategy 3: RAG-augmented LLM (primary_category only)
-        df, needs_enrichment, s3_stats = llm_enrich(df, enrich_cols, needs_enrichment)
+        df, needs_enrichment, s3_stats = llm_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"))
         stats["llm"] = s3_stats["resolved"]
         stats["unresolved"] = int(df["primary_category"].isna().sum()) if "primary_category" in df.columns else 0
         logger.info(f"  S3 (RAG-LLM): resolved {stats['llm']} rows")
