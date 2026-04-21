@@ -549,7 +549,11 @@ def save_output_node(state: PipelineState) -> dict:
                     "block_duration_seconds": round(block_duration, 3),
                 }
 
-                _MetricsCollector().push(metrics, source=source_name, run_id=state.get("_run_id", "unknown"))
+                _MetricsCollector().push(
+                    run_id=state.get("_run_id", "unknown"),
+                    source=source_name,
+                    metrics_dict=metrics,
+                )
             except Exception as e:
                 logger.warning(f"UC2 MetricsCollector.push failed: {e}")
 

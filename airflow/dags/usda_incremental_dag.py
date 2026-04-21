@@ -27,7 +27,7 @@ USDA_API_KEY   = os.getenv("USDA_API_KEY", "gZJUqbshltC7qfQ9lk0meZcMJjazosPLfPVn
 USDA_LIST_URL  = "https://api.nal.usda.gov/fdc/v1/foods/list"
 PAGE_SIZE      = 200
 MAX_PAGES      = 500
-DATA_TYPES     = ["Branded", "Foundation", "SR Legacy", "Survey (FNDDS)"]
+DATA_TYPES     = ["Branded", "Foundation"]
 
 GCS_ACCESS_KEY = os.getenv("GCS_ACCESS_KEY", "GOOG1ECMI5556PKW4BG6QK3VL43KFGUZ2XZWA4ZGVF3IVDWK3Q2X6HYAWQ535")
 GCS_SECRET_KEY = os.getenv("GCS_SECRET_KEY", "/yluMFMGYXpgcDtKnzszQfRKKyfbFBGpxmcpSQYx")
