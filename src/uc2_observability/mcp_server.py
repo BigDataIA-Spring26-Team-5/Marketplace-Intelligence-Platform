@@ -405,16 +405,13 @@ def get_dedup_stats(body: ToolInput) -> ToolResult:
     if body.run_id:
         clauses.append("run_id = %s")
         params.append(body.run_id)
-    if body.source:
-        clauses.append("source = %s")
-        params.append(body.source)
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(body.limit or 200)
 
     rows, cached = _pg_query(
         f"""
-        SELECT run_id, source, cluster_id, canonical, members, merge_decisions, ts
+        SELECT run_id, cluster_id, canonical, members, merge_decisions, ts
         FROM   dedup_clusters
         {where}
         ORDER  BY ts DESC
