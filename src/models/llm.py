@@ -18,7 +18,7 @@ for _name in ("LiteLLM", "litellm", "httpx", "httpcore"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
 # ── Model routing — override via env vars ────────────────────────────
-_ORCHESTRATOR_MODEL  = os.environ.get("ORCHESTRATOR_LLM",  "deepseek/deepseek-chat")
+_ORCHESTRATOR_MODEL  = os.environ.get("ORCHESTRATOR_LLM",  "claude-sonnet-4-20250514")
 _CODEGEN_MODEL       = os.environ.get("CODEGEN_LLM",       "deepseek/deepseek-chat")
 _ENRICHMENT_MODEL    = os.environ.get("ENRICHMENT_LLM",    "groq/llama-3.3-70b-versatile")
 _CRITIC_MODEL        = os.environ.get("CRITIC_LLM",        "anthropic/claude-sonnet-4-6")

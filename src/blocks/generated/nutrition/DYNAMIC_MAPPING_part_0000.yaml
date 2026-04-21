@@ -18,16 +18,12 @@ column_operations:
   action: extract_json_field
   source: ingredients_text
   key: ''
-- target: serving_size
-  type: float
-  action: regex_extract
-  source: serving_size
-  pattern: ([0-9]+(?:\.[0-9]+)?)
 - target: serving_size_unit
   type: string
   action: regex_extract
   source: serving_size
   pattern: (g|ONZ|oz|ml|l|kg|lb)\b
+  keep_source: true
 - target: serving_size_unit
   type: string
   action: value_map
@@ -40,6 +36,11 @@ column_operations:
     l: l
     kg: kg
     lb: lb
+- target: serving_size
+  type: float
+  action: regex_extract
+  source: serving_size
+  pattern: ([0-9]+(?:\.[0-9]+)?)
 - target: published_date
   type: string
   action: parse_date

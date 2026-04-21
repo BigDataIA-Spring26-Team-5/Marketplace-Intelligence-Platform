@@ -317,7 +317,7 @@ def _handle_regex_extract(df: pd.DataFrame, op: dict) -> pd.DataFrame:
     extract_pattern = pattern if has_group else f"({pattern})"
     extracted = df[source].astype("string").str.extract(extract_pattern, expand=False)
     df[target] = extracted
-    if source != target and source in df.columns:
+    if source != target and source in df.columns and not op.get("keep_source", False):
         df = df.drop(columns=[source])
     return df
 
