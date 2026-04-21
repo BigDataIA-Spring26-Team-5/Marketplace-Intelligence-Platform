@@ -1,84 +1,125 @@
 # Schema-Driven ETL Pipeline
 
-This project implements a schema-driven ETL pipeline for heterogeneous food
-product datasets. The current architecture is a declarative, YAML-first flow:
-Agent 1 analyzes schema gaps, Agent 2 critiques the proposed operations, Agent 3
-plans block order, and execution runs through registered blocks plus a generated
-`DynamicMappingBlock`.
+Schema-driven ETL pipeline for heterogeneous food product datasets. Auto-detects schema gaps against a unified 14-column schema, generates YAML-based transforms via a 3-agent LangGraph flow, and executes them in a chunked streaming pipeline with multi-tier enrichment and DQ scoring.
 
-## Current Architecture
+## Architecture
 
-The repository does not use runtime code generation for transformations.
-Dataset-specific transformations are persisted as YAML under
-`src/blocks/generated/<domain>/` and replayed on later runs.
+No runtime code generation. Dataset-specific transforms persist as YAML under `src/blocks/generated/<domain>/` and replay on later runs.
 
-Pipeline graph order:
-1. `load_source`
-2. `analyze_schema`
-3. `critique_schema`
-4. `check_registry`
-5. `plan_sequence`
-6. `run_pipeline`
-7. `save_output`
+### Pipeline Graph (`src/agents/graph.py`)
 
-Agent responsibilities:
-- **Agent 1**: schema analysis against `config/unified_schema.json`
-- **Agent 2**: reasoning-model critique of Agent 1 operations
-- **Agent 3**: block-sequence planning from the available registry pool
+| Node | What it does |
+|------|-------------|
+| `load_source` | Auto-detect delimiter, adaptive sampling (~5K rows) |
+| `analyze_schema` | Agent 1 maps source → unified schema; emits RENAME/CAST/FORMAT/DELETE/ADD/SPLIT/UNIFY/DERIVE ops |
+| `critique_schema` | Agent 2 (reasoning model) validates ops against 7 deterministic rules |
+| `check_registry` | HITL gate — human decides handling for missing columns |
+| `plan_sequence` | Agent 3 reorders registered blocks (cannot add/remove) |
+| `run_pipeline` | Executes block sequence, 10K rows/chunk |
+| `save_output` | Persists clean + quarantined DataFrames |
 
-## Core Behaviors
+**LLMs**: `deepseek/deepseek-chat` (Agents 1 & 3), `deepseek/deepseek-reasoner` (Agent 2) via LiteLLM.
 
-- **Schema-first planning**: every dataset is compared with the unified schema
-  before execution.
-- **Declarative transforms**: schema operations execute through YAML consumed by
-  `src/blocks/dynamic_mapping.py`.
-- **Human approval gates**: the Streamlit UI exposes mapping review and
-  quarantine review.
-- **Cascading enrichment**: deterministic extraction runs first, then KNN corpus
-  lookup, then RAG-assisted LLM categorization for `primary_category`.
-- **Safety boundaries**: `allergens`, `dietary_tags`, and `is_organic` are
-  deterministic-only enrichment fields and are not sent to probabilistic tiers.
-- **DQ enforcement**: the pipeline computes `dq_score_pre` and `dq_score_post`
-  and quarantines rows that still fail required-field validation.
+### Blocks (`src/blocks/`)
 
-## Project Layout
+- **13 static blocks**: cleaning (`strip_whitespace`, `lowercase_brand`, `remove_noise_words`), dedup (`fuzzy_deduplicate`, `golden_record_select`), enrichment (`extract_allergens`, `llm_enrich`), DQ scoring (`dq_score_pre`, `dq_score_post`)
+- **Dynamic blocks**: generated from `src/blocks/generated/<domain>/DYNAMIC_MAPPING_*.yaml` — one file per source dataset
 
-```text
-src/
-├── agents/
-├── blocks/
-├── enrichment/
-├── models/
-├── pipeline/
-├── registry/
-├── schema/
-└── ui/
+### Enrichment Tiers (`src/enrichment/`)
 
-tests/
+Cascading, three-tier for missing fields:
+
+1. **S1 Deterministic** — rule-based for `allergens`, `dietary_tags`, `is_organic`
+2. **S2 KNN** — FAISS + sentence-transformers for `primary_category`
+3. **S3 RAG-LLM** — deepseek-chat + retrieved context for low-confidence categories
+
+> **Safety boundary**: `allergens`, `dietary_tags`, `is_organic` are S1-only — never sent to probabilistic tiers.
+
+### Core Behaviors
+
+- **Schema-first**: every dataset compared to `config/unified_schema.json` before execution
+- **DQ enforcement**: `dq_score_pre`/`dq_score_post` computed; rows failing required-field validation are quarantined
+- **Checkpoint/resume**: SQLite-backed state at `checkpoints.db` via `src/pipeline/checkpoint/`
+- **Audit trail**: every block logs `rows_in`/`rows_out`
+
+### Observability (`src/uc2_observability/`)
+
+- Dashboard: run history, DQ trends, cost tracking
+- Anomaly detection on enrichment stats
+- RAG chatbot over stored run logs (ChromaDB)
+
+## Setup
+
+**Requirements**: Python 3.11, Poetry
+
+```bash
+poetry install
+cp .env.example .env   # fill in DEEPSEEK_API_KEY
 ```
 
-Generated mapping artifacts live under `src/blocks/generated/`.
+**Key env vars** (`.env`):
 
-## Development
+```
+DEEPSEEK_API_KEY=sk-...
+FAISS_INDEX_PATH=corpus/faiss_index.bin
+METADATA_PATH=corpus/metadata.json
+CHROMA_DB_PATH=.specify/chroma_db
+PIPELINE_RUN_TYPE=dev   # dev | demo | prod
+```
 
-Repository guidance:
-- Python 3.11
-- `pandas` for DataFrame work
-- LiteLLM-backed model access
-- LangGraph for orchestration
-- Streamlit for interactive review
+**Docker services** (Kafka, Zookeeper, Airflow):
 
-Validation command:
+```bash
+docker-compose up
+```
+
+## Running
+
+```bash
+# Streamlit HITL wizard
+streamlit run app.py
+
+# CLI
+python -m src.pipeline.cli --source data/usda_fooddata_sample.csv --domain nutrition
+python -m src.pipeline.cli --source data/fda_recalls_sample.csv --resume
+python -m src.pipeline.cli --source data/usda_sample_raw.csv --force-fresh
+
+# Build FAISS corpus index
+python scripts/build_corpus.py
+```
+
+## Tests & Lint
 
 ```bash
 cd src && pytest && ruff check .
 ```
 
-## Notes For Contributors
+## Project Layout
 
-- Keep architecture docs aligned with the current three-agent, YAML-only flow.
-- Do not reintroduce runtime-generated Python transforms without a constitution
-  amendment.
-- If a change affects schema handling, enrichment safety, DQ scoring, or
-  quarantine behavior, update the spec/plan/tasks artifacts as part of the same
-  change.
+```
+src/
+├── agents/          # LangGraph nodes + prompts + state
+├── blocks/          # Static blocks + DynamicMappingBlock
+│   └── generated/   # Per-domain/dataset YAML mappings
+├── enrichment/      # S1 deterministic, S2 KNN, S3 RAG-LLM
+├── models/          # LiteLLM model wrappers
+├── pipeline/        # Runner, CLI, checkpoint manager
+├── registry/        # Block registry
+├── schema/          # Analyzer, sampler, schema models
+├── ui/              # Streamlit components
+├── uc2_observability/
+├── uc3_search/
+└── uc4_recommendations/
+
+config/
+├── unified_schema.json   # Master 14-column schema
+└── litellm_config.yaml
+
+specs/               # Feature specs (001–006)
+```
+
+## Contributor Notes
+
+- Do not reintroduce runtime-generated Python transforms — YAML-only is a constitutional constraint.
+- Changes to schema handling, enrichment safety, DQ scoring, or quarantine behavior must update the relevant spec/plan/tasks artifacts in the same PR.
+- Keep architecture docs aligned with the three-agent, YAML-only flow.
