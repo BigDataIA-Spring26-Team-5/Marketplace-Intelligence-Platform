@@ -110,3 +110,7 @@ class PipelineState(TypedDict, total=False):
     cache_client: Optional[Any]  # CacheClient instance; None = no-cache mode
     cache_yaml_hit: bool  # True when analyze_schema loaded from Redis (skips critique_schema)
     _schema_fingerprint: Optional[str]  # SHA-256-16 key; carried from analyze_schema to plan_sequence for cache write
+
+    # UC2 observability
+    _run_id: str  # UUID4 generated at start of run_pipeline_node; threaded to all emission points
+    _run_start_time: float  # time.perf_counter() at run start; used for block_duration_seconds metric

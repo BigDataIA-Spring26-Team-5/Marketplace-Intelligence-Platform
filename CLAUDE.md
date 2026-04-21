@@ -108,7 +108,10 @@ Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THR
 - Redis at `localhost:6379` (new); FAISS index (existing, unaffected) (009-redis-cache-layer)
 - Python 3.11 + `redis-py` (existing cache), `litellm` (existing LLM routing), `pandas` (existing), `streamlit` (existing UI) (010-observability-rag-chatbot)
 - Local JSON files in `output/run_logs/` (gitignored) (010-observability-rag-chatbot)
-- Python 3.11 + `kafka-python`/`confluent-kafka` and `prometheus_client` imported indirectly via UC2 modules; `uuid`, `hashlib`, `time`, `datetime` (stdlib) added directly (010-observability-rag-chatbot)
+- Python 3.11 + `kafka-python`/`confluent-kafka` and `prometheus_client` imported indirectly via UC2 modules; `uuid`, `hashlib`, `time`, `datetime` (stdlib) added directly (010-uc1-uc2-integration)
+- `NULL_RATE_COLUMNS` constant in `src/pipeline/runner.py` controls null-rate columns in block_end Kafka events (010-uc1-uc2-integration)
+- UC2 import guard in `src/models/llm.py` — `_UC2_AVAILABLE`, `_emit_event`, `_MetricsCollector` exported from that module; all other files import UC2 symbols from there (010-uc1-uc2-integration)
 
 ## Recent Changes
 - 009-redis-cache-layer: Added Python 3.11 + `redis-py` (new), `numpy` (existing, for embedding serialization), `hashlib` (stdlib), `argparse` (stdlib)
+- 010-uc1-uc2-integration: Wired UC1 pipeline to emit Kafka events (block_start/block_end, run_started/run_completed, quarantine, dedup_cluster) and push Prometheus metrics via UC2 modules; added `_llm_call_counter` to `src/models/llm.py`; added `_run_id`/`_run_start_time` to PipelineState; added `last_clusters`/`last_dedup_rate` to FuzzyDeduplicateBlock

@@ -68,3 +68,44 @@ def call_llm_json(model: str, messages: list[dict], temperature: float = 0.0) ->
         if m:
             return json.loads(m.group(1).strip())
         raise
+
+
+# ── LLM call counter (UC2 observability) ─────────────────────────────
+
+_llm_call_counter: int = 0
+
+
+def reset_llm_counter() -> None:
+    global _llm_call_counter
+    _llm_call_counter = 0
+
+
+def get_llm_call_count() -> int:
+    return _llm_call_counter
+
+
+def get_observability_llm() -> str:
+    """Model string for UC2 observability queries."""
+    return get_enrichment_llm()
+
+
+# Patch call_llm to increment counter
+_original_call_llm = call_llm
+
+
+def call_llm(model: str, messages: list[dict], temperature: float = 0.0) -> str:  # type: ignore[misc]
+    global _llm_call_counter
+    _llm_call_counter += 1
+    return _original_call_llm(model, messages, temperature)
+
+
+# ── UC2 import guard ──────────────────────────────────────────────────
+
+try:
+    from src.uc2_observability.kafka_to_pg import emit_event as _emit_event  # type: ignore[import]
+    from src.uc2_observability.metrics_collector import MetricsCollector as _MetricsCollector  # type: ignore[import]
+    _UC2_AVAILABLE = True
+except ImportError:
+    _emit_event = None  # type: ignore[assignment]
+    _MetricsCollector = None  # type: ignore[assignment]
+    _UC2_AVAILABLE = False
