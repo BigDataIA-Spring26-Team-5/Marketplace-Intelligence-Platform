@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -184,6 +186,21 @@ def _parse_llm_response(result: dict) -> tuple[dict, list, list, list]:
     return column_mapping, [], [], gaps
 
 
+def _compute_schema_fingerprint(source_schema: dict, domain: str, schema_version: str) -> str:
+    """SHA-256-16 of sorted source column names + domain + schema version."""
+    cols = sorted(k for k in source_schema.keys() if k != "__meta__")
+    raw = json.dumps({"cols": cols, "domain": domain, "schema_version": schema_version})
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+_YAML_CACHE_FIELDS = (
+    "column_mapping", "operations", "revised_operations", "mapping_yaml_path",
+    "block_sequence", "enrichment_columns_to_generate", "enrich_alias_ops",
+    "derivable_gaps", "missing_columns", "gaps", "unresolvable_gaps",
+    "mapping_warnings", "enrich_alias_ops",
+)
+
+
 def analyze_schema_node(state: PipelineState) -> dict:
     """
     Agent 1 LLM call: analyze source schema against the gold-standard unified schema.
@@ -200,6 +217,33 @@ def analyze_schema_node(state: PipelineState) -> dict:
     model = get_orchestrator_llm()
 
     unified = get_unified_schema()  # raises FileNotFoundError if absent
+
+    # ── YAML cache check ─────────────────────────────────────────────────────
+    cache_client = state.get("cache_client")
+    schema_version = str(getattr(unified, "version", "") or "")
+    _fingerprint = _compute_schema_fingerprint(source_schema, domain, schema_version)
+    if cache_client is not None:
+        from src.cache.client import CACHE_TTL_YAML
+        _cached = cache_client.get("yaml", _fingerprint)
+        if _cached is not None:
+            try:
+                cached_state = json.loads(_cached.decode())
+                # Re-materialize YAML file to disk if it has been deleted
+                yaml_text = cached_state.pop("__yaml_text__", None)
+                yaml_path = cached_state.get("mapping_yaml_path")
+                if yaml_text and yaml_path:
+                    _ypath = Path(yaml_path)
+                    if not _ypath.exists():
+                        _ypath.parent.mkdir(parents=True, exist_ok=True)
+                        _ypath.write_text(yaml_text)
+                        logger.info(f"YAML cache: re-materialized {yaml_path}")
+                logger.info(f"Cache HIT: loading YAML mapping from Redis (schema fingerprint {_fingerprint})")
+                cached_state["cache_yaml_hit"] = True
+                cached_state["unified_schema_existed"] = True
+                return cached_state
+            except Exception as e:
+                logger.warning(f"YAML cache hit but deserialization failed: {e} — running LLM")
+    # ─────────────────────────────────────────────────────────────────────────
 
     logger.info("Unified schema found — diffing against source")
 
@@ -455,6 +499,8 @@ def analyze_schema_node(state: PipelineState) -> dict:
         "sampling_strategy": state.get("source_schema", {})
         .get("__meta__", {})
         .get("sampling_strategy", {}),
+        # Carry fingerprint so plan_sequence_node can write the full cache entry
+        "_schema_fingerprint": _fingerprint,
     }
 
 
@@ -565,6 +611,13 @@ def check_registry_node(state: PipelineState) -> dict:
     C. Write YAML and register DynamicMappingBlock
     """
     if "block_registry_hits" in state:
+        # On YAML cache hit the block was never registered in this process — re-register it.
+        yaml_path = state.get("mapping_yaml_path")
+        if yaml_path and Path(yaml_path).exists():
+            _domain = state.get("domain", "nutrition")
+            _block = DynamicMappingBlock(domain=_domain, yaml_path=yaml_path)
+            BlockRegistry.instance().register_block(_block)
+            logger.info(f"Re-registered DynamicMappingBlock from cached YAML: {yaml_path}")
         return {}
 
     block_reg = BlockRegistry.instance()

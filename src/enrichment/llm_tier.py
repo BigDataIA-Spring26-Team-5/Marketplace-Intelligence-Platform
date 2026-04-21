@@ -11,8 +11,10 @@ If S1 extraction fails, those fields stay null — they are not inferred here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+from typing import Optional
 
 import pandas as pd
 
@@ -45,6 +47,16 @@ BATCH_SYSTEM_PROMPT = (
 )
 
 _LLM_BATCH_SIZE = int(__import__("os").environ.get("LLM_ENRICH_BATCH_SIZE", "20"))
+
+
+def _compute_content_hash(product_name: str, description: str, enrich_cols: list[str]) -> str:
+    """SHA-256-16 of (product_name, description, sorted enrich_cols)."""
+    raw = json.dumps({
+        "name": (product_name or "").strip().lower(),
+        "desc": (description or "").strip(),
+        "cols": sorted(enrich_cols),
+    })
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def _build_rag_prompt(row: pd.Series, neighbors: list[dict]) -> str:
@@ -101,6 +113,7 @@ def llm_enrich(
     df: pd.DataFrame,
     enrich_cols: list[str],
     needs_enrichment: pd.Series,
+    cache_client=None,
 ) -> tuple[pd.DataFrame, pd.Series, dict]:
     """
     Call LLM with RAG context for rows where primary_category is still null.
@@ -126,12 +139,48 @@ def llm_enrich(
     corpus_updated = False
     resolved = 0
 
+    from src.cache.client import CACHE_TTL_LLM
+
     for batch_start in range(0, len(rows_to_enrich), _LLM_BATCH_SIZE):
         batch_indices = rows_to_enrich[batch_start:batch_start + _LLM_BATCH_SIZE]
         batch_rows = [df.loc[idx] for idx in batch_indices]
 
+        # Split batch into cache hits and misses
+        cache_hit_map: dict[int, dict] = {}  # real_idx → cached result dict
+        miss_indices: list[int] = []
+        miss_rows: list[pd.Series] = []
+
+        if cache_client is not None:
+            for idx, row in zip(batch_indices, batch_rows):
+                product_name = str(row.get("product_name") or "")
+                description = str(row.get("ingredients") or row.get("description") or "")
+                content_hash = _compute_content_hash(product_name, description, enrich_cols)
+                cached = cache_client.get("llm", content_hash)
+                if cached is not None:
+                    try:
+                        cache_hit_map[idx] = json.loads(cached.decode())
+                    except Exception:
+                        miss_indices.append(idx)
+                        miss_rows.append(row)
+                else:
+                    miss_indices.append(idx)
+                    miss_rows.append(row)
+        else:
+            miss_indices = list(batch_indices)
+            miss_rows = batch_rows
+
+        # Apply cache hits
+        for real_idx, cached_result in cache_hit_map.items():
+            for col, val in cached_result.items():
+                if col in df.columns and val is not None:
+                    df.at[real_idx, col] = val
+            resolved += 1
+
+        if not miss_indices:
+            continue
+
         batch_neighbors: list[list[dict]] = []
-        for row in batch_rows:
+        for row in miss_rows:
             raw = row.get("_knn_neighbors")
             try:
                 neighbors = json.loads(raw) if pd.notna(raw) and raw else []
@@ -139,7 +188,7 @@ def llm_enrich(
                 neighbors = []
             batch_neighbors.append(neighbors)
 
-        prompt = _build_batch_rag_prompt(batch_rows, batch_neighbors)
+        prompt = _build_batch_rag_prompt(miss_rows, batch_neighbors)
 
         try:
             result = call_llm_json(
@@ -157,15 +206,26 @@ def llm_enrich(
                 category = item.get("primary_category")
                 if local_idx is None or not isinstance(local_idx, int):
                     continue
-                if local_idx < 0 or local_idx >= len(batch_indices):
+                if local_idx < 0 or local_idx >= len(miss_indices):
                     continue
-                real_idx = batch_indices[local_idx]
+                real_idx = miss_indices[local_idx]
                 if category is not None:
                     df.at[real_idx, "primary_category"] = category
                     resolved += 1
                     if index is not None:
                         add_to_corpus(df.loc[real_idx], category, index, metadata)
                         corpus_updated = True
+                    # Cache the result for future partitions
+                    if cache_client is not None:
+                        try:
+                            row = miss_rows[local_idx]
+                            product_name = str(row.get("product_name") or "")
+                            description = str(row.get("ingredients") or row.get("description") or "")
+                            content_hash = _compute_content_hash(product_name, description, enrich_cols)
+                            row_result = {col: df.at[real_idx, col] for col in enrich_cols if col in df.columns}
+                            cache_client.set("llm", content_hash, json.dumps(row_result).encode(), ttl=CACHE_TTL_LLM)
+                        except Exception as _ce:
+                            logger.debug(f"LLM cache write skipped: {_ce}")
 
         except Exception as e:
             logger.warning(f"S3 RAG-LLM: batch [{batch_start}:{batch_start + _LLM_BATCH_SIZE}] failed: {e}")

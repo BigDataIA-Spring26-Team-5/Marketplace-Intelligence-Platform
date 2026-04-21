@@ -86,10 +86,20 @@ def _init_state() -> None:
         "log_entries": [],
         "hitl_decisions": {},
         "error": None,
+        "cache_client": None,
+        "cache_no_cache": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+    # Initialize CacheClient once per session if not already done
+    if st.session_state.get("cache_client") is None and not st.session_state.get("cache_no_cache"):
+        try:
+            from src.cache.client import CacheClient
+            st.session_state.cache_client = CacheClient()
+        except Exception:
+            st.session_state.cache_client = None
 
 
 def _advance(new_step: int) -> None:
@@ -144,6 +154,7 @@ def _step_0_source_selection() -> None:
             "source_path": source_path,
             "domain": domain,
             "missing_column_decisions": {},
+            "cache_client": st.session_state.get("cache_client"),
         }
         st.session_state.pipeline_state = ps
         with st.spinner("Loading source + profiling schema…"):
@@ -558,8 +569,29 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    # Sidebar: live log feed
+    # Sidebar: cache controls + live log feed
     with st.sidebar:
+        st.markdown("### Cache Controls")
+        no_cache = st.checkbox(
+            "Bypass cache (--no-cache)",
+            value=st.session_state.get("cache_no_cache", False),
+            key="cache_no_cache_toggle",
+        )
+        if no_cache != st.session_state.get("cache_no_cache", False):
+            st.session_state.cache_no_cache = no_cache
+            if no_cache:
+                st.session_state.cache_client = None
+            else:
+                from src.cache.client import CacheClient
+                st.session_state.cache_client = CacheClient()
+        if st.button("Flush cache", key="flush_cache_btn"):
+            cc = st.session_state.get("cache_client")
+            if cc is not None:
+                deleted = cc.flush_all_prefixes()
+                st.success(f"Flushed {deleted} cache keys")
+            else:
+                st.warning("Cache not connected or bypass mode active")
+        st.markdown("---")
         st.markdown("### Live Logs")
         entries = st.session_state.get("log_entries", [])
         if entries:

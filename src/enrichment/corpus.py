@@ -10,6 +10,7 @@ Metadata is stored at: corpus/corpus_metadata.json
 (both relative to project root, created automatically)
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -51,6 +52,14 @@ def _get_model():
     return _MODEL
 
 _MODEL = None
+
+_MODEL_NAME = "all-MiniLM-L6-v2"
+
+
+def _compute_embedding_key(model_name: str, text: str) -> str:
+    """SHA-256-16 of (model_name, text)."""
+    raw = json.dumps({"model": model_name, "text": text})
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def _build_row_text(row: pd.Series) -> str:
@@ -217,6 +226,7 @@ def knn_search_batch(
     index,
     metadata: list[dict],
     k: int = K_NEIGHBORS,
+    cache_client=None,
 ) -> list[tuple[Optional[str], float, list[dict]]]:
     """
     Batch KNN search: one model.encode() call for all rows.
@@ -229,6 +239,7 @@ def knn_search_batch(
         return [(None, 0.0, []) for _ in rows]
 
     import faiss
+    from src.cache.client import CACHE_TTL_EMB
 
     texts = [_build_row_text(row) for row in rows]
     valid_mask = [bool(t.strip()) for t in texts]
@@ -237,7 +248,50 @@ def knn_search_batch(
         return [(None, 0.0, []) for _ in rows]
 
     valid_texts = [t for t, v in zip(texts, valid_mask) if v]
-    embeddings = model.encode(valid_texts, batch_size=64, show_progress_bar=False).astype(np.float32)
+
+    # Split valid_texts into cached and uncached embeddings
+    embedding_dim = model.get_sentence_embedding_dimension()
+    cached_embeddings: dict[int, np.ndarray] = {}  # position in valid_texts → vector
+    uncached_positions: list[int] = []
+    uncached_texts: list[str] = []
+
+    if cache_client is not None:
+        for i, text in enumerate(valid_texts):
+            key = _compute_embedding_key(_MODEL_NAME, text)
+            raw = cache_client.get("emb", key)
+            if raw is not None:
+                try:
+                    vec = np.frombuffer(raw, dtype=np.float32).reshape(embedding_dim)
+                    cached_embeddings[i] = vec
+                except Exception:
+                    uncached_positions.append(i)
+                    uncached_texts.append(text)
+            else:
+                uncached_positions.append(i)
+                uncached_texts.append(text)
+    else:
+        uncached_positions = list(range(len(valid_texts)))
+        uncached_texts = valid_texts
+
+    # Encode only uncached texts
+    if uncached_texts:
+        fresh_embeddings = model.encode(uncached_texts, batch_size=64, show_progress_bar=False).astype(np.float32)
+        for pos, text, vec in zip(uncached_positions, uncached_texts, fresh_embeddings):
+            cached_embeddings[pos] = vec
+            if cache_client is not None:
+                try:
+                    key = _compute_embedding_key(_MODEL_NAME, text)
+                    cache_client.set("emb", key, vec.tobytes(), ttl=CACHE_TTL_EMB)
+                except Exception:
+                    pass
+    else:
+        fresh_embeddings = np.empty((0, embedding_dim), dtype=np.float32)
+
+    if uncached_texts:
+        logger.debug(f"Embedding cache: {len(cached_embeddings) - len(uncached_positions)} hits, {len(uncached_texts)} new encodings")
+
+    # Reassemble full embedding matrix in original order
+    embeddings = np.stack([cached_embeddings[i] for i in range(len(valid_texts))]).astype(np.float32)
     faiss.normalize_L2(embeddings)
 
     k_actual = min(k, index.ntotal)

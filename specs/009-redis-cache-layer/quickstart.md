@@ -19,7 +19,19 @@ poetry add redis
 
 `msgpack` is NOT required — embedding vectors use `numpy.tobytes()`.
 
-### 3. Verify connection
+### 3. Configure RDB snapshot persistence
+
+```bash
+# Add to /etc/redis/redis.conf (or ~/.redis.conf)
+echo "save 3600 1" | sudo tee -a /etc/redis/redis.conf
+sudo systemctl restart redis
+
+# Verify persistence is active
+redis-cli config get save
+# Expected: save → 3600 1
+```
+
+### 4. Verify connection
 
 ```bash
 redis-cli -h localhost -p 6379 info server | head -5
@@ -52,6 +64,14 @@ poetry run python demo.py --flush-cache --no-cache
 ```bash
 redis-cli keys "yaml:*"
 # should show one key after first partition runs
+```
+
+On a cache hit, `analyze_schema_node` returns immediately without any LLM calls and sets `cache_yaml_hit=True`. If the YAML file was deleted from disk (e.g., between runs on different machines or after a `/tmp` flush), the node **re-materializes it** from the cached `__yaml_text__` payload — writing the full YAML back to `mapping_yaml_path` before the pipeline continues. No LLM call is needed for re-materialization.
+
+```
+# Log line confirming YAML cache hit and re-materialization:
+INFO  YAML cache: re-materialized /path/to/mapping.yaml
+INFO  Cache HIT: loading YAML mapping from Redis (schema fingerprint abc1234567890def)
 ```
 
 ### Check cache hit rate in logs

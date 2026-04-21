@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 from typing_extensions import TypedDict
+
+if TYPE_CHECKING:
+    from src.cache.client import CacheClient
 
 
 class GapItem(TypedDict):
@@ -99,3 +102,8 @@ class PipelineState(TypedDict, total=False):
     # Audit
     audit_log: list[dict]
     errors: list[str]
+
+    # Cache layer
+    cache_client: Optional[Any]  # CacheClient instance; None = no-cache mode
+    cache_yaml_hit: bool  # True when analyze_schema loaded from Redis (skips critique_schema)
+    _schema_fingerprint: Optional[str]  # SHA-256-16 key; carried from analyze_schema to plan_sequence for cache write

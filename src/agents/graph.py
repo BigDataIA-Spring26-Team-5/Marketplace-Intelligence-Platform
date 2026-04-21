@@ -31,6 +31,13 @@ OUTPUT_DIR = PROJECT_ROOT / "output"
 # ── Pipeline execution nodes ─────────────────────────────────────────
 
 
+def route_after_analyze_schema(state: PipelineState) -> str:
+    """Skip critique_schema when YAML mapping was loaded from Redis cache."""
+    if state.get("cache_yaml_hit"):
+        return "check_registry"
+    return "critique_schema"
+
+
 def plan_sequence_node(state: PipelineState) -> dict:
     """
     Agent 3: LLM call to determine optimal block execution order.
@@ -117,10 +124,50 @@ def plan_sequence_node(state: PipelineState) -> dict:
     if reasoning:
         logger.info(f"Agent 3 reasoning: {reasoning}")
 
-    return {
+    result: dict = {
         "block_sequence": sequence,
         "sequence_reasoning": reasoning,
     }
+
+    # Write complete YAML cache entry now that all three agents have run.
+    fingerprint = state.get("_schema_fingerprint")
+    cache_client = state.get("cache_client")
+    if fingerprint and cache_client is not None:
+        try:
+            from src.cache.client import CACHE_TTL_YAML
+            import json as _json
+            yaml_path = state.get("mapping_yaml_path")
+            yaml_text = None
+            if yaml_path:
+                from pathlib import Path as _Path
+                _p = _Path(yaml_path)
+                if _p.exists():
+                    yaml_text = _p.read_text()
+
+            cacheable: dict = {
+                "column_mapping": state.get("column_mapping", {}),
+                "operations": state.get("operations", []),
+                "revised_operations": state.get("revised_operations"),
+                "mapping_yaml_path": yaml_path,
+                "block_registry_hits": state.get("block_registry_hits", {}),
+                "block_sequence": sequence,
+                "sequence_reasoning": reasoning,
+                "enrichment_columns_to_generate": state.get("enrichment_columns_to_generate", []),
+                "enrich_alias_ops": state.get("enrich_alias_ops", []),
+                "gaps": state.get("gaps", []),
+                "derivable_gaps": state.get("derivable_gaps", []),
+                "missing_columns": state.get("missing_columns", []),
+                "unresolvable_gaps": state.get("unresolvable_gaps", []),
+                "mapping_warnings": state.get("mapping_warnings", []),
+                "excluded_columns": state.get("excluded_columns", []),
+                "__yaml_text__": yaml_text,
+            }
+            cache_client.set("yaml", fingerprint, _json.dumps(cacheable).encode(), ttl=CACHE_TTL_YAML)
+            logger.info(f"YAML cache written (fingerprint {fingerprint})")
+        except Exception as e:
+            logger.warning(f"YAML cache write failed: {e}")
+
+    return result
 
 
 def run_pipeline_node(state: PipelineState) -> dict:
@@ -142,6 +189,7 @@ def run_pipeline_node(state: PipelineState) -> dict:
         "dq_weights": unified.dq_weights.model_dump(),
         "domain": domain,
         "unified_schema": unified,
+        "cache_client": state.get("cache_client"),
     }
 
     source_path = state.get("source_path")
@@ -256,6 +304,10 @@ def save_output_node(state: PipelineState) -> dict:
     df.to_csv(output_path, index=False)
     logger.info(f"Output saved to {output_path} ({len(df)} rows)")
 
+    cache_client = state.get("cache_client")
+    if cache_client is not None:
+        cache_client.get_stats().log_all()
+
     return {"output_path": str(output_path)}
 
 
@@ -302,7 +354,11 @@ def build_graph() -> StateGraph:
     graph.add_node("save_output", save_output_node)
 
     graph.add_edge("load_source", "analyze_schema")
-    graph.add_edge("analyze_schema", "critique_schema")
+    graph.add_conditional_edges(
+        "analyze_schema",
+        route_after_analyze_schema,
+        {"critique_schema": "critique_schema", "check_registry": "check_registry"},
+    )
     graph.add_edge("critique_schema", "check_registry")
     graph.add_edge("check_registry", "plan_sequence")
     graph.add_edge("plan_sequence", "run_pipeline")
