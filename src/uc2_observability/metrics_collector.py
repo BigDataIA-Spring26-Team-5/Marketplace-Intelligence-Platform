@@ -21,7 +21,8 @@ from prometheus_client import (
 
 logger = logging.getLogger(__name__)
 
-PUSHGATEWAY_URL = "localhost:9091"
+import os
+PUSHGATEWAY_URL = os.getenv("UC2_PUSHGATEWAY_URL", "localhost:9091")
 
 # Metric definitions: (metric_name, prometheus_name, type, description)
 _GAUGE_METRICS = [
