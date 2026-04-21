@@ -1,0 +1,104 @@
+version: '3.8'
+
+# UC2 Observability stack — start with:
+#   docker-compose -f docker-compose.uc2.yml -p mip up -d
+#
+# Services:
+#   postgres      :5432  — event log (block_trace, audit_events, quarantine_rows, dedup_clusters, anomaly_reports)
+#   prometheus    :9090  — metrics time-series
+#   pushgateway   :9091  — batch-job metrics receiver
+#   grafana       :3000  — dashboards (admin / mip_admin)
+#   chromadb      :8000  — RAG vector store (audit_corpus + mem0_memories)
+#   redis         :6379  — MCP server query cache (TTL-based, 15s for Prometheus, 30s for Postgres)
+
+services:
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: mip_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER:     mip
+      POSTGRES_PASSWORD: mip_pass
+      POSTGRES_DB:       uc2
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mip -d uc2"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mip_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+
+  pushgateway:
+    image: prom/pushgateway:latest
+    container_name: mip_pushgateway
+    ports:
+      - "9091:9091"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mip_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD:  mip_admin
+      GF_AUTH_ANONYMOUS_ENABLED:   "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE:  Viewer
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_SERVER_ROOT_URL:          "http://35.239.47.242:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: mip_chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: mip_redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save ""
+        --appendonly no
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  chromadb_data:
