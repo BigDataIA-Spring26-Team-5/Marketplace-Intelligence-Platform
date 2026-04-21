@@ -163,3 +163,19 @@ class GCSSourceLoader:
 
         if not buffer.empty:
             yield buffer
+
+    def iter_chunks_with_blob_name(self, chunk_size: int = 10000) -> Iterator[tuple[str, pd.DataFrame]]:
+        """Yield (gs:// blob URI, DataFrame) per chunk, preserving blob-level provenance.
+
+        Unlike iter_chunks, chunks do not span blob boundaries so each chunk
+        carries a single, unambiguous _bronze_file value.
+        """
+        blobs = self._list_blobs()
+        for blob in blobs:
+            logger.info(f"GCS: streaming {blob.name} (with blob name)")
+            partition_df = self._blob_to_df(blob)
+            if partition_df.empty:
+                continue
+            blob_uri = f"gs://{self._bucket_name}/{blob.name}"
+            for start in range(0, len(partition_df), chunk_size):
+                yield blob_uri, partition_df.iloc[start:start + chunk_size].copy()

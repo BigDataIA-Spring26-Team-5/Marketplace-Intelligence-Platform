@@ -227,17 +227,37 @@ class PipelineRunner:
         chunk_paths: list[Path] = []
 
         run_id = config.get("run_id", "run")
+        pipeline_mode = config.get("pipeline_mode", "full")
+        source_name = config.get("source_name", "")
         output_dir = Path(config.get("output_dir", "output"))
         chunk_dir = output_dir / ".chunks"
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
         from src.pipeline.loaders.gcs_loader import is_gcs_uri, GCSSourceLoader
-        if is_gcs_uri(str(source_path)):
-            chunk_iter = GCSSourceLoader(str(source_path)).iter_chunks(chunk_size=chunk_size)
-        else:
-            chunk_iter = CsvStreamReader(source_path, chunk_size=chunk_size, delimiter=sep)
+        is_gcs = is_gcs_uri(str(source_path))
+        is_silver = pipeline_mode == "silver"
 
-        for i, chunk_df in enumerate(chunk_iter):
+        if is_gcs and is_silver:
+            raw_iter = (
+                (uri, df)
+                for uri, df in GCSSourceLoader(str(source_path)).iter_chunks_with_blob_name(chunk_size=chunk_size)
+            )
+        elif is_gcs:
+            raw_iter = (
+                (None, df)
+                for df in GCSSourceLoader(str(source_path)).iter_chunks(chunk_size=chunk_size)
+            )
+        else:
+            raw_iter = (
+                (None, df)
+                for df in CsvStreamReader(source_path, chunk_size=chunk_size, delimiter=sep)
+            )
+
+        for i, (blob_uri, chunk_df) in enumerate(raw_iter):
+            if blob_uri is not None:
+                chunk_df["_bronze_file"] = blob_uri
+                chunk_df["_source"] = source_name
+                chunk_df["_pipeline_run_id"] = run_id
             logger.info(f"Processing chunk {i + 1} ({len(chunk_df)} rows)")
             chunk_result, chunk_log = self.run(
                 chunk_df,

@@ -15,11 +15,14 @@ import io
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+_RETRY_DELAYS = (1, 2, 4)
 
 SILVER_BUCKET = os.environ.get("SILVER_BUCKET", "mip-silver-2024")
 BRONZE_BUCKET = os.environ.get("BRONZE_BUCKET", "mip-bronze-2024")
@@ -28,6 +31,18 @@ BRONZE_BUCKET = os.environ.get("BRONZE_BUCKET", "mip-bronze-2024")
 def _gcs_client():
     from google.cloud import storage
     return storage.Client()
+
+
+def _with_retry(fn):
+    last_exc = None
+    for attempt, delay in enumerate(_RETRY_DELAYS, start=1):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(f"GCS write failed (attempt {attempt}/3): {exc}. Retrying in {delay}s...")
+            time.sleep(delay)
+    raise last_exc
 
 
 class GCSSilverWriter:
@@ -64,7 +79,7 @@ class GCSSilverWriter:
 
         client = _gcs_client()
         blob = client.bucket(SILVER_BUCKET).blob(key)
-        blob.upload_from_file(buf, content_type="application/octet-stream")
+        _with_retry(lambda: blob.upload_from_file(buf, content_type="application/octet-stream"))
 
         logger.info(f"Silver: wrote {len(df)} rows → {uri}")
         return uri

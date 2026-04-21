@@ -229,6 +229,7 @@ def run_pipeline_node(state: PipelineState) -> dict:
     reset_llm_counter()
     config["run_id"] = run_id
     config["source_name"] = source_name
+    config["pipeline_mode"] = state.get("pipeline_mode") or "full"
 
     # UC2: emit run_started
     if _UC2_AVAILABLE:
