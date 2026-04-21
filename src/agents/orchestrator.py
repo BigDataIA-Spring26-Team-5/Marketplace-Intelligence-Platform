@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -45,6 +46,13 @@ _SPLIT_PRIMITIVES = {"SPLIT"}
 _UNIFY_PRIMITIVES = {"UNIFY"}
 # Primitive that drops the source col entirely
 _DELETE_PRIMITIVES = {"DELETE"}
+
+
+def _to_snake(name: str) -> str:
+    """camelCase/PascalCase → snake_case for pre-normalization before LLM schema analysis."""
+    s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', name)
+    s = re.sub(r'([a-z\d])([A-Z])', r'\1_\2', s)
+    return s.lower().replace(" ", "_").replace("-", "_")
 
 
 def _detect_enrichment_columns(unified_schema: UnifiedSchema, source_schema: dict) -> list[str]:
@@ -253,7 +261,10 @@ def analyze_schema_node(state: PipelineState) -> dict:
 
     # Separate __meta__ from per-column profile before sending to LLM
     meta_block = source_schema.get("__meta__", {})
-    columns_only = {k: v for k, v in source_schema.items() if k != "__meta__"}
+    columns_only_raw = {k: v for k, v in source_schema.items() if k != "__meta__"}
+    # Pre-normalize camelCase/PascalCase → snake_case so LLM sees consistent names
+    _norm_map = {_to_snake(k): k for k in columns_only_raw}
+    columns_only = {_to_snake(k): v for k, v in columns_only_raw.items()}
 
     result = call_llm_json(
         model=model,
@@ -270,6 +281,17 @@ def analyze_schema_node(state: PipelineState) -> dict:
     )
 
     column_mapping, operations, unresolvable, legacy_gaps = _parse_llm_response(result)
+
+    # Remap normalized column names back to original source names
+    column_mapping = {_norm_map.get(src, src): tgt for src, tgt in column_mapping.items()}
+    for op in operations:
+        if op.get("source_column") and op["source_column"] in _norm_map:
+            op["source_column"] = _norm_map[op["source_column"]]
+        if isinstance(op.get("sources"), list):
+            op["sources"] = [_norm_map.get(s, s) for s in op["sources"]]
+    for gap in legacy_gaps:
+        if gap.get("source_column") and gap["source_column"] in _norm_map:
+            gap["source_column"] = _norm_map[gap["source_column"]]
 
     # ── Derive backward-compat derivable_gaps / missing_columns from operations ──
     derivable_gaps = []
