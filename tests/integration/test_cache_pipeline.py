@@ -200,7 +200,7 @@ class TestYamlCacheHit:
             "unified_schema_existed": False,
         }
 
-        with patch("src.agents.orchestrator.get_unified_schema", return_value=mock_unified):
+        with patch("src.agents.orchestrator.get_domain_schema", return_value=mock_unified):
             result = analyze_schema_node(state)
 
         assert result.get("cache_yaml_hit") is True
@@ -229,7 +229,7 @@ class TestYamlCacheHit:
             "enrich_alias_ops": [],
         }
 
-        with patch("src.agents.orchestrator.get_unified_schema", return_value=mock_unified):
+        with patch("src.agents.orchestrator.get_domain_schema", return_value=mock_unified):
             with patch("src.agents.orchestrator.call_llm_json", return_value=llm_response):
                 with patch("src.agents.orchestrator.write_mapping_yaml", return_value=str(tmp_path / "m.yaml")):
                     state = {
@@ -266,7 +266,7 @@ class TestYamlCacheHit:
             "unified_schema_existed": True,
         }
 
-        with patch("src.agents.orchestrator.get_unified_schema", return_value=mock_unified):
+        with patch("src.agents.orchestrator.get_domain_schema", return_value=mock_unified):
             result = analyze_schema_node(state)
 
         assert result.get("cache_yaml_hit") is True
@@ -292,7 +292,7 @@ class TestYamlCacheHit:
             "enrich_alias_ops": [],
         }
 
-        with patch("src.agents.orchestrator.get_unified_schema", return_value=mock_unified):
+        with patch("src.agents.orchestrator.get_domain_schema", return_value=mock_unified):
             with patch("src.agents.orchestrator.call_llm_json", return_value=llm_response):
                 with patch("src.agents.orchestrator.write_mapping_yaml", return_value=str(tmp_path / "m.yaml")):
                     state = {

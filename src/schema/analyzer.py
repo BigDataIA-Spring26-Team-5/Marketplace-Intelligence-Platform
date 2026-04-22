@@ -13,34 +13,35 @@ import pandas as pd
 from src.schema.models import ColumnSpec, UnifiedSchema
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
-UNIFIED_SCHEMA_PATH = CONFIG_DIR / "unified_schema.json"
+SCHEMAS_DIR = CONFIG_DIR / "schemas"
 
-# Lazy singleton — loaded once per process, reset via _reset_schema_cache() in tests.
-_schema_cache: UnifiedSchema | None = None
+# Per-domain lazy cache — keyed by domain string.
+_schema_cache: dict[str, UnifiedSchema] = {}
 
 
-def get_unified_schema() -> UnifiedSchema:
-    """Return the unified schema, loading and caching on first call.
+def get_domain_schema(domain: str = "nutrition") -> UnifiedSchema:
+    """Load config/schemas/<domain>_schema.json, caching per domain.
 
-    Raises FileNotFoundError if config/unified_schema.json is absent.
+    Raises FileNotFoundError naming the missing file if absent.
     """
-    global _schema_cache
-    if _schema_cache is None:
-        if not UNIFIED_SCHEMA_PATH.exists():
+    if domain not in _schema_cache:
+        schema_path = SCHEMAS_DIR / f"{domain}_schema.json"
+        if not schema_path.exists():
             raise FileNotFoundError(
-                "config/unified_schema.json not found. "
-                "The unified schema is the gold-standard target format and must be "
-                "defined before running the pipeline."
+                f"config/schemas/{domain}_schema.json not found. "
+                "Create it or pass a valid domain."
             )
-        with open(UNIFIED_SCHEMA_PATH) as f:
-            _schema_cache = UnifiedSchema.model_validate(json.load(f))
-    return _schema_cache
+        with open(schema_path) as f:
+            _schema_cache[domain] = UnifiedSchema.model_validate(json.load(f))
+    return _schema_cache[domain]
 
 
-def _reset_schema_cache() -> None:
-    """Reset the schema cache. For use in tests only."""
-    global _schema_cache
-    _schema_cache = None
+def _reset_schema_cache(domain: str | None = None) -> None:
+    """Clear schema cache. Pass domain to clear one entry, or None to clear all."""
+    if domain is None:
+        _schema_cache.clear()
+    else:
+        _schema_cache.pop(domain, None)
 
 # Minimum fraction of non-null rows that must successfully parse for a
 # structural detection to be accepted (avoids false positives on mostly-scalar cols).
@@ -342,11 +343,13 @@ def profile_dataframe(df: pd.DataFrame, sample_size: int = 5) -> dict:
     return profile
 
 
-def save_unified_schema(schema: UnifiedSchema) -> None:
-    """Save unified schema to config."""
-    UNIFIED_SCHEMA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(UNIFIED_SCHEMA_PATH, "w") as f:
+def save_domain_schema(schema: UnifiedSchema, domain: str) -> None:
+    """Save domain schema to config/schemas/<domain>_schema.json."""
+    SCHEMAS_DIR.mkdir(parents=True, exist_ok=True)
+    schema_path = SCHEMAS_DIR / f"{domain}_schema.json"
+    with open(schema_path, "w") as f:
         json.dump(schema.model_dump(), f, indent=2)
+    _schema_cache.pop(domain, None)
 
 
 def derive_unified_schema_from_source(
@@ -358,7 +361,7 @@ def derive_unified_schema_from_source(
     Derive a unified schema from the first data source.
 
     column_mapping: {source_col -> unified_col}
-    Returns a schema dict compatible with config/unified_schema.json format.
+    Returns a schema dict compatible with config/schemas/<domain>_schema.json format.
     """
     columns = {}
     for source_col, unified_col in column_mapping.items():
@@ -396,7 +399,7 @@ def derive_unified_schema_from_source(
             "computed": True,
         }
 
-    return UnifiedSchema.model_validate({
+    schema = UnifiedSchema.model_validate({
         "columns": columns,
         "dq_weights": {
             "completeness": 0.4,
@@ -404,6 +407,8 @@ def derive_unified_schema_from_source(
             "ingredient_richness": 0.25,
         },
     })
+    save_domain_schema(schema, domain)
+    return schema
 
 
 def compute_schema_diff(

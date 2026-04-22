@@ -5,9 +5,9 @@ SCHEMA_ANALYSIS_PROMPT = """You are a schema analysis agent for a data enrichmen
 You are given:
 1. An incoming data source's schema — column names, types, null rates, sample values, AND structural metadata (detected_structure, inferred_keys, inferred_value_types, parsed_sample).
 2. Optional dataset-level metadata (__meta__) with numeric_columns, structured_columns, candidate_unify_groups.
-3. A unified output schema that all data sources must conform to.
+3. A domain output schema that all data sources must conform to.
 
-Your task: For each column in the unified schema, determine how to map it from the incoming source using the 8-primitive taxonomy below.
+Your task: For each column in the domain schema (`config/schemas/<domain>_schema.json`), determine how to map it from the incoming source using the 8-primitive taxonomy below.
 
 ## Incoming Source Schema
 {source_schema}
@@ -15,7 +15,7 @@ Your task: For each column in the unified schema, determine how to map it from t
 ## Dataset Metadata
 {source_meta}
 
-## Unified Output Schema
+## Domain Output Schema
 {unified_schema}
 
 ## Semantic Mapping Examples
@@ -247,7 +247,7 @@ ENRICH_ALIAS goes in operations[], not unresolvable[].
 
 
 FIRST_RUN_SCHEMA_PROMPT = """You are a schema analysis agent. This is the FIRST data source for this pipeline.
-There is no unified schema yet — you must derive one.
+There is no domain schema yet for this source — you must derive one.
 
 ## Incoming Source Schema
 {source_schema}

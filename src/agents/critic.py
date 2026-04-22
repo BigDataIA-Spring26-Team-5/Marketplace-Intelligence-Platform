@@ -8,7 +8,7 @@ import logging
 from src.agents.state import PipelineState
 from src.agents.prompts import CRITIC_PROMPT
 from src.models.llm import call_llm_json, get_critic_llm
-from src.schema.analyzer import get_unified_schema
+from src.schema.analyzer import get_domain_schema
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,8 @@ def critique_schema_node(state: PipelineState) -> dict:
     meta_block = source_schema.get("__meta__", {})
     columns_only = {k: v for k, v in source_schema.items() if k != "__meta__"}
 
-    unified_for_prompt = get_unified_schema().for_prompt()
+    domain = state.get("domain", "nutrition")
+    unified_for_prompt = get_domain_schema(domain).for_prompt()
 
     model = get_critic_llm()
     logger.info(f"Agent 2 critique using model: {model}")
