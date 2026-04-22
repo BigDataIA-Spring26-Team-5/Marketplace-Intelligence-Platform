@@ -110,7 +110,9 @@
       "Bash(curl -s \"http://localhost:9090/api/v1/query?query=uc1_rows_in%7Bsource%3D%22TEST%22%7D\")",
       "WebFetch(domain:medium.com)",
       "Bash(curl -s http://localhost:9091/api/v1/metrics)",
-      "Bash(bash)"
+      "Bash(bash)",
+      "Bash(bq version *)",
+      "Bash(bq ls *)"
     ]
   }
 }
