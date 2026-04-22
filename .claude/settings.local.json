@@ -111,9 +111,9 @@
       "WebFetch(domain:medium.com)",
       "Bash(curl -s http://localhost:9091/api/v1/metrics)",
       "Bash(bash)",
-      "Read(//home/aq/work/Marketplace-Intelligence-Platform/src/**)",
-      "Read(//home/aq/work/**)",
-      "Read(//home/aq/**)"
+      "Bash(bq version *)",
+      "Bash(bq ls *)",
+      "Bash(gsutil ls *)"
     ]
   }
 }

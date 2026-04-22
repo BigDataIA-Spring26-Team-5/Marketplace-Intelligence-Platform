@@ -235,6 +235,40 @@ def run_consumer() -> None:
         backoff = min(backoff * 2, MAX_BACKOFF)
 
 
+# ── Producer: emit_event (called by the pipeline) ─────────────────────────────
+
+_producer = None  # module-level singleton; lazily created
+
+
+def _get_producer():
+    """Return a cached KafkaProducer, creating it on first call."""
+    global _producer
+    if _producer is None:
+        from kafka import KafkaProducer as _KafkaProducer
+        _producer = _KafkaProducer(
+            bootstrap_servers=KAFKA_BOOTSTRAP,
+            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+            api_version=(2, 5, 0),
+            acks=0,           # fire-and-forget — pipeline must never block on UC2
+            request_timeout_ms=2000,
+            retries=0,
+        )
+    return _producer
+
+
+def emit_event(event: dict) -> None:
+    """Send a pipeline event to the pipeline.events Kafka topic.
+
+    Called from graph.py and runner.py. Never raises — a UC2 failure
+    must never crash the pipeline.
+    """
+    try:
+        _get_producer().send(KAFKA_TOPIC, event)
+    except Exception as exc:
+        logger.warning("emit_event failed (event_type=%s): %s",
+                       event.get("event_type", "?"), exc)
+
+
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
