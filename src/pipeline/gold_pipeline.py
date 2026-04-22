@@ -81,7 +81,10 @@ def _read_silver_parquet(source_name: str, date: str) -> pd.DataFrame:
     prefix = f"{source_name}/{date}/"
     client = _gcs_client()
     bucket = client.bucket(SILVER_BUCKET)
-    blobs = [b for b in bucket.list_blobs(prefix=prefix) if b.name.endswith(".parquet")]
+    blobs = [
+        b for b in bucket.list_blobs(prefix=prefix)
+        if b.name.endswith(".parquet") and not b.name.split("/")[-1].startswith("sample")
+    ]
 
     if not blobs:
         raise FileNotFoundError(
@@ -142,6 +145,15 @@ def run_gold_pipeline(
     from src.pipeline.runner import PipelineRunner
     from src.schema.analyzer import get_unified_schema
     from src.blocks.dq_score import _SKIP_ALWAYS
+
+    if cache_client is None:
+        try:
+            from src.cache.client import CacheClient
+            cache_client = CacheClient()
+            if not cache_client._available:
+                logger.warning("Redis unavailable — running without cache (SQLite fallback active)")
+        except Exception as e:
+            logger.warning(f"Cache init failed — running without cache: {e}")
 
     run_id = f"{source_name.upper()}_gold_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     start_time = time.monotonic()
