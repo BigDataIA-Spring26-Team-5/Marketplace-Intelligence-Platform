@@ -40,7 +40,7 @@ The guardrails module provides validation for all 4 LLM call sites in the pipeli
 | 1 | Schema Analyzer (Agent 1) | `src/agents/orchestrator.py` | `analyze_schema_node()` |
 | 2 | Critic (Agent 2) | `src/agents/critic.py` | `critique_schema_node()` |
 | 3 | Sequence Planner (Agent 3) | `src/agents/graph.py` | `plan_sequence_node()` |
-| 4 | RAG-LLM Enrichment (S3) | `src/enrichment/llm_tier.py` | `llm_enrich()` |
+| 4 | LLM Enrichment (S3) | `src/enrichment/llm_tier.py` | `llm_enrich()` |
 
 ---
 

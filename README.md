@@ -31,7 +31,7 @@ Cascading, three-tier for missing fields:
 
 1. **S1 Deterministic** — rule-based for `allergens`, `dietary_tags`, `is_organic`
 2. **S2 KNN** — FAISS + sentence-transformers for `primary_category`
-3. **S3 RAG-LLM** — deepseek-chat + retrieved context for low-confidence categories
+3. **S3 LLM** — deepseek-chat + retrieved context for low-confidence categories
 
 > **Safety boundary**: `allergens`, `dietary_tags`, `is_organic` are S1-only — never sent to probabilistic tiers.
 
@@ -101,7 +101,7 @@ src/
 ├── agents/          # LangGraph nodes + prompts + state
 ├── blocks/          # Static blocks + DynamicMappingBlock
 │   └── generated/   # Per-domain/dataset YAML mappings
-├── enrichment/      # S1 deterministic, S2 KNN, S3 RAG-LLM
+├── enrichment/      # S1 deterministic, S2 KNN, S3 LLM
 ├── models/          # LiteLLM model wrappers
 ├── pipeline/        # Runner, CLI, checkpoint manager
 ├── registry/        # Block registry

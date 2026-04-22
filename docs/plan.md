@@ -129,7 +129,7 @@
 - S1: Deterministic rules (~60%)
 - S2: FAISS KNN (~25%)
 - S3: Cluster propagation (~10%)
-- S4: RAG-LLM via Groq/DeepSeek (~5%)
+- S4: LLM via Groq/DeepSeek (~5%)
 
 ### 3.8 DQ Post-score + Delta
 - **File:** `src/blocks/dq_score.py`

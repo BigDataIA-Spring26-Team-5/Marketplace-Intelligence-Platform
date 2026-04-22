@@ -1,4 +1,4 @@
-"""3-strategy enrichment block — S1: deterministic extraction -> S2: KNN corpus -> S3: RAG-LLM."""
+"""3-strategy enrichment block — S1: deterministic extraction -> S2: KNN corpus -> S3: LLM."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ _SAFETY_FIELDS = ["allergens", "is_organic", "dietary_tags"]
 class LLMEnrichBlock(Block):
     name = "llm_enrich"
     domain = "all"
-    description = "3-strategy enrichment (deterministic → KNN → RAG-LLM) for category, dietary tags, organic flag"
+    description = "3-strategy enrichment (deterministic → KNN → LLM) for category, dietary tags, organic flag"
     inputs = ["product_name", "ingredients"]
     outputs = ["primary_category", "dietary_tags", "is_organic", "enriched_by_llm"]
 
@@ -72,7 +72,7 @@ class LLMEnrichBlock(Block):
         df, needs_enrichment, s3_stats = llm_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"))
         stats["llm"] = s3_stats["resolved"]
         stats["unresolved"] = int(df["primary_category"].isna().sum()) if "primary_category" in df.columns else 0
-        logger.info(f"  S3 (RAG-LLM): resolved {stats['llm']} rows")
+        logger.info(f"  S3 (LLM): resolved {stats['llm']} rows")
         logger.info(f"  Unresolved: {stats['unresolved']} rows")
 
         # Drop pipeline-internal column before output

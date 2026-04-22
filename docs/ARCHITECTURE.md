@@ -127,7 +127,7 @@
 ║  │  │       [enrichment/embedding.py]   ◄── corpus/faiss_index.bin            │ │ ║
 ║  │  │              │  (if low confidence after S2)                            │ │ ║
 ║  │  │              ▼                                                           │ │ ║
-║  │  │   S3: RAG-LLM  ──► LLM + retrieved context  (primary_category)         │ │ ║
+║  │  │   S3: LLM  ──► LLM + retrieved context  (primary_category)         │ │ ║
 ║  │  │       [enrichment/llm_tier.py]   model: deepseek/deepseek-chat          │ │ ║
 ║  │  └──────────────────────────────────────────────────────────────────────────┘ │ ║
 ║  │         │                                                                      │ ║
@@ -271,7 +271,7 @@ ETL/
     ├── enrichment/
     │   ├── deterministic.py        ← S1: rule-based
     │   ├── embedding.py            ← S2: KNN FAISS
-    │   ├── llm_tier.py             ← S3: RAG-LLM
+    │   ├── llm_tier.py             ← S3: LLM
     │   └── corpus.py               ← FAISS index management
     ├── pipeline/
     │   ├── runner.py               ← Chunked block sequencing + audit log
