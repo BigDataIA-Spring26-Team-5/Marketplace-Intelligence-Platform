@@ -18,8 +18,12 @@ logger = logging.getLogger(__name__)
 _STATUS_VALUES = {"success": 1.0, "partial": 0.5, "failed": 0.0}
 
 
+import os as _os
+_DEFAULT_PUSHGATEWAY = _os.getenv("UC2_PUSHGATEWAY_URL", "localhost:9091")
+
+
 class MetricsExporter:
-    def __init__(self, pushgateway_url: str = "localhost:9091", job: str = "etl_pipeline"):
+    def __init__(self, pushgateway_url: str = _DEFAULT_PUSHGATEWAY, job: str = "etl_pipeline"):
         self.pushgateway_url = pushgateway_url
         self.job = job
 

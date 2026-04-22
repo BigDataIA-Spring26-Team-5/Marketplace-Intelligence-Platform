@@ -241,7 +241,7 @@ def _build_gold_run_log(
         "dq_score_pre":     round(dq_pre,  4) if dq_pre  is not None else None,
         "dq_score_post":    round(dq_post, 4) if dq_post is not None else None,
         "dq_delta":         dq_delta,
-        "enrichment": {
+        "enrichment_stats": {
             "deterministic": es.get("deterministic", 0),
             "embedding":     es.get("embedding",     0),
             "llm":           es.get("llm",           0),
