@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import logging
 import os
 import sys
@@ -188,82 +189,114 @@ def run_gold_pipeline(
     logger.info(f"Gold blocks complete: {len(result_df)} rows after dedup/enrichment")
     rows_written = _write_gold_bq(result_df, source_name=source_name)
 
-    _push_uc2_metrics(
+    run_log = _build_gold_run_log(
         run_id=run_id,
         source_name=source_name,
+        domain=domain,
         rows_in=rows_in,
         result_df=result_df,
         audit_log=audit_log,
         duration_seconds=duration_seconds,
     )
+    _save_gold_run_log(run_log)
+    _push_gold_metrics(run_log)
+    _push_gold_audit(run_log)
 
     return rows_written
 
 
-def _push_uc2_metrics(
+def _build_gold_run_log(
     run_id: str,
     source_name: str,
+    domain: str,
     rows_in: int,
-    result_df,
+    result_df: pd.DataFrame,
     audit_log: list,
     duration_seconds: float,
-) -> None:
-    """Push gold run metrics to Prometheus Pushgateway and write audit events to Postgres."""
+    status: str = "success",
+    error: str | None = None,
+) -> dict:
+    """Build run-log dict consumed by _save_gold_run_log, _push_gold_metrics, _push_gold_audit."""
+    dq_pre  = float(result_df["dq_score_pre"].mean())  if "dq_score_pre"  in result_df.columns else None
+    dq_post = float(result_df["dq_score_post"].mean()) if "dq_score_post" in result_df.columns else None
+    dq_delta = round(dq_post - dq_pre, 4) if (dq_pre is not None and dq_post is not None) else None
+
     try:
-        from src.uc2_observability.metrics_collector import MetricsCollector
+        from src.blocks.llm_enrich import LLMEnrichBlock
+        es = LLMEnrichBlock.last_enrichment_stats
+    except Exception:
+        es = {}
+
+    return {
+        "run_id":           run_id,
+        "timestamp":        datetime.now(timezone.utc).isoformat(),
+        "source_name":      source_name,
+        "domain":           domain,
+        "status":           status,
+        "error":            error,
+        "duration_seconds": round(duration_seconds, 3),
+        "rows_in":          rows_in,
+        "rows_out":         len(result_df),
+        "rows_quarantined": 0,
+        "dq_score_pre":     round(dq_pre,  4) if dq_pre  is not None else None,
+        "dq_score_post":    round(dq_post, 4) if dq_post is not None else None,
+        "dq_delta":         dq_delta,
+        "enrichment": {
+            "deterministic": es.get("deterministic", 0),
+            "embedding":     es.get("embedding",     0),
+            "llm":           es.get("llm",           0),
+            "unresolved":    es.get("unresolved",    0),
+        },
+        "audit_log": audit_log,
+    }
+
+
+def _save_gold_run_log(run_log: dict) -> Path | None:
+    """Write run_log to output/run_logs/ as JSON. No external deps — always local."""
+    try:
+        log_dir = PROJECT_ROOT / "output" / "run_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        short_id = run_log["run_id"][-8:]
+        path = log_dir / f"run_{ts}_{short_id}.json"
+        path.write_text(json.dumps(run_log, indent=2, default=str))
+        logger.info("Run log written: %s", path)
+        return path
+    except Exception as exc:
+        logger.warning("Run log write failed (non-fatal): %s", exc)
+        return None
+
+
+def _push_gold_metrics(run_log: dict) -> None:
+    """Push metrics to Prometheus Pushgateway via MetricsExporter (source_name label → Grafana)."""
+    try:
+        from src.uc2_observability.metrics_exporter import MetricsExporter
+        MetricsExporter().push(run_log)
+        logger.info("Prometheus metrics pushed for run_id=%s", run_log["run_id"])
+    except Exception as exc:
+        logger.warning("Prometheus push failed (non-fatal): %s", exc)
+
+
+def _push_gold_audit(run_log: dict) -> None:
+    """Write audit events to Postgres. Independent try block — psycopg2 failure never blocks metrics."""
+    try:
         import psycopg2
         from src.uc2_observability.kafka_to_pg import PG_DSN
-
-        dq_post = float(result_df["dq_score_post"].mean()) if "dq_score_post" in result_df.columns else 0.0
-        dq_pre  = float(result_df["dq_score_pre"].mean())  if "dq_score_pre"  in result_df.columns else 0.0
-        null_rate = float(result_df.isna().mean().mean())
-
-        # Enrichment stats from LLMEnrichBlock.last_enrichment_stats
-        try:
-            from src.blocks.llm_enrich import LLMEnrichBlock
-            es = LLMEnrichBlock.last_enrichment_stats
-        except Exception:
-            es = {}
-
-        metrics = {
-            "rows_in":                rows_in,
-            "rows_out":               len(result_df),
-            "null_rate":              round(null_rate, 4),
-            "dq_score_pre":           round(dq_pre, 4),
-            "dq_score_post":          round(dq_post, 4),
-            "dq_delta":               round(dq_post - dq_pre, 4),
-            "dedup_rate":             round(1 - len(result_df) / rows_in, 4) if rows_in else 0.0,
-            "s1_count":               es.get("deterministic", 0),
-            "s2_count":               es.get("embedding", 0),
-            "s3_count":               es.get("llm", 0),
-            "s4_count":               0,
-            "quarantine_rows":        0,
-            "llm_calls":              0,
-            "cost_usd":               0.0,
-            "block_duration_seconds": duration_seconds,
-            "status":                 "success",
-        }
-
-        MetricsCollector().push(run_id=run_id, source=source_name.upper(), metrics_dict=metrics)
-        logger.info("UC2 metrics pushed for run_id=%s", run_id)
-
-        # Write audit events to Postgres
         conn = psycopg2.connect(PG_DSN)
         ts = datetime.now(timezone.utc)
-        import json
         with conn.cursor() as cur:
             for event_type in ("run_started", "run_completed"):
                 cur.execute(
                     """INSERT INTO audit_events (run_id, source, event_type, status, ts, payload)
                        VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
-                    (run_id, source_name.upper(), event_type, "success", ts, json.dumps(metrics)),
+                    (run_log["run_id"], run_log["source_name"], event_type,
+                     run_log["status"], ts, json.dumps(run_log)),
                 )
         conn.commit()
         conn.close()
-        logger.info("UC2 audit events written for run_id=%s", run_id)
-
+        logger.info("Postgres audit events written for run_id=%s", run_log["run_id"])
     except Exception as exc:
-        logger.warning("UC2 metrics push failed (non-fatal): %s", exc)
+        logger.warning("Postgres audit write failed (non-fatal): %s", exc)
 
 
 def main():
