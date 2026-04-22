@@ -1,4 +1,8 @@
-"""Redis cache client with graceful degradation and per-prefix SHA-256 keys."""
+"""Redis cache client with graceful degradation and per-prefix SHA-256 keys.
+
+Falls back to a SQLite-backed store when Redis is unavailable, ensuring LLM
+results are cached across runs even without a Redis instance.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,9 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
+import time
+from pathlib import Path
 from typing import Optional
 
 from src.cache.stats import CacheStats
@@ -19,6 +26,80 @@ CACHE_TTL_DEDUP = int(os.environ.get("CACHE_TTL_DEDUP", str(60 * 60 * 24 * 14)))
 
 _KNOWN_PREFIXES = ("yaml", "llm", "emb", "dedup")
 
+SQLITE_CACHE_PATH = os.environ.get(
+    "SQLITE_CACHE_PATH",
+    str(Path(__file__).resolve().parent.parent.parent / "output" / "cache.db"),
+)
+
+
+class _SQLiteCache:
+    """Minimal SQLite KV store used as Redis fallback. Thread-safe via WAL mode."""
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path, timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _init_db(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS cache (
+                    key TEXT PRIMARY KEY,
+                    value BLOB NOT NULL,
+                    expires_at REAL NOT NULL
+                )"""
+            )
+
+    def get(self, key: str) -> Optional[bytes]:
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT value, expires_at FROM cache WHERE key = ?", (key,)
+                ).fetchone()
+            if row is None:
+                return None
+            value, expires_at = row
+            if time.time() > expires_at:
+                self.delete(key)
+                return None
+            return bytes(value)
+        except Exception as exc:
+            logger.warning("SQLite cache GET error [%s]: %s", key, exc)
+            return None
+
+    def set(self, key: str, value: bytes, ttl: int) -> None:
+        try:
+            expires_at = time.time() + ttl
+            with self._connect() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO cache (key, value, expires_at) VALUES (?, ?, ?)",
+                    (key, value, expires_at),
+                )
+        except Exception as exc:
+            logger.warning("SQLite cache SET error [%s]: %s", key, exc)
+
+    def delete(self, key: str) -> None:
+        try:
+            with self._connect() as conn:
+                conn.execute("DELETE FROM cache WHERE key = ?", (key,))
+        except Exception as exc:
+            logger.warning("SQLite cache DELETE error [%s]: %s", key, exc)
+
+    def purge_expired(self) -> int:
+        try:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "DELETE FROM cache WHERE expires_at < ?", (time.time(),)
+                )
+                return cur.rowcount
+        except Exception:
+            return 0
+
 
 class CacheClient:
     """
@@ -29,11 +110,20 @@ class CacheClient:
     to avoid repeated timeout overhead.
     """
 
-    def __init__(self, host: str = "localhost", port: int = 6379, db: int = 0, no_cache: bool = False) -> None:
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 6379,
+        db: int = 0,
+        no_cache: bool = False,
+        sqlite_fallback: bool = True,
+        sqlite_path: str = SQLITE_CACHE_PATH,
+    ) -> None:
         self._no_cache = no_cache
         self._available = False
         self._stats = CacheStats()
         self._pool = None
+        self._sqlite: Optional[_SQLiteCache] = None
 
         if no_cache:
             return
@@ -53,7 +143,13 @@ class CacheClient:
             self._available = True
             logger.info(f"Redis cache connected at {host}:{port}/{db}")
         except Exception as e:
-            logger.warning(f"Redis unavailable: {e}. Cache disabled for this run.")
+            logger.warning(f"Redis unavailable: {e}. Falling back to SQLite cache.")
+            if sqlite_fallback:
+                try:
+                    self._sqlite = _SQLiteCache(sqlite_path)
+                    logger.info(f"SQLite cache initialised at {sqlite_path}")
+                except Exception as se:
+                    logger.warning(f"SQLite cache init failed: {se}. Cache disabled.")
             self._available = False
 
     def _make_key(self, prefix: str, key_input: str | list) -> str:
@@ -65,51 +161,64 @@ class CacheClient:
         return f"{prefix}:{digest}"
 
     def get(self, prefix: str, key_input: str | list) -> Optional[bytes]:
-        if not self._available:
-            self._stats.record_miss(prefix)
-            return None
-        try:
-            import redis
-            conn = redis.Redis(connection_pool=self._pool)
-            key = self._make_key(prefix, key_input)
-            value = conn.get(key)
+        key = self._make_key(prefix, key_input)
+        if self._available:
+            try:
+                import redis
+                conn = redis.Redis(connection_pool=self._pool)
+                value = conn.get(key)
+                if value is not None:
+                    self._stats.record_hit(prefix)
+                    return value
+                self._stats.record_miss(prefix)
+                # Redis miss — fall through to SQLite if available
+            except Exception as e:
+                logger.warning(f"Cache GET error [{prefix}]: {e}")
+                self._available = False
+                self._stats.record_miss(prefix)
+
+        if self._sqlite is not None:
+            value = self._sqlite.get(key)
             if value is not None:
                 self._stats.record_hit(prefix)
-            else:
-                self._stats.record_miss(prefix)
-            return value
-        except Exception as e:
-            logger.warning(f"Cache GET error [{prefix}]: {e}")
-            self._available = False
-            self._stats.record_miss(prefix)
-            return None
+                return value
+
+        self._stats.record_miss(prefix)
+        return None
 
     def set(self, prefix: str, key_input: str | list, value: bytes, ttl: int) -> bool:
-        if not self._available:
-            return False
-        try:
-            import redis
-            conn = redis.Redis(connection_pool=self._pool)
-            key = self._make_key(prefix, key_input)
-            conn.set(key, value, ex=ttl)
+        key = self._make_key(prefix, key_input)
+        if self._available:
+            try:
+                import redis
+                conn = redis.Redis(connection_pool=self._pool)
+                conn.set(key, value, ex=ttl)
+                return True
+            except Exception as e:
+                logger.warning(f"Cache SET error [{prefix}]: {e}")
+                self._available = False
+
+        if self._sqlite is not None:
+            self._sqlite.set(key, value, ttl)
             return True
-        except Exception as e:
-            logger.warning(f"Cache SET error [{prefix}]: {e}")
-            self._available = False
-            return False
+
+        return False
 
     def delete(self, prefix: str, key_input: str | list) -> bool:
-        if not self._available:
-            return False
-        try:
-            import redis
-            conn = redis.Redis(connection_pool=self._pool)
-            key = self._make_key(prefix, key_input)
-            conn.delete(key)
-            return True
-        except Exception as e:
-            logger.warning(f"Cache DELETE error [{prefix}]: {e}")
-            return False
+        key = self._make_key(prefix, key_input)
+        ok = False
+        if self._available:
+            try:
+                import redis
+                conn = redis.Redis(connection_pool=self._pool)
+                conn.delete(key)
+                ok = True
+            except Exception as e:
+                logger.warning(f"Cache DELETE error [{prefix}]: {e}")
+        if self._sqlite is not None:
+            self._sqlite.delete(key)
+            ok = True
+        return ok
 
     def flush_all_prefixes(self) -> int:
         if not self._available:
