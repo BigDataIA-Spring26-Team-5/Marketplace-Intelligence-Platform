@@ -12,12 +12,12 @@ column_operations:
   type: string
   action: extract_json_field
   source: product_name
-  key: ''
+  key: 'text'
 - target: ingredients
   type: string
   action: extract_json_field
   source: ingredients_text
-  key: ''
+  key: 'text'
 - target: serving_size_unit
   type: string
   action: regex_extract

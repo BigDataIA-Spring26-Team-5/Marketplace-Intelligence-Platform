@@ -1,43 +1,81 @@
 column_operations:
+- target: product_name
+  type: string
+  action: strip_whitespace
+  source: description
+- target: brand_name
+  type: string
+  action: strip_whitespace
+  source: brandName
+- target: brand_owner
+  type: string
+  action: strip_whitespace
+  source: brandOwner
+- target: category
+  type: string
+  action: strip_whitespace
+  source: brandedFoodCategory
+- target: serving_size
+  type: float
+  action: type_cast
+  source: servingSize
+- target: serving_size_unit
+  type: string
+  action: value_map
+  source: servingSizeUnit
+  mapping:
+    GRM: g
+    g: g
+    oz: oz
+    ml: ml
+    IU: IU
+- target: published_date
+  type: string
+  action: parse_date
+  source: modifiedDate
+- target: data_source
+  type: string
+  action: set_default
+  default_value: USDA
 - source: fdcId
   action: drop_column
 - source: dataType
+  action: drop_column
+- source: _dataType
   action: drop_column
 - source: gtinUpc
   action: drop_column
 - source: foodNutrients
   action: drop_column
-- target: brand_owner
-  type: string
-  action: strip_whitespace
-  source: brand_owner
-  normalize_before_dedup: true
-- target: brand_name
-  type: string
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: ingredients
-  type: string
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: category
-  type: string
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: serving_size
-  type: float
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: serving_size_unit
-  type: string
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: data_source
-  type: string
-  action: set_default
-  default_value: USDA
+- source: labelNutrients
+  action: drop_column
+- source: foodUpdateLog
+  action: drop_column
+- source: tradeChannels
+  action: drop_column
+- source: microbes
+  action: drop_column
+- source: foodAttributes
+  action: drop_column
+- source: gpcClassCode
+  action: drop_column
+- source: subbrandName
+  action: drop_column
+- source: dataSource
+  action: drop_column
+- source: discontinuedDate
+  action: drop_column
+- source: preparationStateCode
+  action: drop_column
+- source: shortDescription
+  action: drop_column
+- source: foodClass
+  action: drop_column
+- source: marketCountry
+  action: drop_column
+- source: availableDate
+  action: drop_column
+- source: publicationDate
+  action: drop_column
+- source: packageWeight
+  action: drop_column
