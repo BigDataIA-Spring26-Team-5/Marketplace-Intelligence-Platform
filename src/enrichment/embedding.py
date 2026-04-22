@@ -10,17 +10,22 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 import pandas as pd
 
 from src.enrichment.corpus import (
     CONFIDENCE_THRESHOLD_CATEGORY,
     add_to_corpus,
+    augment_from_df,
     build_seed_corpus,
+    evict_corpus,
     knn_search_batch,
     load_corpus,
     save_corpus,
 )
+
+MIN_ENRICHMENT_CORPUS = int(os.environ.get("MIN_ENRICHMENT_CORPUS", "1000"))
 
 logger = logging.getLogger(__name__)
 
@@ -55,27 +60,31 @@ def embedding_enrich(
     if "_knn_neighbors" not in df.columns:
         df["_knn_neighbors"] = None
 
-    # Load or seed the corpus
+    # Load corpus, evict stale vectors, augment from S1 results
     index, metadata = load_corpus()
 
-    if index is None or index.count() < 10:
-        logger.info("S2 KNN: corpus empty or too small, seeding from S1-resolved rows")
-        try:
-            build_seed_corpus(df)
-            index, metadata = load_corpus()
-        except ImportError:
-            logger.warning("S2 KNN: faiss not installed, skipping Strategy 2")
-            return df, needs_enrichment, {"resolved": 0}
-        except Exception as e:
-            logger.warning(f"S2 KNN: corpus seed failed: {e}")
-            return df, needs_enrichment, {"resolved": 0}
+    if index is None:
+        logger.warning("S2 KNN: ChromaDB unavailable, skipping Strategy 2")
+        return df, needs_enrichment, {"resolved": 0, "corpus_augmented": 0, "corpus_size_after": 0}
 
-    if index is None or index.count() < 10:
-        logger.info("S2 KNN: corpus still too small after seeding, skipping to S3")
-        return df, needs_enrichment, {"resolved": 0}
+    evict_corpus(index)
+
+    unresolved_indices = list(df.index[mask])
+    augmented = augment_from_df(df, index, len(unresolved_indices))
+
+    if index.count() < MIN_ENRICHMENT_CORPUS:
+        logger.info(
+            "S2 KNN: corpus too small after augmentation (%d vectors), skipping to S3",
+            index.count(),
+        )
+        return df, needs_enrichment, {
+            "resolved": 0,
+            "skipped": "corpus_too_small",
+            "corpus_augmented": augmented,
+            "corpus_size_after": index.count(),
+        }
 
     resolved = 0
-    unresolved_indices = list(df.index[mask])
     unresolved_rows = [df.loc[idx] for idx in unresolved_indices]
 
     try:
@@ -83,7 +92,7 @@ def embedding_enrich(
     except ImportError:
         logger.warning("S2 KNN: faiss not installed, skipping Strategy 2")
         needs_enrichment = df[enrich_cols].isna().any(axis=1)
-        return df, needs_enrichment, {"resolved": 0}
+        return df, needs_enrichment, {"resolved": 0, "corpus_augmented": augmented, "corpus_size_after": index.count()}
     except Exception as e:
         logger.warning(f"S2 KNN: batch search failed: {e}")
         batch_results = [(None, 0.0, []) for _ in unresolved_indices]
@@ -103,4 +112,4 @@ def embedding_enrich(
 
     logger.info(f"S2 KNN: resolved {resolved} rows")
     needs_enrichment = df[enrich_cols].isna().any(axis=1)
-    return df, needs_enrichment, {"resolved": resolved}
+    return df, needs_enrichment, {"resolved": resolved, "corpus_augmented": augmented, "corpus_size_after": index.count()}

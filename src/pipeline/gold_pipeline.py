@@ -98,6 +98,10 @@ def _read_silver_parquet(source_name: str, date: str) -> pd.DataFrame:
         frames.append(pd.read_parquet(buf, engine="pyarrow"))
 
     df = pd.concat(frames, ignore_index=True)
+    string_cols = [c for c in df.columns if str(df[c].dtype) == "string"]
+    if string_cols:
+        df[string_cols] = df[string_cols].astype(object)
+        logger.debug("Cast %d StringDtype columns to object: %s", len(string_cols), string_cols)
     logger.info(f"Loaded {len(df)} rows from Silver")
     _validate_silver_schema(df, source_name)
     return df
@@ -266,10 +270,12 @@ def _build_gold_run_log(
         "dq_score_post":    round(dq_post, 4) if dq_post is not None else None,
         "dq_delta":         dq_delta,
         "enrichment_stats": {
-            "deterministic": es.get("deterministic", 0),
-            "embedding":     es.get("embedding",     0),
-            "llm":           es.get("llm",           0),
-            "unresolved":    es.get("unresolved",    0),
+            "deterministic":    es.get("deterministic",    0),
+            "embedding":        es.get("embedding",        0),
+            "llm":              es.get("llm",              0),
+            "unresolved":       es.get("unresolved",       0),
+            "corpus_augmented": es.get("corpus_augmented", 0),
+            "corpus_size_after": es.get("corpus_size_after", 0),
         },
         "audit_log": audit_log,
     }

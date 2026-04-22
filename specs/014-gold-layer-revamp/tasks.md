@@ -25,7 +25,7 @@ This is a prerequisite for US2 because `evict_corpus` and `augment_from_df` both
 **⚠️ CRITICAL**: US2 implementation tasks T004–T009 cannot begin until T001 is complete.
 US1 (T002–T003) and US3 (T010) are fully independent and can proceed immediately.
 
-- [ ] T001 Add `last_seen` ISO-8601 timestamp to ChromaDB metadata in all existing upsert paths in `src/enrichment/corpus.py`: set `"last_seen": datetime.utcnow().isoformat()` in `add_to_corpus` (line ~363) and `build_seed_corpus` (line ~169 metadatas list). Import `datetime` if not already imported.
+- [X] T001 Add `last_seen` ISO-8601 timestamp to ChromaDB metadata in all existing upsert paths in `src/enrichment/corpus.py`: set `"last_seen": datetime.utcnow().isoformat()` in `add_to_corpus` (line ~363) and `build_seed_corpus` (line ~169 metadatas list). Import `datetime` if not already imported.
 
 **Checkpoint**: T001 complete — US2 corpus tasks can now begin.
 
@@ -37,9 +37,9 @@ US1 (T002–T003) and US3 (T010) are fully independent and can proceed immediate
 
 **Independent Test**: Run `poetry run python -m src.pipeline.gold_pipeline --source off --date 2026/04/21 --domain nutrition` with `sample.parquet`. Expect no `TypeError: boolean value of NA is ambiguous`, run log `status: success`, rows written to BigQuery.
 
-- [ ] T002 [P] [US1] In `_read_silver_parquet` in `src/pipeline/gold_pipeline.py`, after `df = pd.concat(frames, ignore_index=True)` (line ~100), add: `string_cols = [c for c in df.columns if str(df[c].dtype) == "string"]` then `df[string_cols] = df[string_cols].astype(object)` then `logger.debug("Cast %d StringDtype columns to object: %s", len(string_cols), string_cols)`. This converts Arrow `StringDtype` nulls (`pd.NA`) to `None` before any block runs.
+- [X] T002 [P] [US1] In `_read_silver_parquet` in `src/pipeline/gold_pipeline.py`, after `df = pd.concat(frames, ignore_index=True)` (line ~100), add: `string_cols = [c for c in df.columns if str(df[c].dtype) == "string"]` then `df[string_cols] = df[string_cols].astype(object)` then `logger.debug("Cast %d StringDtype columns to object: %s", len(string_cols), string_cols)`. This converts Arrow `StringDtype` nulls (`pd.NA`) to `None` before any block runs.
 
-- [ ] T003 [P] [US1] In `src/enrichment/llm_tier.py`, add module-level helper after imports: `def _safe_text(v) -> str:` that returns `""` for `pd.NA`/`None`/`NaN` (use `pd.isna` inside `try/except TypeError`). Replace both `or`-chain crash sites: line ~189 `str(row.get("product_name") or "")` → `_safe_text(row.get("product_name"))` and line ~190 `str(row.get("ingredients") or row.get("description") or "")` → `_safe_text(row.get("ingredients")) or _safe_text(row.get("description"))`. Apply same replacement at lines ~282–283.
+- [X] T003 [P] [US1] In `src/enrichment/llm_tier.py`, add module-level helper after imports: `def _safe_text(v) -> str:` that returns `""` for `pd.NA`/`None`/`NaN` (use `pd.isna` inside `try/except TypeError`). Replace both `or`-chain crash sites: line ~189 `str(row.get("product_name") or "")` → `_safe_text(row.get("product_name"))` and line ~190 `str(row.get("ingredients") or row.get("description") or "")` → `_safe_text(row.get("ingredients")) or _safe_text(row.get("description"))`. Apply same replacement at lines ~282–283.
 
 **Checkpoint**: T002 + T003 complete — full pipeline run should complete without crashing on any Silver source.
 
@@ -55,19 +55,19 @@ US1 (T002–T003) and US3 (T010) are fully independent and can proceed immediate
 
 ### Corpus changes (sequential — all in `src/enrichment/corpus.py`)
 
-- [ ] T004 [US2] Add `evict_corpus(collection)` function to `src/enrichment/corpus.py`. Read `CORPUS_TTL_DAYS = int(os.environ.get("CORPUS_TTL_DAYS", "90"))` and `MAX_CORPUS_SIZE = int(os.environ.get("MAX_CORPUS_SIZE", "500000"))` as module constants. Function logic: (1) compute `cutoff = (datetime.utcnow() - timedelta(days=CORPUS_TTL_DAYS)).isoformat()`; (2) query ChromaDB for vectors where `last_seen < cutoff`, delete in batches of 500; (3) if `collection.count() > MAX_CORPUS_SIZE`, query all IDs + `last_seen`, sort ascending, delete oldest in batches of 500 until under cap. Wrap entire function in `try/except` — log WARNING on any ChromaDB failure and return without raising.
+- [X] T004 [US2] Add `evict_corpus(collection)` function to `src/enrichment/corpus.py`. Read `CORPUS_TTL_DAYS = int(os.environ.get("CORPUS_TTL_DAYS", "90"))` and `MAX_CORPUS_SIZE = int(os.environ.get("MAX_CORPUS_SIZE", "500000"))` as module constants. Function logic: (1) compute `cutoff = (datetime.utcnow() - timedelta(days=CORPUS_TTL_DAYS)).isoformat()`; (2) query ChromaDB for vectors where `last_seen < cutoff`, delete in batches of 500; (3) if `collection.count() > MAX_CORPUS_SIZE`, query all IDs + `last_seen`, sort ascending, delete oldest in batches of 500 until under cap. Wrap entire function in `try/except` — log WARNING on any ChromaDB failure and return without raising.
 
-- [ ] T005 [US2] Add `augment_from_df(df, collection, unresolved_count, force_ratio_threshold=0.25)` function to `src/enrichment/corpus.py`. Logic: (1) if `collection.count() / unresolved_count >= force_ratio_threshold`, log DEBUG and return 0; (2) filter `labeled = df[df["primary_category"].notna()]`; (3) if empty, log WARNING and return 0; (4) encode texts via `_get_model()`, upsert in chunks of 500 with `last_seen = datetime.utcnow().isoformat()` in metadata; (5) log augmentation count before and after; (6) return count of vectors upserted. Wrap ChromaDB calls in `try/except` — log WARNING on failure, return 0.
+- [X] T005 [US2] Add `augment_from_df(df, collection, unresolved_count, force_ratio_threshold=0.25)` function to `src/enrichment/corpus.py`. Logic: (1) if `collection.count() / unresolved_count >= force_ratio_threshold`, log DEBUG and return 0; (2) filter `labeled = df[df["primary_category"].notna()]`; (3) if empty, log WARNING and return 0; (4) encode texts via `_get_model()`, upsert in chunks of 500 with `last_seen = datetime.utcnow().isoformat()` in metadata; (5) log augmentation count before and after; (6) return count of vectors upserted. Wrap ChromaDB calls in `try/except` — log WARNING on failure, return 0.
 
-- [ ] T006 [US2] In `knn_search_batch` in `src/enrichment/corpus.py`, add module constant `CHROMA_QUERY_CHUNK_SIZE = int(os.environ.get("CHROMA_QUERY_CHUNK_SIZE", "500"))`. Replace the single `batch_results = index.query(query_embeddings=embeddings.tolist(), n_results=k_actual)` call with a loop: iterate `embeddings` in slices of `CHROMA_QUERY_CHUNK_SIZE`, collect `all_metadatas` and `all_distances` lists, reconstruct `batch_results = {"metadatas": all_metadatas, "distances": all_distances}`. Per-chunk exception → fill `n` empty lists and log WARNING. Log progress every 10 chunks at INFO level.
+- [X] T006 [US2] In `knn_search_batch` in `src/enrichment/corpus.py`, add module constant `CHROMA_QUERY_CHUNK_SIZE = int(os.environ.get("CHROMA_QUERY_CHUNK_SIZE", "500"))`. Replace the single `batch_results = index.query(query_embeddings=embeddings.tolist(), n_results=k_actual)` call with a loop: iterate `embeddings` in slices of `CHROMA_QUERY_CHUNK_SIZE`, collect `all_metadatas` and `all_distances` lists, reconstruct `batch_results = {"metadatas": all_metadatas, "distances": all_distances}`. Per-chunk exception → fill `n` empty lists and log WARNING. Log progress every 10 chunks at INFO level.
 
 ### Downstream wiring (parallel — different files)
 
-- [ ] T007 [P] [US2] Update `embedding_enrich` in `src/enrichment/embedding.py`: (1) import `evict_corpus`, `augment_from_df` from `src.enrichment.corpus`; (2) add `MIN_ENRICHMENT_CORPUS = int(os.environ.get("MIN_ENRICHMENT_CORPUS", "1000"))` constant; (3) after `index, metadata = load_corpus()`, call `evict_corpus(index)`; (4) call `augmented = augment_from_df(df, index, len(unresolved_indices))`; (5) after augmentation, if `index.count() < MIN_ENRICHMENT_CORPUS`, log INFO `"S2 KNN: corpus too small after augmentation (%d vectors), skipping to S3"` and return `(df, needs_enrichment, {"resolved": 0, "skipped": "corpus_too_small", "corpus_augmented": augmented, "corpus_size_after": index.count()})`.
+- [X] T007 [P] [US2] Update `embedding_enrich` in `src/enrichment/embedding.py`: (1) import `evict_corpus`, `augment_from_df` from `src.enrichment.corpus`; (2) add `MIN_ENRICHMENT_CORPUS = int(os.environ.get("MIN_ENRICHMENT_CORPUS", "1000"))` constant; (3) after `index, metadata = load_corpus()`, call `evict_corpus(index)`; (4) call `augmented = augment_from_df(df, index, len(unresolved_indices))`; (5) after augmentation, if `index.count() < MIN_ENRICHMENT_CORPUS`, log INFO `"S2 KNN: corpus too small after augmentation (%d vectors), skipping to S3"` and return `(df, needs_enrichment, {"resolved": 0, "skipped": "corpus_too_small", "corpus_augmented": augmented, "corpus_size_after": index.count()})`.
 
-- [ ] T008 [P] [US2] Update `LLMEnrichBlock` in `src/blocks/llm_enrich.py`: add `corpus_augmented: int = 0` and `corpus_size_after: int = 0` to `last_enrichment_stats` class-level dict. Capture the return value of the S2 call in `run()` and merge `corpus_augmented` and `corpus_size_after` keys from S2 stats into `last_enrichment_stats`.
+- [X] T008 [P] [US2] Update `LLMEnrichBlock` in `src/blocks/llm_enrich.py`: add `corpus_augmented: int = 0` and `corpus_size_after: int = 0` to `last_enrichment_stats` class-level dict. Capture the return value of the S2 call in `run()` and merge `corpus_augmented` and `corpus_size_after` keys from S2 stats into `last_enrichment_stats`.
 
-- [ ] T009 [P] [US2] Extend `enrichment_stats` dict in `_build_gold_run_log` in `src/pipeline/gold_pipeline.py` with two new keys: `"corpus_augmented": es.get("corpus_augmented", 0)` and `"corpus_size_after": es.get("corpus_size_after", 0)`.
+- [X] T009 [P] [US2] Extend `enrichment_stats` dict in `_build_gold_run_log` in `src/pipeline/gold_pipeline.py` with two new keys: `"corpus_augmented": es.get("corpus_augmented", 0)` and `"corpus_size_after": es.get("corpus_size_after", 0)`.
 
 **Checkpoint**: T004–T009 complete — S2 should resolve >0 rows on next full run, corpus evicts stale vectors, run log tracks augmentation.
 
@@ -79,7 +79,7 @@ US1 (T002–T003) and US3 (T010) are fully independent and can proceed immediate
 
 **Independent Test**: Run dedup on full OFF partition (783k rows). Count of log lines `Block size N >= OOM threshold 2000` must be fewer than 20.
 
-- [ ] T010 [US3] In `src/blocks/fuzzy_deduplicate.py` at line ~119, replace `key = names.iloc[idx][:3].strip()` with:
+- [X] T010 [US3] In `src/blocks/fuzzy_deduplicate.py` at line ~119, replace `key = names.iloc[idx][:3].strip()` with:
   ```python
   name_prefix  = names.iloc[idx][:4].strip()
   brand_prefix = brands.iloc[idx][:2].strip()
@@ -93,7 +93,7 @@ US1 (T002–T003) and US3 (T010) are fully independent and can proceed immediate
 
 ## Phase 5: Polish & Cross-Cutting
 
-- [ ] T011 [P] Update `specs/014-gold-layer-revamp/data-model.md` Section 2 (ChromaDB corpus growth model table) to reflect expected post-fix corpus sizes: first full OFF run seeds ~193,896 vectors; subsequent daily runs add small deltas; TTL eviction keeps corpus fresh after 90 days.
+- [X] T011 [P] Update `specs/014-gold-layer-revamp/data-model.md` Section 2 (ChromaDB corpus growth model table) to reflect expected post-fix corpus sizes: first full OFF run seeds ~193,896 vectors; subsequent daily runs add small deltas; TTL eviction keeps corpus fresh after 90 days.
 
 - [ ] T012 Run end-to-end validation per `specs/014-gold-layer-revamp/quickstart.md` sample-run scenario: `poetry run python -m src.pipeline.gold_pipeline --source off --date 2026/04/21 --domain nutrition` against `sample.parquet`. Verify all SC-001–SC-006 success criteria are met, all 6 expected log lines appear, and run log JSON contains `corpus_augmented` and `corpus_size_after` keys.
 
