@@ -36,7 +36,7 @@ def get_codegen_llm() -> str:
 
 
 def get_enrichment_llm() -> str:
-    """Model string for S3 RAG-LLM enrichment."""
+    """Model string for S3 LLM enrichment."""
     return _ENRICHMENT_MODEL
 
 

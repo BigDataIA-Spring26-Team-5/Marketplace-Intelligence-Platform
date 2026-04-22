@@ -52,7 +52,7 @@ A data operator wants the pipeline to execute end-to-end, transforming source da
 1. **Given** approved schema mapping, **When** the user clicks "Run Pipeline", **Then** the pipeline executes in order: DQ pre-score → schema transform → cleaning → dedup → enrichment → DQ post-score.
 2. **Given** enrichment execution, **When** S1 (deterministic) runs, **Then** primary_category, allergens, dietary_tags, and is_organic are extracted via regex/keywords from source text.
 3. **Given** remaining missing categories after S1, **When** S2 (KNN) runs, **Then** products are matched against FAISS corpus using embedding similarity.
-4. **Given** still-missing categories after S2, **When** S3 (RAG-LLM) runs, **Then** the LLM categorizes using top-3 corpus neighbors as RAG context.
+4. **Given** still-missing categories after S2, **When** S3 (LLM) runs, **Then** the LLM categorizes using top-3 corpus neighbors as RAG context.
 
 ---
 

@@ -68,7 +68,7 @@ Gold (global dedup → enrichment → final catalog)
 
 #### R7 — Enrichment (unchanged)
 - Runs AFTER global dedup on the deduplicated golden records
-- Three tiers unchanged: S1 Deterministic → S2 KNN → S3 RAG-LLM
+- Three tiers unchanged: S1 Deterministic → S2 KNN → S3 LLM
 - Safety boundary unchanged: allergens, dietary_tags, is_organic are S1-only
 - Input size is now much smaller (deduplicated set vs raw)
 

@@ -35,7 +35,7 @@ _GAUGE_METRICS = [
     ("dedup_rate",            "etl_dedup_rate",            "Fraction of rows identified as duplicates"),
     ("s1_count",              "etl_enrichment_s1_resolved","Rows resolved by S1 deterministic enrichment"),
     ("s2_count",              "etl_enrichment_s2_resolved","Rows resolved by S2 KNN enrichment"),
-    ("s3_count",              "etl_enrichment_s3_resolved","Rows resolved by S3 RAG-LLM enrichment"),
+    ("s3_count",              "etl_enrichment_s3_resolved","Rows resolved by S3 LLM enrichment"),
     ("s4_count",              "etl_enrichment_unresolved", "Rows resolved by S4 fallback enrichment"),
     ("quarantine_rows",       "etl_rows_quarantined",      "Rows sent to quarantine"),
     ("block_duration_seconds","etl_duration_seconds",      "Total pipeline wall-clock duration in seconds"),

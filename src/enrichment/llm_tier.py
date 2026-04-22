@@ -152,12 +152,12 @@ async def _call_one_batch(
             if is_rate_limit and attempt < max_retries - 1:
                 wait = 30 * (2 ** attempt)  # 30s, 60s, 120s
                 logger.warning(
-                    "S3 RAG-LLM: %s rate limited (attempt %d/%d), retrying in %ds",
+                    "S3 LLM: %s rate limited (attempt %d/%d), retrying in %ds",
                     batch_label, attempt + 1, max_retries, wait,
                 )
                 await asyncio.sleep(wait)
             else:
-                logger.warning("S3 RAG-LLM: %s failed: %s", batch_label, e)
+                logger.warning("S3 LLM: %s failed: %s", batch_label, e)
                 return e
     return last_exc
 
@@ -189,7 +189,7 @@ def llm_enrich(
     model = get_enrichment_llm()
     rows_to_enrich = df.index[mask].tolist()
     logger.info(
-        f"S3 RAG-LLM: {len(rows_to_enrich)} rows need primary_category "
+        f"S3 LLM: {len(rows_to_enrich)} rows need primary_category "
         f"(batch_size={_LLM_BATCH_SIZE}, concurrency={_LLM_CONCURRENCY})"
     )
 
@@ -317,7 +317,7 @@ def llm_enrich(
         try:
             save_corpus(index, metadata)
         except Exception as e:
-            logger.warning(f"S3 RAG-LLM: could not save corpus: {e}")
+            logger.warning(f"S3 LLM: could not save corpus: {e}")
 
     needs_enrichment = df[enrich_cols].isna().any(axis=1)
     return df, needs_enrichment, {"resolved": resolved}

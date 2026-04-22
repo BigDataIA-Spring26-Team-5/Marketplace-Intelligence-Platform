@@ -5,7 +5,7 @@ for each LLM call site:
   1. Agent 1 — Schema Analysis (orchestrator.py)
   2. Agent 2 — Critic (critic.py)
   3. Agent 3 — Sequence Planner (graph.py)
-  4. Strategy 3 — RAG-LLM Enrichment (enrichment/llm_tier.py)
+  4. Strategy 3 — LLM Enrichment (enrichment/llm_tier.py)
 """
 
 from __future__ import annotations
@@ -540,7 +540,7 @@ def validate_enrichment_output(
     batch_size: int,
     batch_indices: list[int],
 ) -> GuardrailResult:
-    """Validate LLM output from RAG-LLM enrichment (S3).
+    """Validate LLM output from LLM enrichment (S3).
 
     Checks:
     - Response is a dict with 'results' list
