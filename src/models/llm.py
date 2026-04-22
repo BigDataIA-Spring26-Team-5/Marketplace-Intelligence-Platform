@@ -119,7 +119,7 @@ try:
     from src.uc2_observability.kafka_to_pg import emit_event as _emit_event  # type: ignore[import]
     from src.uc2_observability.metrics_collector import MetricsCollector as _MetricsCollector  # type: ignore[import]
     _UC2_AVAILABLE = True
-except ImportError:
+except (ImportError, SyntaxError):
     _emit_event = None  # type: ignore[assignment]
     _MetricsCollector = None  # type: ignore[assignment]
     _UC2_AVAILABLE = False

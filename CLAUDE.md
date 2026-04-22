@@ -128,6 +128,8 @@ Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THR
 - `RunLogWriter`, `RunLogStore`, `ObservabilityChatbot`, `MetricsExporter` in `src/uc2_observability/` fully implemented (011-observability-rag-chatbot)
 - Python 3.11 + `pyarrow` (schema validation), `rapidfuzz` (fuzzy dedup), `faiss-cpu` (batch KNN), `sentence-transformers` (embeddings), `sqlite3` (LLM cache fallback) (013-gold-layer-pipeline)
 - GCS buckets `gs://mip-silver-2024/` (input) and `gs://mip-gold-2024/` (output); CLI at `python -m src.pipeline.gold` (013-gold-layer-pipeline)
+- Python 3.11 + pandas 2.x, chromadb (HTTP client), sentence-transformers (`all-MiniLM-L6-v2`), rapidfuzz, faiss-cpu, redis-py, pyarrow (aqeel)
+- GCS (Silver Parquet input), BigQuery (Gold output), ChromaDB at localhost:8000 (corpus), Redis at localhost:6379 (embedding + dedup cache) (aqeel)
 
 ## Recent Changes
 - 009-redis-cache-layer: Added Python 3.11 + `redis-py` (new), `numpy` (existing, for embedding serialization), `hashlib` (stdlib), `argparse` (stdlib)

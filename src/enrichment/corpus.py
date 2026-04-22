@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+from datetime import datetime, timedelta
 from typing import Optional
 
 import numpy as np
@@ -30,6 +31,10 @@ K_NEIGHBORS = 5
 MIN_CORPUS_SIZE = 10
 
 _COLLECTION_NAME = "product_corpus"
+
+CORPUS_TTL_DAYS = int(os.environ.get("CORPUS_TTL_DAYS", "90"))
+MAX_CORPUS_SIZE = int(os.environ.get("MAX_CORPUS_SIZE", "500000"))
+CHROMA_QUERY_CHUNK_SIZE = int(os.environ.get("CHROMA_QUERY_CHUNK_SIZE", "500"))
 
 _MODEL = None
 _MODEL_NAME = "all-MiniLM-L6-v2"
@@ -111,6 +116,43 @@ def _score_from_neighbors(
     return best_category, confidence, neighbors[:3]
 
 
+def evict_corpus(collection) -> None:
+    """
+    Two-tier eviction: TTL-first (remove vectors unseen > CORPUS_TTL_DAYS),
+    then size cap (delete oldest last_seen until count <= MAX_CORPUS_SIZE).
+    Best-effort — logs WARNING on any ChromaDB failure and returns.
+    """
+    try:
+        cutoff = (datetime.utcnow() - timedelta(days=CORPUS_TTL_DAYS)).isoformat()
+        try:
+            stale = collection.get(where={"last_seen": {"$lt": cutoff}}, include=["metadatas"])
+            stale_ids = stale["ids"]
+            if stale_ids:
+                for i in range(0, len(stale_ids), 500):
+                    collection.delete(ids=stale_ids[i:i + 500])
+                logger.info("Corpus eviction: deleted %d stale vectors (TTL %d days)", len(stale_ids), CORPUS_TTL_DAYS)
+        except Exception as e:
+            logger.warning("Corpus TTL eviction query failed: %s", e)
+
+        if collection.count() > MAX_CORPUS_SIZE:
+            try:
+                all_items = collection.get(include=["metadatas"])
+                ids_and_ts = [
+                    (vid, m.get("last_seen", ""))
+                    for vid, m in zip(all_items["ids"], all_items["metadatas"])
+                ]
+                ids_and_ts.sort(key=lambda x: x[1])
+                excess = collection.count() - MAX_CORPUS_SIZE
+                to_delete = [vid for vid, _ in ids_and_ts[:excess]]
+                for i in range(0, len(to_delete), 500):
+                    collection.delete(ids=to_delete[i:i + 500])
+                logger.info("Corpus eviction: deleted %d vectors (size cap %d)", len(to_delete), MAX_CORPUS_SIZE)
+            except Exception as e:
+                logger.warning("Corpus size-cap eviction failed: %s", e)
+    except Exception as e:
+        logger.warning("evict_corpus failed: %s", e)
+
+
 def load_corpus() -> tuple[Optional[object], list[dict]]:
     """
     Load the ChromaDB product corpus collection.
@@ -134,6 +176,74 @@ def save_corpus(index, metadata: list[dict]) -> None:
             logger.info(f"Saved corpus: {index.count()} vectors")
         except Exception:
             pass
+
+
+def augment_from_df(
+    df: pd.DataFrame,
+    collection,
+    unresolved_count: int,
+    force_ratio_threshold: float = 0.25,
+) -> int:
+    """
+    Upsert S1-resolved rows into the corpus if corpus_size/unresolved_count < force_ratio_threshold.
+    Returns number of vectors upserted.
+    """
+    try:
+        corpus_size = collection.count()
+        if unresolved_count > 0 and corpus_size / unresolved_count >= force_ratio_threshold:
+            logger.debug(
+                "S2 KNN: corpus ratio %.3f >= threshold %.2f, skipping augmentation",
+                corpus_size / unresolved_count,
+                force_ratio_threshold,
+            )
+            return 0
+
+        labeled = df[df["primary_category"].notna()].copy()
+        if labeled.empty:
+            logger.warning("augment_from_df: no S1-resolved rows available to augment corpus")
+            return 0
+
+        model = _get_model()
+        if model is None:
+            return 0
+
+        logger.info(
+            "S2 KNN: corpus too sparse (%d vectors / %d queries = %.3f < threshold %.2f). "
+            "Augmenting from %d S1-resolved rows...",
+            corpus_size, unresolved_count,
+            corpus_size / unresolved_count if unresolved_count else 0,
+            force_ratio_threshold, len(labeled),
+        )
+
+        texts = labeled.apply(_build_row_text, axis=1).tolist()
+        categories = labeled["primary_category"].tolist()
+        product_names = labeled.get("product_name", pd.Series([""] * len(labeled))).tolist()
+
+        embeddings = model.encode(texts, batch_size=64, show_progress_bar=False).astype(np.float32)
+        now_iso = datetime.utcnow().isoformat()
+        ids = [_make_vector_id(t, c) for t, c in zip(texts, categories)]
+        metadatas = [
+            {"category": cat, "product_name": str(pn), "last_seen": now_iso}
+            for cat, pn in zip(categories, product_names)
+        ]
+
+        for i in range(0, len(ids), 500):
+            collection.upsert(
+                embeddings=embeddings[i:i + 500].tolist(),
+                metadatas=metadatas[i:i + 500],
+                ids=ids[i:i + 500],
+            )
+
+        after = collection.count()
+        upserted = len(ids)
+        logger.info(
+            "S2 KNN: corpus augmented %d → %d vectors (upserted %d)",
+            corpus_size, after, upserted,
+        )
+        return upserted
+    except Exception as e:
+        logger.warning("augment_from_df failed: %s", e)
+        return 0
 
 
 def build_seed_corpus(df: pd.DataFrame) -> None:
@@ -166,8 +276,9 @@ def build_seed_corpus(df: pd.DataFrame) -> None:
     embeddings = model.encode(texts, batch_size=64, show_progress_bar=False).astype(np.float32)
 
     ids = [_make_vector_id(t, c) for t, c in zip(texts, categories)]
+    now_iso = datetime.utcnow().isoformat()
     metadatas = [
-        {"category": cat, "product_name": pn}
+        {"category": cat, "product_name": pn, "last_seen": now_iso}
         for cat, pn in zip(categories, product_names)
     ]
 
@@ -305,17 +416,33 @@ def knn_search_batch(
 
     k_actual = min(k, index.count())
 
-    try:
-        batch_results = index.query(
-            query_embeddings=embeddings.tolist(),
-            n_results=k_actual,
-        )
-    except Exception as e:
-        logger.warning(f"ChromaDB batch query failed: {e}")
-        return [(None, 0.0, []) for _ in rows]
+    all_metadatas: list[list] = []
+    all_distances: list[list] = []
+    total_chunks = (len(embeddings) + CHROMA_QUERY_CHUNK_SIZE - 1) // CHROMA_QUERY_CHUNK_SIZE
+    for chunk_num, chunk_start in enumerate(range(0, len(embeddings), CHROMA_QUERY_CHUNK_SIZE), 1):
+        chunk_emb = embeddings[chunk_start:chunk_start + CHROMA_QUERY_CHUNK_SIZE]
+        try:
+            chunk_res = index.query(
+                query_embeddings=chunk_emb.tolist(),
+                n_results=k_actual,
+            )
+            all_metadatas.extend(chunk_res["metadatas"])
+            all_distances.extend(chunk_res["distances"])
+        except Exception as e:
+            logger.warning("ChromaDB batch query chunk %d/%d failed: %s", chunk_num, total_chunks, e)
+            all_metadatas.extend([[] for _ in range(len(chunk_emb))])
+            all_distances.extend([[] for _ in range(len(chunk_emb))])
+        if chunk_num % 10 == 0:
+            logger.info(
+                "S2 KNN: queried chunk %d/%d (%d/%d rows)",
+                chunk_num, total_chunks,
+                min(chunk_start + CHROMA_QUERY_CHUNK_SIZE, len(embeddings)),
+                len(embeddings),
+            )
+
+    batch_results = {"metadatas": all_metadatas, "distances": all_distances}
 
     results: list[tuple[Optional[str], float, list[dict]]] = []
-    valid_iter = iter(range(len(valid_texts)))
     vi = 0
     for is_valid in valid_mask:
         if is_valid:
@@ -362,7 +489,7 @@ def add_to_corpus(
     try:
         index.upsert(
             embeddings=[embedding[0].tolist()],
-            metadatas=[{"category": category, "product_name": str(row.get("product_name", ""))}],
+            metadatas=[{"category": category, "product_name": str(row.get("product_name", "")), "last_seen": datetime.utcnow().isoformat()}],
             ids=[vector_id],
         )
     except Exception as e:

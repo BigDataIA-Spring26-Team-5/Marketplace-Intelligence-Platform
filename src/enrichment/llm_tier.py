@@ -18,6 +18,14 @@ from typing import Optional
 
 import pandas as pd
 
+
+def _safe_text(v) -> str:
+    """Return str(v) or '' — safe for pd.NA, None, float NaN."""
+    try:
+        return "" if pd.isna(v) else str(v)
+    except (TypeError, ValueError):
+        return str(v) if v is not None else ""
+
 import asyncio
 
 from src.models.llm import async_call_llm_json, call_llm_json, get_enrichment_llm
@@ -186,8 +194,8 @@ def llm_enrich(
 
         if cache_client is not None:
             for idx, row in zip(batch_indices, batch_rows):
-                product_name = str(row.get("product_name") or "")
-                description = str(row.get("ingredients") or row.get("description") or "")
+                product_name = _safe_text(row.get("product_name"))
+                description = _safe_text(row.get("ingredients")) or _safe_text(row.get("description"))
                 content_hash = _compute_content_hash(product_name, description, enrich_cols)
                 cached = cache_client.get("llm", content_hash)
                 if cached is not None:
@@ -279,8 +287,8 @@ def llm_enrich(
                 if cache_client is not None:
                     try:
                         row = miss_rows[local_idx]
-                        product_name = str(row.get("product_name") or "")
-                        description = str(row.get("ingredients") or row.get("description") or "")
+                        product_name = _safe_text(row.get("product_name"))
+                        description = _safe_text(row.get("ingredients")) or _safe_text(row.get("description"))
                         content_hash = _compute_content_hash(product_name, description, enrich_cols)
                         row_result = {col: df.at[real_idx, col] for col in enrich_cols if col in df.columns}
                         cache_client.set("llm", content_hash, json.dumps(row_result).encode(), ttl=CACHE_TTL_LLM)

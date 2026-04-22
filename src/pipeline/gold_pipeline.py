@@ -81,7 +81,10 @@ def _read_silver_parquet(source_name: str, date: str) -> pd.DataFrame:
     prefix = f"{source_name}/{date}/"
     client = _gcs_client()
     bucket = client.bucket(SILVER_BUCKET)
-    blobs = [b for b in bucket.list_blobs(prefix=prefix) if b.name.endswith(".parquet")]
+    blobs = [
+        b for b in bucket.list_blobs(prefix=prefix)
+        if b.name.endswith(".parquet") and not b.name.split("/")[-1].startswith("sample")
+    ]
 
     if not blobs:
         raise FileNotFoundError(
@@ -95,6 +98,10 @@ def _read_silver_parquet(source_name: str, date: str) -> pd.DataFrame:
         frames.append(pd.read_parquet(buf, engine="pyarrow"))
 
     df = pd.concat(frames, ignore_index=True)
+    string_cols = [c for c in df.columns if str(df[c].dtype) == "string"]
+    if string_cols:
+        df[string_cols] = df[string_cols].astype(object)
+        logger.debug("Cast %d StringDtype columns to object: %s", len(string_cols), string_cols)
     logger.info(f"Loaded {len(df)} rows from Silver")
     _validate_silver_schema(df, source_name)
     return df
@@ -142,6 +149,15 @@ def run_gold_pipeline(
     from src.pipeline.runner import PipelineRunner
     from src.schema.analyzer import get_unified_schema
     from src.blocks.dq_score import _SKIP_ALWAYS
+
+    if cache_client is None:
+        try:
+            from src.cache.client import CacheClient
+            cache_client = CacheClient()
+            if not cache_client._available:
+                logger.warning("Redis unavailable — running without cache (SQLite fallback active)")
+        except Exception as e:
+            logger.warning(f"Cache init failed — running without cache: {e}")
 
     run_id = f"{source_name.upper()}_gold_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     start_time = time.monotonic()
@@ -254,10 +270,12 @@ def _build_gold_run_log(
         "dq_score_post":    round(dq_post, 4) if dq_post is not None else None,
         "dq_delta":         dq_delta,
         "enrichment_stats": {
-            "deterministic": es.get("deterministic", 0),
-            "embedding":     es.get("embedding",     0),
-            "llm":           es.get("llm",           0),
-            "unresolved":    es.get("unresolved",    0),
+            "deterministic":    es.get("deterministic",    0),
+            "embedding":        es.get("embedding",        0),
+            "llm":              es.get("llm",              0),
+            "unresolved":       es.get("unresolved",       0),
+            "corpus_augmented": es.get("corpus_augmented", 0),
+            "corpus_size_after": es.get("corpus_size_after", 0),
         },
         "audit_log": audit_log,
     }

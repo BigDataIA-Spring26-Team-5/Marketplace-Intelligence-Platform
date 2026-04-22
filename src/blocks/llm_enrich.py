@@ -42,7 +42,7 @@ class LLMEnrichBlock(Block):
         # Track which rows still need enrichment (True = needs enrichment)
         needs_enrichment = df[enrich_cols].isna().any(axis=1)
 
-        stats = {"deterministic": 0, "embedding": 0, "llm": 0, "unresolved": 0}
+        stats = {"deterministic": 0, "embedding": 0, "llm": 0, "unresolved": 0, "corpus_augmented": 0, "corpus_size_after": 0}
         initial_missing = int(needs_enrichment.sum())
         logger.info(f"Enrichment: {initial_missing}/{len(df)} rows need enrichment")
 
@@ -61,6 +61,8 @@ class LLMEnrichBlock(Block):
         # Strategy 2: KNN corpus search (primary_category only)
         df, needs_enrichment, s2_stats = embedding_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"))
         stats["embedding"] = s2_stats["resolved"]
+        stats["corpus_augmented"] = s2_stats.get("corpus_augmented", 0)
+        stats["corpus_size_after"] = s2_stats.get("corpus_size_after", 0)
         logger.info(f"  S2 (KNN corpus): resolved {stats['embedding']} rows")
 
         # Capture which rows are unresolved before S3 to identify S3-resolved rows

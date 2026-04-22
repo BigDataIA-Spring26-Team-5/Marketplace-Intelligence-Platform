@@ -116,7 +116,9 @@ class FuzzyDeduplicateBlock(Block):
             blocks: dict[str, list[int]] = {}
             for idx in names[valid_name_mask].index:
                 if idx in uncached_indices:
-                    key = names.iloc[idx][:3].strip()
+                    name_prefix  = names.iloc[idx][:4].strip()
+                    brand_prefix = brands.iloc[idx][:2].strip()
+                    key = f"{name_prefix}_{brand_prefix}" if name_prefix else ""
                     if key:
                         blocks.setdefault(key, []).append(idx)
 
