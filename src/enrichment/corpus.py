@@ -10,7 +10,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+import time
 from typing import Optional
 
 import numpy as np
@@ -123,7 +123,7 @@ def evict_corpus(collection) -> None:
     Best-effort — logs WARNING on any ChromaDB failure and returns.
     """
     try:
-        cutoff = (datetime.utcnow() - timedelta(days=CORPUS_TTL_DAYS)).isoformat()
+        cutoff = time.time() - (CORPUS_TTL_DAYS * 86400)
         try:
             stale = collection.get(where={"last_seen": {"$lt": cutoff}}, include=["metadatas"])
             stale_ids = stale["ids"]
@@ -141,7 +141,7 @@ def evict_corpus(collection) -> None:
                     (vid, m.get("last_seen", ""))
                     for vid, m in zip(all_items["ids"], all_items["metadatas"])
                 ]
-                ids_and_ts.sort(key=lambda x: x[1])
+                ids_and_ts.sort(key=lambda x: float(x[1]) if isinstance(x[1], (int, float)) else 0.0)
                 excess = collection.count() - MAX_CORPUS_SIZE
                 to_delete = [vid for vid, _ in ids_and_ts[:excess]]
                 for i in range(0, len(to_delete), 500):
@@ -220,10 +220,10 @@ def augment_from_df(
         product_names = labeled.get("product_name", pd.Series([""] * len(labeled))).tolist()
 
         embeddings = model.encode(texts, batch_size=64, show_progress_bar=False).astype(np.float32)
-        now_iso = datetime.utcnow().isoformat()
+        now_ts = time.time()
         ids = [_make_vector_id(t, c) for t, c in zip(texts, categories)]
         metadatas = [
-            {"category": cat, "product_name": str(pn), "last_seen": now_iso}
+            {"category": cat, "product_name": str(pn), "last_seen": now_ts}
             for cat, pn in zip(categories, product_names)
         ]
 
@@ -276,9 +276,9 @@ def build_seed_corpus(df: pd.DataFrame) -> None:
     embeddings = model.encode(texts, batch_size=64, show_progress_bar=False).astype(np.float32)
 
     ids = [_make_vector_id(t, c) for t, c in zip(texts, categories)]
-    now_iso = datetime.utcnow().isoformat()
+    now_ts = time.time()
     metadatas = [
-        {"category": cat, "product_name": pn, "last_seen": now_iso}
+        {"category": cat, "product_name": pn, "last_seen": now_ts}
         for cat, pn in zip(categories, product_names)
     ]
 
@@ -489,7 +489,7 @@ def add_to_corpus(
     try:
         index.upsert(
             embeddings=[embedding[0].tolist()],
-            metadatas=[{"category": category, "product_name": str(row.get("product_name", "")), "last_seen": datetime.utcnow().isoformat()}],
+            metadatas=[{"category": category, "product_name": str(row.get("product_name", "")), "last_seen": time.time()}],
             ids=[vector_id],
         )
     except Exception as e:

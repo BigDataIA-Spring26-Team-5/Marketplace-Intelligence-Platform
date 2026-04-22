@@ -59,6 +59,8 @@ class MetricsExporter:
             _gauge("etl_enrichment_s2_resolved", float(enrichment.get("embedding") or 0), short_labels, short_vals)
             _gauge("etl_enrichment_s3_resolved", float(enrichment.get("llm") or 0), short_labels, short_vals)
             _gauge("etl_enrichment_unresolved", float(enrichment.get("unresolved") or 0), short_labels, short_vals)
+            _gauge("etl_corpus_augmented", float(enrichment.get("corpus_augmented") or 0), short_labels, short_vals)
+            _gauge("etl_corpus_size_after", float(enrichment.get("corpus_size_after") or 0), short_labels, short_vals)
             _gauge("etl_run_status", _STATUS_VALUES.get(status, 0.0), short_labels, short_vals)
 
             push_to_gateway(

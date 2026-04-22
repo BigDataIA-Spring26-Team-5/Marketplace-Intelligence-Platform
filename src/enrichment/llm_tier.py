@@ -126,22 +126,40 @@ async def _call_one_batch(
     model: str,
     semaphore: asyncio.Semaphore,
     batch_label: str,
+    max_retries: int = 4,
 ) -> dict | Exception:
-    """Fire one LLM batch call, protected by semaphore. Returns raw result dict or Exception."""
+    """Fire one LLM batch call with exponential backoff on rate limits. Returns result dict or Exception."""
     prompt = _build_batch_rag_prompt(miss_rows, batch_neighbors)
-    try:
-        async with semaphore:
-            return await async_call_llm_json(
-                model=model,
-                messages=[
-                    {"role": "system", "content": BATCH_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
+    last_exc: Exception = Exception("no attempts made")
+    for attempt in range(max_retries):
+        try:
+            async with semaphore:
+                return await async_call_llm_json(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": BATCH_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.1,
+                )
+        except Exception as e:
+            last_exc = e
+            is_rate_limit = (
+                "ratelimit" in type(e).__name__.lower()
+                or "rate limit" in str(e).lower()
+                or "429" in str(e)
             )
-    except Exception as e:
-        logger.warning(f"S3 RAG-LLM: {batch_label} failed: {e}")
-        return e
+            if is_rate_limit and attempt < max_retries - 1:
+                wait = 30 * (2 ** attempt)  # 30s, 60s, 120s
+                logger.warning(
+                    "S3 RAG-LLM: %s rate limited (attempt %d/%d), retrying in %ds",
+                    batch_label, attempt + 1, max_retries, wait,
+                )
+                await asyncio.sleep(wait)
+            else:
+                logger.warning("S3 RAG-LLM: %s failed: %s", batch_label, e)
+                return e
+    return last_exc
 
 
 def llm_enrich(
