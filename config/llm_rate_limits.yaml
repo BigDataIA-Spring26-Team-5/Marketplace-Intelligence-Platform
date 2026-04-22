@@ -1,0 +1,8 @@
+anthropic:
+  model: claude-haiku-4-5-20251001
+  max_requests_per_minute: 40       # safe margin under 50 RPM hard limit
+  max_tokens_per_minute: 40000      # safe margin under 50k TPM hard limit
+  estimated_tokens_per_request: 1500
+  retry_max_attempts: 4
+  retry_base_delay_seconds: 15
+  retry_jitter_fraction: 0.3        # adds 0-30% random jitter to retry delay

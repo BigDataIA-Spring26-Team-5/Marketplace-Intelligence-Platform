@@ -56,8 +56,7 @@ BATCH_SYSTEM_PROMPT = (
     f"CATEGORIES: {CATEGORIES}"
 )
 
-_LLM_BATCH_SIZE   = int(__import__("os").environ.get("LLM_ENRICH_BATCH_SIZE",  "50"))
-_LLM_CONCURRENCY  = int(__import__("os").environ.get("LLM_ENRICH_CONCURRENCY", "5"))
+_LLM_BATCH_SIZE = int(__import__("os").environ.get("LLM_ENRICH_BATCH_SIZE", "50"))
 
 
 def _compute_content_hash(product_name: str, description: str, enrich_cols: list[str]) -> str:
@@ -124,24 +123,24 @@ async def _call_one_batch(
     miss_rows: list,
     batch_neighbors: list,
     model: str,
-    semaphore: asyncio.Semaphore,
+    rate_limiter,
     batch_label: str,
     max_retries: int = 4,
 ) -> dict | Exception:
-    """Fire one LLM batch call with exponential backoff on rate limits. Returns result dict or Exception."""
+    """Fire one LLM batch call, paced by rate_limiter. Returns result dict or Exception."""
     prompt = _build_batch_rag_prompt(miss_rows, batch_neighbors)
     last_exc: Exception = Exception("no attempts made")
     for attempt in range(max_retries):
         try:
-            async with semaphore:
-                return await async_call_llm_json(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": BATCH_SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.1,
-                )
+            await rate_limiter.acquire()
+            return await async_call_llm_json(
+                model=model,
+                messages=[
+                    {"role": "system", "content": BATCH_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+            )
         except Exception as e:
             last_exc = e
             is_rate_limit = (
@@ -150,12 +149,7 @@ async def _call_one_batch(
                 or "429" in str(e)
             )
             if is_rate_limit and attempt < max_retries - 1:
-                wait = 30 * (2 ** attempt)  # 30s, 60s, 120s
-                logger.warning(
-                    "S3 LLM: %s rate limited (attempt %d/%d), retrying in %ds",
-                    batch_label, attempt + 1, max_retries, wait,
-                )
-                await asyncio.sleep(wait)
+                await rate_limiter.backoff(attempt)
             else:
                 logger.warning("S3 LLM: %s failed: %s", batch_label, e)
                 return e
@@ -186,11 +180,14 @@ def llm_enrich(
     if not mask.any():
         return df, needs_enrichment, {"resolved": 0}
 
+    from src.enrichment.rate_limiter import RateLimiter
+    rate_limiter = RateLimiter("anthropic")
+
     model = get_enrichment_llm()
     rows_to_enrich = df.index[mask].tolist()
     logger.info(
-        f"S3 LLM: {len(rows_to_enrich)} rows need primary_category "
-        f"(batch_size={_LLM_BATCH_SIZE}, concurrency={_LLM_CONCURRENCY})"
+        "S3 LLM: %d rows need primary_category (batch_size=%d, dispatch_interval=%.2fs)",
+        len(rows_to_enrich), _LLM_BATCH_SIZE, rate_limiter.min_interval,
     )
 
     index, metadata = load_corpus()
@@ -253,21 +250,21 @@ def llm_enrich(
         needs_enrichment = df[enrich_cols].isna().any(axis=1)
         return df, needs_enrichment, {"resolved": resolved}
 
-    # ── Phase 2: Fire all LLM batches concurrently ───────────────────
-    # Always runs in a fresh thread+loop — safe in both CLI and Streamlit contexts.
+    # ── Phase 2: Fire LLM batches sequentially, paced by rate_limiter ──
+    # Sequential loop avoids concurrent burst — rate_limiter.acquire() enforces
+    # the sliding-window RPM/TPM budget before each dispatch.
     async def _gather_all():
-        semaphore = asyncio.Semaphore(_LLM_CONCURRENCY)
-        tasks = [
-            _call_one_batch(
+        results = []
+        for i, (_, miss_rows, neighbors) in enumerate(pending_batches):
+            result = await _call_one_batch(
                 miss_rows=miss_rows,
                 batch_neighbors=neighbors,
                 model=model,
-                semaphore=semaphore,
+                rate_limiter=rate_limiter,
                 batch_label=f"batch[{i * _LLM_BATCH_SIZE}:{(i + 1) * _LLM_BATCH_SIZE}]",
             )
-            for i, (_, miss_rows, neighbors) in enumerate(pending_batches)
-        ]
-        return await asyncio.gather(*tasks)
+            results.append(result)
+        return results
 
     import concurrent.futures
 
