@@ -140,6 +140,13 @@ def ingest_incremental(execution_date=None, **kwargs):
                 if not record.get("product_name"):
                     continue
                 row = {k: record.get(k) for k in KEEP_FIELDS}
+                # Nutritional values live under nutriments{} in OFF JSON, not top-level
+                nutriments = record.get("nutriments") or {}
+                row["energy_100g"]        = nutriments.get("energy-kcal_100g") or nutriments.get("energy_100g")
+                row["fat_100g"]           = nutriments.get("fat_100g")
+                row["carbohydrates_100g"] = nutriments.get("carbohydrates_100g")
+                row["proteins_100g"]      = nutriments.get("proteins_100g")
+                row["salt_100g"]          = nutriments.get("salt_100g")
                 buffer.append(row)
                 total += 1
 
