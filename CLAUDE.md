@@ -84,9 +84,9 @@ S2's `_knn_neighbors` column is a pipeline-internal JSON string consumed only by
 
 Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THRESHOLD_CATEGORY=0.60`, `K_NEIGHBORS=5`.
 
-### Unified schema is auto-generated once, then reused
+### Domain schemas are the canonical target per-run
 
-[config/unified_schema.json](config/unified_schema.json) is the canonical target schema. On the **first run** (when the file is absent or the orchestrator sees no existing schema), Agent 1 uses `FIRST_RUN_SCHEMA_PROMPT` to derive clean unified column names from the source DataFrame, then [src/schema/analyzer.py](src/schema/analyzer.py) `derive_unified_schema_from_source()` writes the JSON — including auto-added enrichment columns (`allergens`, `primary_category`, `dietary_tags`, `is_organic`) and computed DQ columns (`dq_score_pre`, `dq_score_post`, `dq_delta`). On **subsequent runs**, Agent 1 uses `SCHEMA_ANALYSIS_PROMPT` which explicitly excludes enrichment and computed columns from the mappable set — those are not sourceable, they're produced by the pipeline. If you're adding new computed or enrichment columns, extend the `derive_unified_schema_from_source()` list **and** the exclusion filter in `analyze_schema_node`, otherwise the LLM will be asked to map columns that don't come from the source.
+`config/schemas/<domain>_schema.json` is the canonical target schema for each domain (`nutrition`, `safety`, `pricing`). The domain is always operator-supplied via `--domain <domain>` (CLI) or `PipelineState["domain"]` (Streamlit) — it is never auto-inferred. On the **first run** for a new source, Agent 1 uses `FIRST_RUN_SCHEMA_PROMPT` to derive unified column names, then [src/schema/analyzer.py](src/schema/analyzer.py) `derive_unified_schema_from_source()` writes to the correct domain schema file — including auto-added enrichment columns (`allergens`, `primary_category`, `dietary_tags`, `is_organic`) and computed DQ columns (`dq_score_pre`, `dq_score_post`, `dq_delta`). On **subsequent runs**, Agent 1 uses `SCHEMA_ANALYSIS_PROMPT` which excludes enrichment and computed columns from the mappable set. After block execution, `_silver_normalize()` enforces exact domain schema column set/order and writes `output/silver/<domain>/<source_name>.parquet`. Gold output is rebuilt each run by concatenating all Silver parquets for the domain into `output/gold/<domain>.parquet`. `config/unified_schema.json` is retired — do not load it.
 
 ### LLM routing is centralized
 
@@ -130,6 +130,8 @@ Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THR
 - GCS buckets `gs://mip-silver-2024/` (input) and `gs://mip-gold-2024/` (output); CLI at `python -m src.pipeline.gold` (013-gold-layer-pipeline)
 - Python 3.11 + pandas 2.x, chromadb (HTTP client), sentence-transformers (`all-MiniLM-L6-v2`), rapidfuzz, faiss-cpu, redis-py, pyarrow (aqeel)
 - GCS (Silver Parquet input), BigQuery (Gold output), ChromaDB at localhost:8000 (corpus), Redis at localhost:6379 (embedding + dedup cache) (aqeel)
+- Python 3.11 + pandas, Pydantic v2, LangGraph, LiteLLM, pyarrow (for parquet write) (aqeel)
+- Local filesystem (`output/silver/<domain>/`, `output/gold/`) for Silver and Gold output; GCS for the silver-mode pipeline branch (unchanged) (aqeel)
 
 ## Recent Changes
 - 009-redis-cache-layer: Added Python 3.11 + `redis-py` (new), `numpy` (existing, for embedding serialization), `hashlib` (stdlib), `argparse` (stdlib)

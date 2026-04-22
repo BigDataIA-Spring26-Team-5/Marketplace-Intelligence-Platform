@@ -11,7 +11,7 @@ No runtime code generation. Dataset-specific transforms persist as YAML under `s
 | Node | What it does |
 |------|-------------|
 | `load_source` | Auto-detect delimiter, adaptive sampling (~5K rows) |
-| `analyze_schema` | Agent 1 maps source → unified schema; emits RENAME/CAST/FORMAT/DELETE/ADD/SPLIT/UNIFY/DERIVE ops |
+| `analyze_schema` | Agent 1 maps source → domain schema; emits RENAME/CAST/FORMAT/DELETE/ADD/SPLIT/UNIFY/DERIVE ops |
 | `critique_schema` | Agent 2 (reasoning model) validates ops against 7 deterministic rules |
 | `check_registry` | HITL gate — human decides handling for missing columns |
 | `plan_sequence` | Agent 3 reorders registered blocks (cannot add/remove) |
@@ -37,7 +37,7 @@ Cascading, three-tier for missing fields:
 
 ### Core Behaviors
 
-- **Schema-first**: every dataset compared to `config/unified_schema.json` before execution
+- **Schema-first**: every dataset compared to `config/schemas/<domain>_schema.json` before execution
 - **DQ enforcement**: `dq_score_pre`/`dq_score_post` computed; rows failing required-field validation are quarantined
 - **Checkpoint/resume**: SQLite-backed state at `checkpoints.db` via `src/pipeline/checkpoint/`
 - **Audit trail**: every block logs `rows_in`/`rows_out`
@@ -112,7 +112,10 @@ src/
 └── uc4_recommendations/
 
 config/
-├── unified_schema.json   # Master 14-column schema
+├── schemas/              # Per-domain schema files
+│   ├── nutrition_schema.json
+│   ├── safety_schema.json
+│   └── pricing_schema.json
 └── litellm_config.yaml
 
 specs/               # Feature specs (001–006)

@@ -1,23 +1,24 @@
 <!--
 Sync Impact Report:
-- Version: 1.3.0 -> 1.4.0
+- Version: 1.4.0 -> 2.0.0
 - Modified principles:
-  - I. Schema-First Gap Analysis -> I. Schema-First Gap Analysis
-  - II. Three-Agent Pipeline with Critic Review -> II. Three-Agent Pipeline with Critic Review
-  - III. Declarative YAML Execution Only -> III. Declarative YAML Execution Only
-  - IV. Human Approval Gates -> IV. Human Approval Gates
-  - V. Cascading Enrichment with Safety Boundaries -> V. Cascading Enrichment with Safety Boundaries
-  - VI. Self-Extending Mapping Memory -> VI. Self-Extending Mapping Memory
-  - VII. Data Quality and Quarantine Enforcement -> VII. Data Quality and Quarantine Enforcement
-  - VIII. PRODUCTION SCALE (NEW)
-- Added sections: VIII. Production Scale
+  - I. Schema-First Gap Analysis: replaced `config/unified_schema.json` with `config/schemas/<domain>_schema.json`; domain is operator-supplied, never inferred
+  - III. Declarative YAML Execution Only: removed unified_schema.json reference (no changes to YAML execution rules)
+- Added sections: IX. Domain-Scoped Schemas, Silver Normalization, and Gold Concatenation
+- Retired artifacts: `config/unified_schema.json` — no longer a governance artifact; domain schema file is sole schema contract
 - Removed sections: None
-- Templates requiring updates:
-  - ✅ `.specify/templates/plan-template.md` (no changes needed - already covers scale/constitution)
-  - ✅ `.specify/templates/spec-template.md` (no changes needed)
-  - ✅ `.specify/templates/tasks-template.md` (no changes needed)
-  - ✅ `README.md` (no runtime guidance changes in constitution)
-- Follow-up TODOs: None
+- Templates requiring review:
+  - ⚠️ `.specify/templates/plan-template.md` — check for any "unified-schema alignment" gate referencing unified_schema.json; update to domain schema gate
+  - ⚠️ `.specify/templates/spec-template.md` — check schema alignment sections for unified_schema.json references
+  - ⚠️ `src/agents/prompts.py` — SCHEMA_ANALYSIS_PROMPT and FIRST_RUN_SCHEMA_PROMPT reference unified_schema.json; must be updated to load config/schemas/<domain>_schema.json
+  - ⚠️ `README.md` — architecture section describes unified_schema.json as canonical target schema; must be updated
+  - ⚠️ `CLAUDE.md` — "Unified schema is auto-generated once, then reused" section references config/unified_schema.json; must be updated
+- Rationale for MAJOR bump: Principle I redefines the schema contract — a non-negotiable rule about which artifact governs gap analysis — in a backward-incompatible way. All existing runs that read config/unified_schema.json break unless migrated. Principle IX adds mandatory non-negotiable concatenation and normalization behavior.
+- Follow-up TODOs:
+  - Create config/schemas/ directory with domain schema files (nutrition_schema.json, safety_schema.json, pricing_schema.json)
+  - Migrate config/unified_schema.json content into appropriate domain schema files
+  - Update analyze_schema_node and derive_unified_schema_from_source() to load domain schema
+  - Update Development Workflow quality gate "unified-schema alignment" to "domain-schema alignment"
 -->
 # Schema-Driven ETL Pipeline Constitution
 
@@ -25,14 +26,18 @@ Sync Impact Report:
 
 ### I. Schema-First Gap Analysis
 Every ingestion flow MUST analyze the incoming dataset against
-`config/unified_schema.json` before transformation planning begins. Schema gaps
-MUST be classified with the 8-primitive taxonomy: `RENAME`, `CAST`, `FORMAT`,
-`DELETE`, `ADD`, `SPLIT`, `UNIFY`, and `DERIVE`. Agent 1 MUST produce the
-initial operations list, and Agent 2 MUST review that list before YAML mapping
-registration proceeds.
+`config/schemas/<domain>_schema.json` before transformation planning begins.
+The domain is always operator-supplied via `PipelineState["domain"]` and MUST
+NOT be inferred or auto-classified by any agent. Schema gaps MUST be classified
+with the 8-primitive taxonomy: `RENAME`, `CAST`, `FORMAT`, `DELETE`, `ADD`,
+`SPLIT`, `UNIFY`, and `DERIVE`. Agent 1 MUST produce the initial operations
+list, and Agent 2 MUST review that list before YAML mapping registration
+proceeds.
 
-Rationale: the unified schema is the contract for all downstream blocks, data
-quality scoring, and output validation.
+Rationale: the domain schema file is the contract for all downstream blocks,
+data quality scoring, and output validation. A single global schema cannot
+represent the distinct column sets of nutrition, safety, and pricing domains
+without conflating semantically different fields.
 
 ### II. Three-Agent Pipeline with Critic Review
 The pipeline architecture MUST remain a three-agent flow with distinct
@@ -128,6 +133,42 @@ Rationale: production deployments require predictable cost, resumption
 capability, and throughput that are incompatible with row-by-row LLM
 calling.
 
+### IX. Domain-Scoped Schemas, Silver Normalization, and Gold Concatenation
+Domain schemas and pipeline-layer outputs MUST be organized and governed as
+follows:
+
+- Every domain MUST have exactly one schema file at
+  `config/schemas/<domain>_schema.json`. This file defines the canonical column
+  set for that domain and is the sole schema contract for all datasets belonging
+  to that domain.
+- Columns defined in one domain schema MUST NOT appear in another domain schema
+  unless they are semantically identical and intentionally shared (e.g. `id`,
+  `data_source`, `created_at`).
+- During Bronze transformation, Agent 1 MUST perform gap analysis against the
+  domain schema only. Columns not present in the domain schema MUST be
+  classified for deletion using the `DELETE` primitive.
+- When a Bronze dataset is missing a field required by the domain schema, the
+  pipeline MUST fill it with a null or configured default value and MUST flag
+  the affected rows in `dq_score_pre` before enrichment begins.
+- All datasets within a domain MUST conform to an identical column set and
+  column order after Silver normalization. Silver normalization is a fixed
+  post-block-sequence step inside `run_pipeline`, not a registered block in
+  `BlockRegistry`.
+- When all Silver datasets for a domain have been processed, `run_pipeline`
+  MUST concatenate them into a single Gold output file at
+  `output/gold/<domain>.parquet` (or configured equivalent). Concatenation is
+  domain-scoped — datasets from different domains are never concatenated
+  together.
+- The seven-node graph order (`load_source → analyze_schema → critique_schema →
+  check_registry → plan_sequence → run_pipeline → save_output`) MUST NOT change.
+  Silver normalization and Gold concatenation are internal responsibilities of
+  `run_pipeline`.
+
+Rationale: domain-scoped schemas prevent column-set bleed across semantically
+distinct ingestion flows. Enforcing identical column sets at the Silver layer
+makes Gold concatenation a safe append with no schema resolution required at
+merge time.
+
 ## Technology Stack
 
 - **Language**: Python 3.11
@@ -158,7 +199,7 @@ The interactive Streamlit flow MUST expose the approval gates before execution
 commits operator decisions to the YAML mapping or accepts quarantined results.
 
 Quality gates for any feature or refactor:
-- unified-schema alignment is documented
+- domain-schema alignment is documented (`config/schemas/<domain>_schema.json`)
 - YAML mapping behavior is explicit and testable
 - enrichment safety fields remain deterministic-only
 - replayed mappings under `src/blocks/generated/` still load correctly
@@ -193,4 +234,19 @@ Compliance review expectations:
 - runtime guidance MUST not describe deprecated architecture such as runtime
   code generation
 
-**Version**: 1.4.0 | **Ratified**: 2026-04-17 | **Last Amended**: 2026-04-18
+**Version**: 2.0.0 | **Ratified**: 2026-04-17 | **Last Amended**: 2026-04-22
+
+<!--
+Changelog:
+- 2.0.0 (2026-04-22): MAJOR bump. Principle I amended — schema contract changed from
+  config/unified_schema.json (single global file) to config/schemas/<domain>_schema.json
+  (per-domain files); domain is always operator-supplied, never agent-inferred.
+  config/unified_schema.json retired as a governance artifact. Principle IX added —
+  domain-scoped schemas, Silver normalization as internal run_pipeline step, Gold
+  concatenation scoped to domain. Development Workflow quality gate updated from
+  "unified-schema alignment" to "domain-schema alignment". MAJOR because Principle I
+  redefines a non-negotiable rule in a backward-incompatible way: all runs reading
+  config/unified_schema.json break without migration.
+- 1.4.0 (2026-04-18): Added Principle VIII (Production Scale).
+- 1.3.0 (prior): Added Principles I–VII.
+-->

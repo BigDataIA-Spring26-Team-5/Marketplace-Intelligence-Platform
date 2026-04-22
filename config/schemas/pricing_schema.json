@@ -1,0 +1,60 @@
+{
+  "columns": {
+    "product_name": {
+      "type": "string",
+      "required": true
+    },
+    "brand_owner": {
+      "type": "string",
+      "required": true
+    },
+    "brand_name": {
+      "type": "string",
+      "required": true
+    },
+    "ingredients": {
+      "type": "string",
+      "required": true
+    },
+    "category": {
+      "type": "string",
+      "required": false
+    },
+    "serving_size": {
+      "type": "float",
+      "required": false
+    },
+    "serving_size_unit": {
+      "type": "string",
+      "required": false
+    },
+    "published_date": {
+      "type": "string",
+      "required": true
+    },
+    "data_source": {
+      "type": "string",
+      "required": true
+    },
+    "dq_score_pre": {
+      "type": "float",
+      "required": true,
+      "computed": true
+    },
+    "dq_score_post": {
+      "type": "float",
+      "required": true,
+      "computed": true
+    },
+    "dq_delta": {
+      "type": "float",
+      "required": true,
+      "computed": true
+    }
+  },
+  "dq_weights": {
+    "completeness": 0.4,
+    "freshness": 0.35,
+    "ingredient_richness": 0.25
+  }
+}
