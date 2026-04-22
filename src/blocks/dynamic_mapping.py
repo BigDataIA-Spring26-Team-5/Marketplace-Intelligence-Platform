@@ -69,8 +69,12 @@ class DynamicMappingBlock(Block):
 
     def __init__(self, domain: str, yaml_path: str) -> None:
         from pathlib import Path as _Path
+        import yaml as _yaml
         self._yaml_path = yaml_path
+        raw = _yaml.safe_load(_Path(yaml_path).read_text())
         self._operations = read_mapping_yaml(yaml_path)
+        # Optional gate: only apply this YAML if a source-specific column is present
+        self._apply_if_column_present: str | None = raw.get("apply_if_column_present")
         self.name = _Path(yaml_path).stem  # e.g. DYNAMIC_MAPPING_part_0000
         self.domain = domain
         self.description = f"Declarative column operations from {yaml_path}"
@@ -90,6 +94,12 @@ class DynamicMappingBlock(Block):
         return list(self._operations)
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
+        if self._apply_if_column_present and self._apply_if_column_present not in df.columns:
+            logger.debug(
+                "Skipping %s — gate column '%s' not present",
+                self.name, self._apply_if_column_present,
+            )
+            return df
         df = df.copy()
         for op in self._operations:
             action = op["action"]
@@ -108,20 +118,43 @@ class DynamicMappingBlock(Block):
 
 
 def _handle_set_null(df: pd.DataFrame, op: dict) -> pd.DataFrame:
-    """Create a column filled with proper typed null values."""
+    """Create a column filled with proper typed null values.
+
+    Skips if the column already has at least one non-null value — this makes
+    set_null a safe 'create if missing' operation that never destroys real data
+    coming from a source-specific YAML that ran earlier in the sequence.
+    Use force: true to override.
+    """
     target = op["target"]
     col_type = op.get("type", "string")
     dtype = _NULL_DTYPE_MAP.get(col_type, "string")
+    force = op.get("force", False)
+
+    if not force and target in df.columns and df[target].notna().any():
+        logger.debug(f"set_null: skipping '{target}' — column already has data")
+        return df
+
     df[target] = pd.array([pd.NA] * len(df), dtype=dtype)
     logger.debug(f"set_null: created '{target}' as {dtype} (all NA)")
     return df
 
 
 def _handle_set_default(df: pd.DataFrame, op: dict) -> pd.DataFrame:
-    """Create a column with a user-specified default value."""
+    """Create a column with a user-specified default value.
+
+    Skips if the column already has at least one non-null value — this makes
+    set_default a safe 'create if missing' operation that never overwrites a
+    value set by a source-specific YAML that ran earlier in the sequence.
+    Use force: true to override.
+    """
     target = op["target"]
     col_type = op.get("type", "string")
     default = op.get("default_value")
+    force = op.get("force", False)
+
+    if not force and target in df.columns and df[target].notna().any():
+        logger.debug(f"set_default: skipping '{target}' — column already has data")
+        return df
 
     if default is None:
         return _handle_set_null(df, op)
