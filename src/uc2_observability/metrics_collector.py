@@ -26,24 +26,24 @@ PUSHGATEWAY_URL = os.getenv("UC2_PUSHGATEWAY_URL", "localhost:9091")
 
 # Metric definitions: (metric_name, prometheus_name, type, description)
 _GAUGE_METRICS = [
-    ("rows_in",               "uc1_rows_in",               "Rows entering the pipeline run"),
-    ("rows_out",              "uc1_rows_out",              "Rows exiting the pipeline run"),
-    ("null_rate",             "uc1_null_rate",             "Mean null rate across all fields"),
-    ("dq_score_pre",          "uc1_dq_score_pre",          "Mean DQ score before enrichment"),
-    ("dq_score_post",         "uc1_dq_score_post",         "Mean DQ score after enrichment"),
-    ("dq_delta",              "uc1_dq_delta",              "Mean DQ delta (post - pre)"),
-    ("dedup_rate",            "uc1_dedup_rate",            "Fraction of rows identified as duplicates"),
-    ("s1_count",              "uc1_s1_count",              "Rows resolved by S1 deterministic enrichment"),
-    ("s2_count",              "uc1_s2_count",              "Rows resolved by S2 KNN enrichment"),
-    ("s3_count",              "uc1_s3_count",              "Rows resolved by S3 RAG-LLM enrichment"),
-    ("s4_count",              "uc1_s4_count",              "Rows resolved by S4 fallback enrichment"),
-    ("quarantine_rows",       "uc1_quarantine_rows",       "Rows sent to quarantine"),
-    ("block_duration_seconds","uc1_block_duration_seconds","Total pipeline wall-clock duration in seconds"),
+    ("rows_in",               "etl_rows_in",               "Rows entering the pipeline run"),
+    ("rows_out",              "etl_rows_out",              "Rows exiting the pipeline run"),
+    ("null_rate",             "etl_null_rate",             "Mean null rate across all fields"),
+    ("dq_score_pre",          "etl_dq_score_pre",          "Mean DQ score before enrichment"),
+    ("dq_score_post",         "etl_dq_score_post",         "Mean DQ score after enrichment"),
+    ("dq_delta",              "etl_dq_delta",              "Mean DQ delta (post - pre)"),
+    ("dedup_rate",            "etl_dedup_rate",            "Fraction of rows identified as duplicates"),
+    ("s1_count",              "etl_enrichment_s1_resolved","Rows resolved by S1 deterministic enrichment"),
+    ("s2_count",              "etl_enrichment_s2_resolved","Rows resolved by S2 KNN enrichment"),
+    ("s3_count",              "etl_enrichment_s3_resolved","Rows resolved by S3 RAG-LLM enrichment"),
+    ("s4_count",              "etl_enrichment_unresolved", "Rows resolved by S4 fallback enrichment"),
+    ("quarantine_rows",       "etl_rows_quarantined",      "Rows sent to quarantine"),
+    ("block_duration_seconds","etl_duration_seconds",      "Total pipeline wall-clock duration in seconds"),
 ]
 
 _COUNTER_METRICS = [
-    ("llm_calls",  "uc1_llm_calls_total",  "Total LLM API calls made"),
-    ("cost_usd",   "uc1_llm_cost_usd_total", "Total LLM cost in USD"),
+    ("llm_calls",  "etl_llm_calls_total",   "Total LLM API calls made"),
+    ("cost_usd",   "etl_llm_cost_usd_total", "Total LLM cost in USD"),
 ]
 
 
@@ -115,7 +115,7 @@ class MetricsCollector:
 
         # --- run-level counters (always increment by 1) ---
         run_completed = Counter(
-            "uc1_run_completed_total",
+            "etl_run_completed_total",
             "Total completed pipeline runs",
             ["source", "run_id", "status"],
             registry=registry,
@@ -123,7 +123,7 @@ class MetricsCollector:
         run_completed.labels(source, run_id, metrics_dict.get("status", "success")).inc()
 
         # --- push ---
-        job_name = f"uc1_pipeline_{source}"
+        job_name = f"etl_pipeline_{source}"
         try:
             push_to_gateway(
                 self.pushgateway_url,
@@ -140,18 +140,18 @@ class MetricsCollector:
 
     def push_anomaly_flag(self, run_id: str, source: str, signal: str, value: float = 1.0) -> None:
         """
-        Push uc1_anomaly_flag gauge to Pushgateway.
+        Push etl_anomaly_flag gauge to Pushgateway.
         Called by the anomaly detector when an outlier run is detected.
         """
         registry = CollectorRegistry()
         g = Gauge(
-            "uc1_anomaly_flag",
+            "etl_anomaly_flag",
             "Isolation Forest anomaly flag (1 = outlier)",
             ["source", "run_id", "signal"],
             registry=registry,
         )
         g.labels(source, run_id, signal).set(value)
-        job_name = f"uc1_anomaly_{source}"
+        job_name = f"etl_anomaly_{source}"
         try:
             push_to_gateway(
                 self.pushgateway_url,

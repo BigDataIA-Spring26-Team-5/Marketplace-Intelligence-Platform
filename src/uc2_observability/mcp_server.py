@@ -201,21 +201,21 @@ def get_run_metrics(body: ToolInput) -> ToolResult:
     src_filter = f', source="{body.source}"' if body.source else ""
 
     metrics = {
-        "rows_in":       f'uc1_rows_in{{run_id="{rid}"{src_filter}}}',
-        "rows_out":      f'uc1_rows_out{{run_id="{rid}"{src_filter}}}',
-        "null_rate":     f'uc1_null_rate{{run_id="{rid}"{src_filter}}}',
-        "dq_score_pre":  f'uc1_dq_score_pre{{run_id="{rid}"{src_filter}}}',
-        "dq_score_post": f'uc1_dq_score_post{{run_id="{rid}"{src_filter}}}',
-        "dq_delta":      f'uc1_dq_delta{{run_id="{rid}"{src_filter}}}',
-        "dedup_rate":    f'uc1_dedup_rate{{run_id="{rid}"{src_filter}}}',
-        "llm_calls":     f'uc1_llm_calls_total{{run_id="{rid}"{src_filter}}}',
-        "cost_usd":      f'uc1_llm_cost_usd_total{{run_id="{rid}"{src_filter}}}',
-        "s1_count":      f'uc1_s1_count{{run_id="{rid}"{src_filter}}}',
-        "s2_count":      f'uc1_s2_count{{run_id="{rid}"{src_filter}}}',
-        "s3_count":      f'uc1_s3_count{{run_id="{rid}"{src_filter}}}',
-        "s4_count":      f'uc1_s4_count{{run_id="{rid}"{src_filter}}}',
-        "quarantine":    f'uc1_quarantine_rows{{run_id="{rid}"{src_filter}}}',
-        "block_duration_s": f'uc1_block_duration_seconds{{run_id="{rid}"{src_filter}}}',
+        "rows_in":       f'etl_rows_in{{run_id="{rid}"{src_filter}}}',
+        "rows_out":      f'etl_rows_out{{run_id="{rid}"{src_filter}}}',
+        "null_rate":     f'etl_null_rate{{run_id="{rid}"{src_filter}}}',
+        "dq_score_pre":  f'etl_dq_score_pre{{run_id="{rid}"{src_filter}}}',
+        "dq_score_post": f'etl_dq_score_post{{run_id="{rid}"{src_filter}}}',
+        "dq_delta":      f'etl_dq_delta{{run_id="{rid}"{src_filter}}}',
+        "dedup_rate":    f'etl_dedup_rate{{run_id="{rid}"{src_filter}}}',
+        "llm_calls":     f'etl_llm_calls_total{{run_id="{rid}"{src_filter}}}',
+        "cost_usd":      f'etl_llm_cost_usd_total{{run_id="{rid}"{src_filter}}}',
+        "s1_count":      f'etl_enrichment_s1_resolved{{run_id="{rid}"{src_filter}}}',
+        "s2_count":      f'etl_enrichment_s2_resolved{{run_id="{rid}"{src_filter}}}',
+        "s3_count":      f'etl_enrichment_s3_resolved{{run_id="{rid}"{src_filter}}}',
+        "s4_count":      f'etl_enrichment_unresolved{{run_id="{rid}"{src_filter}}}',
+        "quarantine":    f'etl_rows_quarantined{{run_id="{rid}"{src_filter}}}',
+        "block_duration_s": f'etl_duration_seconds{{run_id="{rid}"{src_filter}}}',
     }
 
     # Return flat {metric_name: value} — Claude reads this directly
@@ -284,14 +284,14 @@ def get_source_stats(body: ToolInput) -> ToolResult:
     run_filter = f', run_id="{body.run_id}"' if body.run_id else ""
 
     queries = {
-        "dq_score_post":  f'uc1_dq_score_post{{source="{src}"{run_filter}}}',
-        "null_rate":      f'uc1_null_rate{{source="{src}"{run_filter}}}',
-        "rows_in":        f'uc1_rows_in{{source="{src}"{run_filter}}}',
-        "rows_out":       f'uc1_rows_out{{source="{src}"{run_filter}}}',
-        "dedup_rate":     f'uc1_dedup_rate{{source="{src}"{run_filter}}}',
-        "cost_usd":       f'uc1_llm_cost_usd_total{{source="{src}"{run_filter}}}',
-        "quarantine_rows":f'uc1_quarantine_rows{{source="{src}"{run_filter}}}',
-        "anomaly_flag":   f'uc1_anomaly_flag{{source="{src}"{run_filter}}}',
+        "dq_score_post":  f'etl_dq_score_post{{source="{src}"{run_filter}}}',
+        "null_rate":      f'etl_null_rate{{source="{src}"{run_filter}}}',
+        "rows_in":        f'etl_rows_in{{source="{src}"{run_filter}}}',
+        "rows_out":       f'etl_rows_out{{source="{src}"{run_filter}}}',
+        "dedup_rate":     f'etl_dedup_rate{{source="{src}"{run_filter}}}',
+        "cost_usd":       f'etl_llm_cost_usd_total{{source="{src}"{run_filter}}}',
+        "quarantine_rows":f'etl_rows_quarantined{{source="{src}"{run_filter}}}',
+        "anomaly_flag":   f'etl_anomaly_flag{{source="{src}"{run_filter}}}',
     }
 
     # Return {metric: {run_id: value}} so caller can see all runs at once
@@ -353,12 +353,12 @@ def get_cost_report(body: ToolInput) -> ToolResult:
 
     data: dict[str, Any] = {}
     for name, pql in [
-        ("cost_usd",   q("uc1_llm_cost_usd_total")),
-        ("llm_calls",  q("uc1_llm_calls_total")),
-        ("s1_count",   q("uc1_s1_count")),
-        ("s2_count",   q("uc1_s2_count")),
-        ("s3_count",   q("uc1_s3_count")),
-        ("s4_count",   q("uc1_s4_count")),
+        ("cost_usd",   q("etl_llm_cost_usd_total")),
+        ("llm_calls",  q("etl_llm_calls_total")),
+        ("s1_count",   q("etl_enrichment_s1_resolved")),
+        ("s2_count",   q("etl_enrichment_s2_resolved")),
+        ("s3_count",   q("etl_enrichment_s3_resolved")),
+        ("s4_count",   q("etl_enrichment_unresolved")),
     ]:
         data[name] = _prom_flat(pql)
 
@@ -434,7 +434,7 @@ def list_runs(body: ToolInput) -> ToolResult:
     to resolve the exact run_id string before calling other tools.
     """
     src_filter = f'source="{body.source}"' if body.source else ""
-    promql = f"uc1_rows_in{{{src_filter}}}" if src_filter else "uc1_rows_in"
+    promql = f"etl_rows_in{{{src_filter}}}" if src_filter else "etl_rows_in"
 
     results, cached = _prom_query(promql)
 

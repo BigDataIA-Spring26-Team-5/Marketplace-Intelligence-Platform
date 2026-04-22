@@ -126,8 +126,11 @@ Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THR
 - UC2 import guard in `src/models/llm.py` — `_UC2_AVAILABLE`, `_emit_event`, `_MetricsCollector` exported from that module; all other files import UC2 symbols from there (010-uc1-uc2-integration)
 - `prometheus_client` (push mode via `push_to_gateway` to Pushgateway at `localhost:9091`); `grafana/docker-compose.yml` Docker stack for UC2 Grafana dashboard (011-observability-rag-chatbot)
 - `RunLogWriter`, `RunLogStore`, `ObservabilityChatbot`, `MetricsExporter` in `src/uc2_observability/` fully implemented (011-observability-rag-chatbot)
+- Python 3.11 + `pyarrow` (schema validation), `rapidfuzz` (fuzzy dedup), `faiss-cpu` (batch KNN), `sentence-transformers` (embeddings), `sqlite3` (LLM cache fallback) (013-gold-layer-pipeline)
+- GCS buckets `gs://mip-silver-2024/` (input) and `gs://mip-gold-2024/` (output); CLI at `python -m src.pipeline.gold` (013-gold-layer-pipeline)
 
 ## Recent Changes
 - 009-redis-cache-layer: Added Python 3.11 + `redis-py` (new), `numpy` (existing, for embedding serialization), `hashlib` (stdlib), `argparse` (stdlib)
 - 010-uc1-uc2-integration: Wired UC1 pipeline to emit Kafka events (block_start/block_end, run_started/run_completed, quarantine, dedup_cluster) and push Prometheus metrics via UC2 modules; added `_llm_call_counter` to `src/models/llm.py`; added `_run_id`/`_run_start_time` to PipelineState; added `last_clusters`/`last_dedup_rate` to FuzzyDeduplicateBlock
 - 011-observability-rag-chatbot: Implemented UC2 log persistence (`RunLogWriter`), queryable log store (`RunLogStore`), RAG chatbot (`ObservabilityChatbot`), Prometheus Pushgateway exporter (`MetricsExporter`); added Observability mode to Streamlit wizard; added `grafana/` Docker Compose stack; `_run_start_time` now set in `load_source_node` via `time.monotonic()`
+- 013-gold-layer-pipeline: Gold layer pipeline (Silver → Gold) with 4-stage architecture: Unify (read + validate Silver Parquet), Dedup (blocking + fuzzy + Union-Find), Enrichment (S1 deterministic → S2 KNN → S3 RAG-LLM), Output (Gold Parquet + run log). Safety boundary: allergens S1-only. SQLite cache fallback when Redis unavailable.

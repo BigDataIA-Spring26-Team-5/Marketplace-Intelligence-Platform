@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import logging
 import os
 import sys
@@ -48,6 +49,30 @@ def _gcs_client():
     return storage.Client()
 
 
+_REQUIRED_SILVER_COLUMNS = {"product_name"}
+_EXPECTED_SILVER_COLUMNS = {
+    "product_name", "brand_name", "ingredients",
+    "dq_score_pre", "source_name",
+}
+
+
+def _validate_silver_schema(df: pd.DataFrame, source_name: str) -> None:
+    """Raise ValueError if required columns are absent; warn on expected-but-missing."""
+    missing_required = _REQUIRED_SILVER_COLUMNS - set(df.columns)
+    if missing_required:
+        raise ValueError(
+            f"Silver Parquet for source '{source_name}' is missing required columns: "
+            f"{sorted(missing_required)}. Found: {sorted(df.columns)}"
+        )
+    missing_expected = _EXPECTED_SILVER_COLUMNS - set(df.columns)
+    if missing_expected:
+        logger.warning(
+            "Silver Parquet for '%s' is missing expected columns (pipeline will continue): %s",
+            source_name,
+            sorted(missing_expected),
+        )
+
+
 def _read_silver_parquet(source_name: str, date: str) -> pd.DataFrame:
     """
     Load all Parquet part-files for source_name/date from GCS Silver.
@@ -71,6 +96,7 @@ def _read_silver_parquet(source_name: str, date: str) -> pd.DataFrame:
 
     df = pd.concat(frames, ignore_index=True)
     logger.info(f"Loaded {len(df)} rows from Silver")
+    _validate_silver_schema(df, source_name)
     return df
 
 
@@ -106,6 +132,7 @@ def run_gold_pipeline(
     date: str,
     domain: str = "nutrition",
     cache_client=None,
+    skip_enrichment: bool = False,
 ) -> int:
     """
     Read Silver Parquet for source_name/date, run gold block sequence, write to BQ.
@@ -128,6 +155,11 @@ def run_gold_pipeline(
 
     block_reg = BlockRegistry.instance()
     gold_sequence = block_reg.get_gold_sequence(domain=domain)
+
+    if skip_enrichment:
+        _ENRICHMENT_BLOCKS = {"extract_allergens", "llm_enrich"}
+        gold_sequence = [b for b in gold_sequence if b not in _ENRICHMENT_BLOCKS]
+        logger.info("--skip-enrichment: removed enrichment blocks from gold sequence")
 
     # Expand stages to individual block names for PipelineRunner
     expanded: list[str] = []
@@ -157,82 +189,114 @@ def run_gold_pipeline(
     logger.info(f"Gold blocks complete: {len(result_df)} rows after dedup/enrichment")
     rows_written = _write_gold_bq(result_df, source_name=source_name)
 
-    _push_uc2_metrics(
+    run_log = _build_gold_run_log(
         run_id=run_id,
         source_name=source_name,
+        domain=domain,
         rows_in=rows_in,
         result_df=result_df,
         audit_log=audit_log,
         duration_seconds=duration_seconds,
     )
+    _save_gold_run_log(run_log)
+    _push_gold_metrics(run_log)
+    _push_gold_audit(run_log)
 
     return rows_written
 
 
-def _push_uc2_metrics(
+def _build_gold_run_log(
     run_id: str,
     source_name: str,
+    domain: str,
     rows_in: int,
-    result_df,
+    result_df: pd.DataFrame,
     audit_log: list,
     duration_seconds: float,
-) -> None:
-    """Push gold run metrics to Prometheus Pushgateway and write audit events to Postgres."""
+    status: str = "success",
+    error: str | None = None,
+) -> dict:
+    """Build run-log dict consumed by _save_gold_run_log, _push_gold_metrics, _push_gold_audit."""
+    dq_pre  = float(result_df["dq_score_pre"].mean())  if "dq_score_pre"  in result_df.columns else None
+    dq_post = float(result_df["dq_score_post"].mean()) if "dq_score_post" in result_df.columns else None
+    dq_delta = round(dq_post - dq_pre, 4) if (dq_pre is not None and dq_post is not None) else None
+
     try:
-        from src.uc2_observability.metrics_collector import MetricsCollector
+        from src.blocks.llm_enrich import LLMEnrichBlock
+        es = LLMEnrichBlock.last_enrichment_stats
+    except Exception:
+        es = {}
+
+    return {
+        "run_id":           run_id,
+        "timestamp":        datetime.now(timezone.utc).isoformat(),
+        "source_name":      source_name,
+        "domain":           domain,
+        "status":           status,
+        "error":            error,
+        "duration_seconds": round(duration_seconds, 3),
+        "rows_in":          rows_in,
+        "rows_out":         len(result_df),
+        "rows_quarantined": 0,
+        "dq_score_pre":     round(dq_pre,  4) if dq_pre  is not None else None,
+        "dq_score_post":    round(dq_post, 4) if dq_post is not None else None,
+        "dq_delta":         dq_delta,
+        "enrichment": {
+            "deterministic": es.get("deterministic", 0),
+            "embedding":     es.get("embedding",     0),
+            "llm":           es.get("llm",           0),
+            "unresolved":    es.get("unresolved",    0),
+        },
+        "audit_log": audit_log,
+    }
+
+
+def _save_gold_run_log(run_log: dict) -> Path | None:
+    """Write run_log to output/run_logs/ as JSON. No external deps — always local."""
+    try:
+        log_dir = PROJECT_ROOT / "output" / "run_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        short_id = run_log["run_id"][-8:]
+        path = log_dir / f"run_{ts}_{short_id}.json"
+        path.write_text(json.dumps(run_log, indent=2, default=str))
+        logger.info("Run log written: %s", path)
+        return path
+    except Exception as exc:
+        logger.warning("Run log write failed (non-fatal): %s", exc)
+        return None
+
+
+def _push_gold_metrics(run_log: dict) -> None:
+    """Push metrics to Prometheus Pushgateway via MetricsExporter (source_name label → Grafana)."""
+    try:
+        from src.uc2_observability.metrics_exporter import MetricsExporter
+        MetricsExporter().push(run_log)
+        logger.info("Prometheus metrics pushed for run_id=%s", run_log["run_id"])
+    except Exception as exc:
+        logger.warning("Prometheus push failed (non-fatal): %s", exc)
+
+
+def _push_gold_audit(run_log: dict) -> None:
+    """Write audit events to Postgres. Independent try block — psycopg2 failure never blocks metrics."""
+    try:
         import psycopg2
         from src.uc2_observability.kafka_to_pg import PG_DSN
-
-        dq_post = float(result_df["dq_score_post"].mean()) if "dq_score_post" in result_df.columns else 0.0
-        dq_pre  = float(result_df["dq_score_pre"].mean())  if "dq_score_pre"  in result_df.columns else 0.0
-        null_rate = float(result_df.isna().mean().mean())
-
-        # Enrichment stats from LLMEnrichBlock.last_enrichment_stats
-        try:
-            from src.blocks.llm_enrich import LLMEnrichBlock
-            es = LLMEnrichBlock.last_enrichment_stats
-        except Exception:
-            es = {}
-
-        metrics = {
-            "rows_in":                rows_in,
-            "rows_out":               len(result_df),
-            "null_rate":              round(null_rate, 4),
-            "dq_score_pre":           round(dq_pre, 4),
-            "dq_score_post":          round(dq_post, 4),
-            "dq_delta":               round(dq_post - dq_pre, 4),
-            "dedup_rate":             round(1 - len(result_df) / rows_in, 4) if rows_in else 0.0,
-            "s1_count":               es.get("deterministic", 0),
-            "s2_count":               es.get("embedding", 0),
-            "s3_count":               es.get("llm", 0),
-            "s4_count":               0,
-            "quarantine_rows":        0,
-            "llm_calls":              0,
-            "cost_usd":               0.0,
-            "block_duration_seconds": duration_seconds,
-            "status":                 "success",
-        }
-
-        MetricsCollector().push(run_id=run_id, source=source_name.upper(), metrics_dict=metrics)
-        logger.info("UC2 metrics pushed for run_id=%s", run_id)
-
-        # Write audit events to Postgres
         conn = psycopg2.connect(PG_DSN)
         ts = datetime.now(timezone.utc)
-        import json
         with conn.cursor() as cur:
             for event_type in ("run_started", "run_completed"):
                 cur.execute(
                     """INSERT INTO audit_events (run_id, source, event_type, status, ts, payload)
                        VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
-                    (run_id, source_name.upper(), event_type, "success", ts, json.dumps(metrics)),
+                    (run_log["run_id"], run_log["source_name"], event_type,
+                     run_log["status"], ts, json.dumps(run_log)),
                 )
         conn.commit()
         conn.close()
-        logger.info("UC2 audit events written for run_id=%s", run_id)
-
+        logger.info("Postgres audit events written for run_id=%s", run_log["run_id"])
     except Exception as exc:
-        logger.warning("UC2 metrics push failed (non-fatal): %s", exc)
+        logger.warning("Postgres audit write failed (non-fatal): %s", exc)
 
 
 def main():
@@ -240,9 +304,15 @@ def main():
     parser.add_argument("--source", required=True, choices=["off", "usda", "openfda"], help="Source name")
     parser.add_argument("--date",   required=True, help="Silver partition date YYYY/MM/DD")
     parser.add_argument("--domain", default="nutrition", choices=["nutrition", "safety", "pricing"])
+    parser.add_argument("--skip-enrichment", action="store_true", help="Skip enrichment blocks (dedup-only run)")
     args = parser.parse_args()
 
-    rows = run_gold_pipeline(source_name=args.source, date=args.date, domain=args.domain)
+    rows = run_gold_pipeline(
+        source_name=args.source,
+        date=args.date,
+        domain=args.domain,
+        skip_enrichment=args.skip_enrichment,
+    )
     logger.info(f"Gold pipeline complete: {rows} rows written to BQ {BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}")
 
 
