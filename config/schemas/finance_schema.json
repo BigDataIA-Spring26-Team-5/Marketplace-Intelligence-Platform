@@ -1,0 +1,68 @@
+{
+  "columns": {
+    "product_name": {
+      "type": "string",
+      "required": true
+    },
+    "brand_owner": {
+      "type": "string",
+      "required": true
+    },
+    "brand_name": {
+      "type": "string",
+      "required": true
+    },
+    "category": {
+      "type": "string",
+      "required": false
+    },
+    "published_date": {
+      "type": "string",
+      "required": true
+    },
+    "data_source": {
+      "type": "string",
+      "required": true
+    },
+    "unit_price": {
+      "type": "float",
+      "required": true
+    },
+    "currency": {
+      "type": "string",
+      "required": true
+    },
+    "price_date": {
+      "type": "string",
+      "required": true
+    },
+    "retailer": {
+      "type": "string",
+      "required": false
+    },
+    "market_region": {
+      "type": "string",
+      "required": false
+    },
+    "dq_score_pre": {
+      "type": "float",
+      "required": true,
+      "computed": true
+    },
+    "dq_score_post": {
+      "type": "float",
+      "required": true,
+      "computed": true
+    },
+    "dq_delta": {
+      "type": "float",
+      "required": true,
+      "computed": true
+    }
+  },
+  "dq_weights": {
+    "completeness": 0.5,
+    "freshness": 0.4,
+    "ingredient_richness": 0.1
+  }
+}

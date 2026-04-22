@@ -1,8 +1,8 @@
-"""SchemaEnforceBlock — enforce unified schema as final silver step.
+"""SchemaEnforceBlock — enforce domain schema as final silver step.
 
 Reads column specs and types directly from the UnifiedSchema Pydantic model
-so that any change to config/unified_schema.json is automatically reflected
-without touching this file.
+passed via config["unified_schema"]. Caller must supply it — domain is not
+knowable inside the block.
 
 Silver scope: all unified schema columns EXCEPT dq_score_post and dq_delta
 (those are computed in the gold layer).
@@ -52,9 +52,12 @@ class SchemaEnforceBlock(Block):
     outputs = []  # dynamic — set at run time from schema
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
-        from src.schema.analyzer import get_unified_schema
-
-        unified_schema = (config or {}).get("unified_schema") or get_unified_schema()
+        unified_schema = (config or {}).get("unified_schema")
+        if unified_schema is None:
+            raise ValueError(
+                "SchemaEnforceBlock requires config['unified_schema'] — "
+                "pass get_domain_schema(domain) from the caller."
+            )
         silver_cols = _silver_columns_from_schema(unified_schema)
         col_names = [c for c, _ in silver_cols]
 
