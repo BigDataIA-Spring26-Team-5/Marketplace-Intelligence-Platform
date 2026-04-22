@@ -68,9 +68,10 @@ class DynamicMappingBlock(Block):
     """
 
     def __init__(self, domain: str, yaml_path: str) -> None:
+        from pathlib import Path as _Path
         self._yaml_path = yaml_path
         self._operations = read_mapping_yaml(yaml_path)
-        self.name = f"DYNAMIC_MAPPING_{domain}"
+        self.name = _Path(yaml_path).stem  # e.g. DYNAMIC_MAPPING_part_0000
         self.domain = domain
         self.description = f"Declarative column operations from {yaml_path}"
         self.inputs = [
