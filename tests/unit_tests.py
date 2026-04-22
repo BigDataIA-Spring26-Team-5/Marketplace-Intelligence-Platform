@@ -751,7 +751,7 @@ class TestAgentOrchestrator:
         from src.agents import orchestrator
 
         with patch.object(orchestrator, "call_llm_json") as mock_llm, \
-             patch.object(orchestrator, "get_unified_schema") as mock_get_schema:
+             patch.object(orchestrator, "get_domain_schema") as mock_get_schema:
 
             mock_get_schema.return_value = UnifiedSchema(
                 columns={
@@ -806,7 +806,7 @@ class TestAgentCritic:
         from src.agents import critic
 
         with patch.object(critic, "call_llm_json") as mock_llm, \
-             patch.object(critic, "get_unified_schema") as mock_schema:
+             patch.object(critic, "get_domain_schema") as mock_schema:
 
             mock_schema.return_value = UnifiedSchema(
                 columns={"product_name": ColumnSpec(type="string", required=True)}
@@ -854,7 +854,7 @@ class TestAgentSequencePlanner:
         from src.agents import graph
 
         with patch.object(graph, "call_llm_json") as mock_llm, \
-             patch.object(graph, "get_unified_schema") as mock_schema, \
+             patch.object(graph, "get_domain_schema") as mock_schema, \
              patch.object(graph, "BlockRegistry") as mock_registry_cls:
 
             mock_schema.return_value = UnifiedSchema(

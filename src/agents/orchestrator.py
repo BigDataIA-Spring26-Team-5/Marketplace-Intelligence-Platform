@@ -17,7 +17,7 @@ from src.agents.prompts import SCHEMA_ANALYSIS_PROMPT
 from src.models.llm import call_llm_json, get_orchestrator_llm
 from src.schema.analyzer import (
     profile_dataframe,
-    get_unified_schema,
+    get_domain_schema,
 )
 from src.schema.models import UnifiedSchema
 from src.schema.sampling import adaptive_sample
@@ -218,7 +218,7 @@ def analyze_schema_node(state: PipelineState) -> dict:
     Classifies each unified column using the 8-primitive taxonomy:
     RENAME, CAST, FORMAT, DELETE, ADD, SPLIT, UNIFY, DERIVE
 
-    Raises FileNotFoundError if config/unified_schema.json is absent.
+    Raises FileNotFoundError if config/schemas/<domain>_schema.json is absent.
     """
     if state.get("operations") is not None:
         return {}
@@ -226,7 +226,7 @@ def analyze_schema_node(state: PipelineState) -> dict:
     domain = state.get("domain", "nutrition")
     model = get_orchestrator_llm()
 
-    unified = get_unified_schema()  # raises FileNotFoundError if absent
+    unified = get_domain_schema(domain)  # raises FileNotFoundError if schema absent
 
     # ── YAML cache check ─────────────────────────────────────────────────────
     cache_client = state.get("cache_client")
@@ -670,7 +670,7 @@ def check_registry_node(state: PipelineState) -> dict:
     # Apply deterministic corrections (Rules 4, 6, 7) regardless of which agent produced operations
     source_schema = state.get("source_schema", {})
     operations = _deterministic_corrections(
-        operations, column_mapping, source_schema, get_unified_schema()
+        operations, column_mapping, source_schema, get_domain_schema(domain)
     )
 
     block_hits: dict[str, str] = {}
@@ -752,7 +752,7 @@ def check_registry_node(state: PipelineState) -> dict:
         # Hard fallback: ensure schema-declared enrichment_alias columns are always in enrich_alias_ops
         # Catches cases where Agent 2 reverted ENRICH_ALIAS → ADD set_null
         alias_targets_set = {a["target"] for a in enrich_alias_ops}
-        for col_name, col_spec in get_unified_schema().columns.items():
+        for col_name, col_spec in get_domain_schema(domain).columns.items():
             schema_alias = col_spec.enrichment_alias
             if schema_alias and col_name not in alias_targets_set:
                 enrich_alias_ops.append({"target": col_name, "source": schema_alias})
@@ -919,7 +919,7 @@ def check_registry_node(state: PipelineState) -> dict:
 
     # Build source validation profile — classifies each non-computed unified col
     # so quarantine can skip columns this source structurally cannot populate.
-    _unified = get_unified_schema()
+    _unified = get_domain_schema(domain)
     _mapped_unified = set(column_mapping.values())
     _derived_unified = {g["target_column"] for g in state.get("derivable_gaps", [])}
     _enriched_unified = set(state.get("enrichment_columns_to_generate", []))

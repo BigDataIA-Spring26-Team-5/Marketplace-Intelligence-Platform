@@ -147,7 +147,7 @@ def run_gold_pipeline(
     """
     from src.registry.block_registry import BlockRegistry
     from src.pipeline.runner import PipelineRunner
-    from src.schema.analyzer import get_unified_schema
+    from src.schema.analyzer import get_domain_schema
     from src.blocks.dq_score import _SKIP_ALWAYS
 
     if cache_client is None:
@@ -185,7 +185,7 @@ def run_gold_pipeline(
         else:
             expanded.append(item)
 
-    unified = get_unified_schema()
+    unified = get_domain_schema(domain)
     config = {
         "dq_weights": unified.dq_weights.model_dump(),
         "domain": domain,

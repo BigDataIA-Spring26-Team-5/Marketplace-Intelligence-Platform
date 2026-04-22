@@ -32,12 +32,41 @@ from src.models.llm import (
 )
 from src.registry.block_registry import BlockRegistry
 from src.pipeline.runner import PipelineRunner, DEFAULT_CHUNK_SIZE, NULL_RATE_COLUMNS
-from src.schema.analyzer import get_unified_schema
+from src.schema.analyzer import get_domain_schema
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
+
+
+def _silver_normalize(
+    df: pd.DataFrame,
+    domain_schema,
+    dq_weights: dict,
+) -> pd.DataFrame:
+    """Enforce domain schema column set and order post-block-sequence.
+
+    Adds null-filled columns for any schema column absent from df.
+    Recomputes dq_score_pre if any required non-computed column was null-filled.
+    Drops columns not in domain schema.
+    Returns df with exactly domain_schema.columns keys in declaration order.
+    """
+    canonical_cols = list(domain_schema.columns.keys())
+    added_required = []
+
+    for col in canonical_cols:
+        if col not in df.columns:
+            df[col] = pd.NA
+            spec = domain_schema.columns[col]
+            if spec.required and not spec.computed:
+                added_required.append(col)
+
+    if added_required:
+        from src.blocks.dq_score import compute_dq_score
+        df["dq_score_pre"] = compute_dq_score(df, dq_weights)
+
+    return df[canonical_cols]
 
 
 # ── Pipeline execution nodes ─────────────────────────────────────────
@@ -83,7 +112,7 @@ def plan_sequence_node(state: PipelineState) -> dict:
 
     pool = block_reg.get_default_sequence(
         domain=domain,
-        unified_schema=get_unified_schema(),
+        unified_schema=get_domain_schema(domain),
         enable_enrichment=enable_enrichment,
     )
     blocks_metadata = block_reg.get_blocks_with_metadata(pool)
@@ -203,7 +232,7 @@ def run_pipeline_node(state: PipelineState) -> dict:
     runner = PipelineRunner(block_registry)
 
     domain = state.get("domain", "nutrition")
-    unified = get_unified_schema()
+    unified = get_domain_schema(domain)
     block_sequence = state.get("block_sequence") or block_registry.get_default_sequence(
         domain=domain,
         unified_schema=unified,
@@ -258,6 +287,7 @@ def run_pipeline_node(state: PipelineState) -> dict:
             chunk_size=state.get("chunk_size", DEFAULT_CHUNK_SIZE),
             sep=state.get("source_sep", ","),
         )
+        result_df = _silver_normalize(result_df, unified, config["dq_weights"])
     except Exception:
         _run_status = "failed"
         raise
@@ -509,6 +539,26 @@ def save_output_node(state: PipelineState) -> dict:
                 quarantined_df.to_csv(q_path, index=False)
                 logger.info(f"Quarantine: {len(quarantined_df)} rows → {q_path}")
 
+        # Silver local parquet write + Gold rebuild (all pipeline modes)
+        domain = state.get("domain", "nutrition")
+        silver_local_dir = OUTPUT_DIR / "silver" / domain
+        silver_local_dir.mkdir(parents=True, exist_ok=True)
+        silver_local_path = silver_local_dir / f"{source_name}.parquet"
+        df.to_parquet(silver_local_path, index=False)
+        logger.info("Silver: %d rows → %s", len(df), silver_local_path)
+
+        silver_files = sorted(silver_local_dir.glob("*.parquet"))
+        gold_path: str | None = None
+        if silver_files:
+            gold_df = pd.concat([pd.read_parquet(p) for p in silver_files], ignore_index=True)
+            gold_dir = OUTPUT_DIR / "gold"
+            gold_dir.mkdir(parents=True, exist_ok=True)
+            gold_path = str(gold_dir / f"{domain}.parquet")
+            gold_df.to_parquet(gold_path, index=False)
+            logger.info("Gold: %d rows → %s", len(gold_df), gold_path)
+        else:
+            logger.warning("No Silver parquet files for domain '%s' — Gold write skipped", domain)
+
         cache_client = state.get("cache_client")
         if cache_client is not None:
             cache_client.get_stats().log_all()
@@ -590,6 +640,8 @@ def save_output_node(state: PipelineState) -> dict:
         "output_path": silver_uri or str(output_path),
         "silver_output_uri": silver_uri,
         "quarantine_output_uri": quarantine_uri,
+        "silver_local_path": str(silver_local_path),
+        "gold_path": gold_path,
     }
 
 
