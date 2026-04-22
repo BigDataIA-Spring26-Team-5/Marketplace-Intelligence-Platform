@@ -58,7 +58,7 @@ def embedding_enrich(
     # Load or seed the corpus
     index, metadata = load_corpus()
 
-    if index is None or index.ntotal < 10:
+    if index is None or index.count() < 10:
         logger.info("S2 KNN: corpus empty or too small, seeding from S1-resolved rows")
         try:
             build_seed_corpus(df)
@@ -70,7 +70,7 @@ def embedding_enrich(
             logger.warning(f"S2 KNN: corpus seed failed: {e}")
             return df, needs_enrichment, {"resolved": 0}
 
-    if index is None or index.ntotal < 10:
+    if index is None or index.count() < 10:
         logger.info("S2 KNN: corpus still too small after seeding, skipping to S3")
         return df, needs_enrichment, {"resolved": 0}
 

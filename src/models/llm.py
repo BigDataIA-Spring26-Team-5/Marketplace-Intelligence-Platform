@@ -20,7 +20,7 @@ for _name in ("LiteLLM", "litellm", "httpx", "httpcore"):
 # ── Model routing — override via env vars ────────────────────────────
 _ORCHESTRATOR_MODEL  = os.environ.get("ORCHESTRATOR_LLM",  "claude-sonnet-4-5")
 _CODEGEN_MODEL       = os.environ.get("CODEGEN_LLM",       "deepseek/deepseek-chat")
-_ENRICHMENT_MODEL    = os.environ.get("ENRICHMENT_LLM",    "groq/llama-3.3-70b-versatile")
+_ENRICHMENT_MODEL    = os.environ.get("ENRICHMENT_LLM",    "claude-haiku-4-5-20251001")
 _CRITIC_MODEL        = os.environ.get("CRITIC_LLM",        "anthropic/claude-sonnet-4-6")
 _OBSERVABILITY_MODEL = os.environ.get("OBSERVABILITY_LLM", "groq/llama-3.1-8b-instant")
 
