@@ -34,37 +34,72 @@ SOURCE_DOMAIN = {
     "usda":    "nutrition",
     "openfda": "safety",
     "off":     "nutrition",
+    "esci":    "pricing",
 }
+
+import re as _re
+_DATE_RE = _re.compile(r"(\d{4}/\d{2}/\d{2})$")
+
+
+def _extract_partition(blob_name: str) -> tuple[str, str] | None:
+    """Extract (source, partition_prefix) from a blob name.
+
+    Handles both standard and sub-prefixed layouts:
+      usda/2026/04/20/part_0000.jsonl        → ('usda', 'usda/2026/04/20')
+      usda/bulk/2026/04/21/part_0000.jsonl   → ('usda', 'usda/bulk/2026/04/21')
+      esci/2026/04/20/part_0000.jsonl        → ('esci', 'esci/2026/04/20')
+    """
+    if not blob_name.endswith(".jsonl"):
+        return None
+    parts = blob_name.split("/")
+    if len(parts) < 5:
+        return None
+    source = parts[0]
+    # Walk from the end to find YYYY/MM/DD (last 3 dir components before filename)
+    dir_parts = parts[:-1]  # drop filename
+    if len(dir_parts) < 4:
+        return None
+    date_str = "/".join(dir_parts[-3:])
+    if not _DATE_RE.match(date_str):
+        return None
+    partition_prefix = "/".join(dir_parts)
+    return source, partition_prefix
 
 
 def _list_partitions(bucket_name: str, source_filter: str | None) -> list[tuple[str, str, str]]:
-    """Return [(source, date_path, gcs_glob), ...] for all date-partitioned prefixes."""
+    """Return [(source, partition_prefix, gcs_glob), ...] for all date-partitioned prefixes."""
     from google.cloud import storage
 
     client = storage.Client()
     bucket = client.bucket(bucket_name)
 
-    # Group blobs by source/YYYY/MM/DD prefix
-    partitions: dict[tuple[str, str], bool] = defaultdict(bool)
+    seen: dict[tuple[str, str], bool] = {}
     prefix = f"{source_filter}/" if source_filter else ""
 
     for blob in bucket.list_blobs(prefix=prefix):
-        parts = blob.name.split("/")
-        # Expect: {source}/{YYYY}/{MM}/{DD}/part_NNNN.jsonl
-        if len(parts) >= 5 and parts[-1].endswith(".jsonl"):
-            source = parts[0]
-            date_path = "/".join(parts[1:4])  # YYYY/MM/DD
-            partitions[(source, date_path)] = True
-
-    result = []
-    for (source, date_path) in sorted(partitions.keys()):
-        if source not in SOURCE_DOMAIN:
-            logger.warning("Unknown source '%s' — skipping (add to SOURCE_DOMAIN map)", source)
+        result = _extract_partition(blob.name)
+        if result is None:
             continue
-        gcs_glob = f"gs://{bucket_name}/{source}/{date_path}/*.jsonl"
-        result.append((source, date_path, gcs_glob))
+        source, partition_prefix = result
+        if source not in SOURCE_DOMAIN:
+            seen.setdefault((source, ""), False)
+            seen[(source, "")] = True  # track for warning
+            continue
+        seen[(source, partition_prefix)] = True
 
-    return result
+    # Emit warnings for unknown sources once
+    unknown = {s for (s, p) in seen if p == "" and s not in SOURCE_DOMAIN}
+    for s in sorted(unknown):
+        logger.warning("Unknown source '%s' — skipping (add to SOURCE_DOMAIN map)", s)
+
+    result_list = []
+    for (source, partition_prefix) in sorted(seen.keys()):
+        if not partition_prefix or source not in SOURCE_DOMAIN:
+            continue
+        gcs_glob = f"gs://{bucket_name}/{partition_prefix}/*.jsonl"
+        result_list.append((source, partition_prefix, gcs_glob))
+
+    return result_list
 
 
 def main():
@@ -82,17 +117,17 @@ def main():
         sys.exit(1)
 
     logger.info("Found %d partition(s) to process:", len(partitions))
-    for source, date_path, gcs_glob in partitions:
-        logger.info("  [%s] %s → domain=%s", date_path, gcs_glob, SOURCE_DOMAIN[source])
+    for source, partition_prefix, gcs_glob in partitions:
+        logger.info("  [%s] %s → domain=%s", partition_prefix, gcs_glob, SOURCE_DOMAIN[source])
 
     if args.dry_run:
         logger.info("Dry run — exiting without running pipeline.")
         return
 
     failed = []
-    for source, date_path, gcs_glob in partitions:
+    for source, partition_prefix, gcs_glob in partitions:
         domain = SOURCE_DOMAIN[source]
-        label = f"{source}/{date_path}"
+        label = partition_prefix
         logger.info("=" * 60)
         logger.info("Running: %s  domain=%s", label, domain)
         logger.info("=" * 60)
