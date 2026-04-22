@@ -1,6 +1,6 @@
 models:
   orchestrator:
-    model: "anthropic/claude-sonnet-4-20250514"
+    model: "anthropic/claude-sonnet-4-5-20250929"
     purpose: "Schema analysis, gap detection, orchestration reasoning"
   codegen:
     model: "deepseek/deepseek-coder"
