@@ -4,7 +4,7 @@ UC2 Observability Layer — Anomaly Detector
 Queries Prometheus for the last N pipeline runs of key metrics, builds a
 feature matrix (one row per run), runs Isolation Forest, and for any
 outlier run:
-  1. Pushes uc1_anomaly_flag=1 to Prometheus Pushgateway.
+  1. Pushes etl_anomaly_flag=1 to Prometheus Pushgateway.
   2. Inserts a row into the anomaly_reports Postgres table.
 
 The detector is called after each `run_completed` Kafka event and also
@@ -39,11 +39,11 @@ PG_DSN = "host=localhost port=5432 dbname=uc2 user=mip password=REMOVED_PG_PASSW
 # Each entry: (feature_name, promql_template)
 # {source} is substituted at call time.
 _FEATURE_QUERIES: list[tuple[str, str]] = [
-    ("null_rate",   'uc1_null_rate{{source="{source}"}}'),
-    ("dq_score",    'uc1_dq_score_post{{source="{source}"}}'),
-    ("dedup_rate",  'uc1_dedup_rate{{source="{source}"}}'),
-    ("rows_out",    'uc1_rows_out{{source="{source}"}}'),
-    ("cost_usd",    'uc1_llm_cost_usd_total{{source="{source}"}}'),
+    ("null_rate",   'etl_null_rate{{source="{source}"}}'),
+    ("dq_score",    'etl_dq_score_post{{source="{source}"}}'),
+    ("dedup_rate",  'etl_dedup_rate{{source="{source}"}}'),
+    ("rows_out",    'etl_rows_out{{source="{source}"}}'),
+    ("cost_usd",    'etl_llm_cost_usd_total{{source="{source}"}}'),
 ]
 
 _INSERT_ANOMALY = """

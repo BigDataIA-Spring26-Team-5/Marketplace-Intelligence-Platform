@@ -48,6 +48,30 @@ def _gcs_client():
     return storage.Client()
 
 
+_REQUIRED_SILVER_COLUMNS = {"product_name"}
+_EXPECTED_SILVER_COLUMNS = {
+    "product_name", "brand_name", "ingredients",
+    "dq_score_pre", "source_name",
+}
+
+
+def _validate_silver_schema(df: pd.DataFrame, source_name: str) -> None:
+    """Raise ValueError if required columns are absent; warn on expected-but-missing."""
+    missing_required = _REQUIRED_SILVER_COLUMNS - set(df.columns)
+    if missing_required:
+        raise ValueError(
+            f"Silver Parquet for source '{source_name}' is missing required columns: "
+            f"{sorted(missing_required)}. Found: {sorted(df.columns)}"
+        )
+    missing_expected = _EXPECTED_SILVER_COLUMNS - set(df.columns)
+    if missing_expected:
+        logger.warning(
+            "Silver Parquet for '%s' is missing expected columns (pipeline will continue): %s",
+            source_name,
+            sorted(missing_expected),
+        )
+
+
 def _read_silver_parquet(source_name: str, date: str) -> pd.DataFrame:
     """
     Load all Parquet part-files for source_name/date from GCS Silver.
@@ -71,6 +95,7 @@ def _read_silver_parquet(source_name: str, date: str) -> pd.DataFrame:
 
     df = pd.concat(frames, ignore_index=True)
     logger.info(f"Loaded {len(df)} rows from Silver")
+    _validate_silver_schema(df, source_name)
     return df
 
 
@@ -106,6 +131,7 @@ def run_gold_pipeline(
     date: str,
     domain: str = "nutrition",
     cache_client=None,
+    skip_enrichment: bool = False,
 ) -> int:
     """
     Read Silver Parquet for source_name/date, run gold block sequence, write to BQ.
@@ -128,6 +154,11 @@ def run_gold_pipeline(
 
     block_reg = BlockRegistry.instance()
     gold_sequence = block_reg.get_gold_sequence(domain=domain)
+
+    if skip_enrichment:
+        _ENRICHMENT_BLOCKS = {"extract_allergens", "llm_enrich"}
+        gold_sequence = [b for b in gold_sequence if b not in _ENRICHMENT_BLOCKS]
+        logger.info("--skip-enrichment: removed enrichment blocks from gold sequence")
 
     # Expand stages to individual block names for PipelineRunner
     expanded: list[str] = []
@@ -240,9 +271,15 @@ def main():
     parser.add_argument("--source", required=True, choices=["off", "usda", "openfda"], help="Source name")
     parser.add_argument("--date",   required=True, help="Silver partition date YYYY/MM/DD")
     parser.add_argument("--domain", default="nutrition", choices=["nutrition", "safety", "pricing"])
+    parser.add_argument("--skip-enrichment", action="store_true", help="Skip enrichment blocks (dedup-only run)")
     args = parser.parse_args()
 
-    rows = run_gold_pipeline(source_name=args.source, date=args.date, domain=args.domain)
+    rows = run_gold_pipeline(
+        source_name=args.source,
+        date=args.date,
+        domain=args.domain,
+        skip_enrichment=args.skip_enrichment,
+    )
     logger.info(f"Gold pipeline complete: {rows} rows written to BQ {BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}")
 
 

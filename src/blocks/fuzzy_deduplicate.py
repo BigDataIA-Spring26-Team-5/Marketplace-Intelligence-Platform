@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 
 import numpy as np
@@ -119,7 +120,11 @@ class FuzzyDeduplicateBlock(Block):
                     if key:
                         blocks.setdefault(key, []).append(idx)
 
-            # Vectorized comparison within blocks via rapidfuzz cdist
+            # Vectorized comparison within blocks via rapidfuzz cdist.
+            # For large blocks (>= OOM_BLOCK_THRESHOLD) fall back to lazy pair-by-pair
+            # scoring to avoid allocating O(n²) matrices that can exhaust RAM.
+            OOM_BLOCK_THRESHOLD = int(os.environ.get("DEDUP_BLOCK_OOM_THRESHOLD", "2000"))
+
             for block_indices in blocks.values():
                 if len(block_indices) < 2:
                     continue
@@ -127,20 +132,40 @@ class FuzzyDeduplicateBlock(Block):
                 block_brands = [brands.iloc[i] for i in block_indices]
                 block_combined = [f"{nm} {br}" for nm, br in zip(block_names, block_brands)]
 
-                name_mat = rf_cdist(block_names, block_names, scorer=fuzz.token_sort_ratio, workers=-1) / 100.0
-                brand_mat = rf_cdist(block_brands, block_brands, scorer=fuzz.ratio, workers=-1) / 100.0
-                combined_mat = rf_cdist(block_combined, block_combined, scorer=fuzz.token_sort_ratio, workers=-1) / 100.0
+                if len(block_indices) >= OOM_BLOCK_THRESHOLD:
+                    # Lazy path: compare each pair once without materialising full matrices
+                    logger.warning(
+                        "Block size %d >= OOM threshold %d; using lazy pair comparison",
+                        len(block_indices), OOM_BLOCK_THRESHOLD,
+                    )
+                    thresh_score = threshold / 100.0
+                    for li in range(len(block_indices)):
+                        for lj in range(li + 1, len(block_indices)):
+                            name_score  = fuzz.token_sort_ratio(block_names[li], block_names[lj]) / 100.0
+                            brand_score = fuzz.ratio(block_brands[li], block_brands[lj]) / 100.0
+                            comb_score  = fuzz.token_sort_ratio(block_combined[li], block_combined[lj]) / 100.0
+                            weighted = (
+                                name_score * name_weight
+                                + brand_score * brand_weight
+                                + comb_score * combined_weight
+                            )
+                            if weighted >= thresh_score:
+                                uf.union(block_indices[li], block_indices[lj])
+                else:
+                    name_mat = rf_cdist(block_names, block_names, scorer=fuzz.token_sort_ratio, workers=-1) / 100.0
+                    brand_mat = rf_cdist(block_brands, block_brands, scorer=fuzz.ratio, workers=-1) / 100.0
+                    combined_mat = rf_cdist(block_combined, block_combined, scorer=fuzz.token_sort_ratio, workers=-1) / 100.0
 
-                weighted_mat = (
-                    name_mat * name_weight
-                    + brand_mat * brand_weight
-                    + combined_mat * combined_weight
-                )
+                    weighted_mat = (
+                        name_mat * name_weight
+                        + brand_mat * brand_weight
+                        + combined_mat * combined_weight
+                    )
 
-                pairs = np.argwhere(weighted_mat >= threshold / 100.0)
-                for i_local, j_local in pairs:
-                    if i_local < j_local:
-                        uf.union(block_indices[i_local], block_indices[j_local])
+                    pairs = np.argwhere(weighted_mat >= threshold / 100.0)
+                    for i_local, j_local in pairs:
+                        if i_local < j_local:
+                            uf.union(block_indices[i_local], block_indices[j_local])
 
         # Assign cluster IDs — pre-assigned rows get their cached IDs
         cluster_map: dict[int, int] = {}
