@@ -482,11 +482,14 @@ def save_output_node(state: PipelineState) -> dict:
 
     output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
     silver_uri: str | None = None
+    quarantine_uri: str | None = None
 
     try:
         df = state.get("working_df")
         if df is None:
             raise ValueError("Missing 'working_df' in state — run_pipeline_node did not complete successfully.")
+
+        quarantined_df = state.get("quarantined_df")
 
         if pipeline_mode == "silver":
             from src.pipeline.writers.gcs_silver_writer import GCSSilverWriter
@@ -494,9 +497,17 @@ def save_output_node(state: PipelineState) -> dict:
             silver_uri = writer.write(df, source_name=_silver_source, date=_silver_date, chunk_idx=0)
             if _silver_date:
                 writer.update_watermark(_silver_source, _silver_date)
+            if quarantined_df is not None and len(quarantined_df) > 0:
+                quarantine_source = f"{_silver_source}_quarantine"
+                quarantine_uri = writer.write(quarantined_df, source_name=quarantine_source, date=_silver_date, chunk_idx=0)
+                logger.info(f"Quarantine: {len(quarantined_df)} rows → {quarantine_uri}")
         else:
             df.to_csv(output_path, index=False)
             logger.info(f"Output saved to {output_path} ({len(df)} rows)")
+            if quarantined_df is not None and len(quarantined_df) > 0:
+                q_path = OUTPUT_DIR / f"{source_name}_quarantined.csv"
+                quarantined_df.to_csv(q_path, index=False)
+                logger.info(f"Quarantine: {len(quarantined_df)} rows → {q_path}")
 
         cache_client = state.get("cache_client")
         if cache_client is not None:
@@ -522,7 +533,6 @@ def save_output_node(state: PipelineState) -> dict:
                 except Exception:
                     dedup_rate = 0.0
 
-                quarantined_df = state.get("quarantined_df")
                 quarantine_rows = len(quarantined_df) if quarantined_df is not None else 0
 
                 dq_score_pre = float(state.get("dq_score_pre") or 0.0)
@@ -579,6 +589,7 @@ def save_output_node(state: PipelineState) -> dict:
     return {
         "output_path": silver_uri or str(output_path),
         "silver_output_uri": silver_uri,
+        "quarantine_output_uri": quarantine_uri,
     }
 
 
