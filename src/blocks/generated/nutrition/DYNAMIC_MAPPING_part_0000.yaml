@@ -1,3 +1,4 @@
+apply_if_column_present: pnns_groups_1
 column_operations:
 - target: brand_owner
   type: string

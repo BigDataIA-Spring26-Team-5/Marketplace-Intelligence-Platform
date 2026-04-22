@@ -1,3 +1,4 @@
+apply_if_column_present: fdcId
 column_operations:
 - target: product_name
   type: string
@@ -15,6 +16,11 @@ column_operations:
   type: string
   action: strip_whitespace
   source: brandedFoodCategory
+- target: category
+  type: string
+  action: extract_json_field
+  source: foodCategory
+  key: 'description'
 - target: serving_size
   type: float
   action: type_cast
@@ -31,12 +37,19 @@ column_operations:
     IU: IU
 - target: published_date
   type: string
+  action: coalesce
+  sources:
+  - modifiedDate
+  - publicationDate
+- target: published_date
+  type: string
   action: parse_date
-  source: modifiedDate
+  source: published_date
 - target: data_source
   type: string
   action: set_default
   default_value: USDA
+  force: true
 - source: fdcId
   action: drop_column
 - source: dataType
@@ -78,4 +91,10 @@ column_operations:
 - source: publicationDate
   action: drop_column
 - source: packageWeight
+  action: drop_column
+- source: modifiedDate
+  action: drop_column
+- source: foodCategory
+  action: drop_column
+- source: inputFoods
   action: drop_column
