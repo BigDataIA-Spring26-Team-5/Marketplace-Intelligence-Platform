@@ -103,7 +103,12 @@ class GCSSourceLoader:
                 for raw_line in f:
                     line = raw_line.strip()
                     if line:
-                        records.append(json.loads(line))
+                        try:
+                            records.append(json.loads(line))
+                        except json.JSONDecodeError as exc:
+                            logger.warning(
+                                f"Skipping malformed JSON line in {blob.name}: {exc}"
+                            )
 
         _with_retry(_read)
 
