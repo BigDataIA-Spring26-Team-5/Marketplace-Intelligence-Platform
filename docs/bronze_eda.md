@@ -91,7 +91,10 @@
 | `serving_size_unit` | `serving_size` | `regex_extract` unit | ~68% |
 | `published_date` | `last_modified_t` | `parse_date unix_timestamp` | ~0% |
 | `data_source` | — | `set_default "OpenFoodFacts"` | 0% |
-| `allergens` | — | null (enrichment only) | 100% |
+| `allergens` | — | null (gold enrichment) | 100% |
+| `primary_category` | — | null (gold enrichment) | 100% |
+| `dietary_tags` | — | null (gold enrichment) | 100% |
+| `is_organic` | — | null (gold enrichment) | 100% |
 | `dq_score_pre` | all columns | computed | 0% |
 
 ---
@@ -169,7 +172,10 @@
 | `serving_size_unit` | `servingSizeUnit` | `value_map GRM→g` | ~0% |
 | `published_date` | `modifiedDate` | `parse_date` | ~0% |
 | `data_source` | — | `set_default "USDA"` | 0% |
-| `allergens` | — | null (enrichment only) | 100% |
+| `allergens` | — | null (gold enrichment) | 100% |
+| `primary_category` | — | null (gold enrichment) | 100% |
+| `dietary_tags` | — | null (gold enrichment) | 100% |
+| `is_organic` | — | null (gold enrichment) | 100% |
 | `dq_score_pre` | all columns | computed | 0% |
 
 ---
@@ -226,7 +232,10 @@
 | `serving_size_unit` | — | `set_null` | 100% |
 | `published_date` | `publicationDate` | `parse_date` | ~0% |
 | `data_source` | — | `set_default "USDA"` | 0% |
-| `allergens` | — | null (enrichment only) | 100% |
+| `allergens` | — | null (gold enrichment) | 100% |
+| `primary_category` | — | null (gold enrichment) | 100% |
+| `dietary_tags` | — | null (gold enrichment) | 100% |
+| `is_organic` | — | null (gold enrichment) | 100% |
 | `dq_score_pre` | all columns | computed | 0% |
 
 > **Note:** Foundation foods will have low DQ scores (~40%) due to null brand/ingredients/serving fields by design — these are reference nutritional standards, not consumer products.
@@ -306,6 +315,9 @@
 | `published_date` | `recall_initiation_date` | `coalesce + format_transform` | ~0% |
 | `data_source` | — | `set_default "FDA"` | 0% |
 | `allergens` | `reason_for_recall` | `strip_whitespace` | ~0% |
+| `primary_category` | — | null (gold enrichment) | 100% |
+| `dietary_tags` | — | null (gold enrichment) | 100% |
+| `is_organic` | — | null (gold enrichment) | 100% |
 | `dq_score_pre` | all columns | computed | 0% |
 
 > **Note:** FDA silver will have low DQ scores (~40–50%) because brand_name, ingredients, serving_size are structurally absent — this is expected. Gold enrichment will not improve these as per the safety boundary rule.
@@ -314,20 +326,39 @@
 
 ## 5. Cross-Source Unified Schema Coverage
 
-| Unified Column | OFF | USDA Branded | USDA Foundation | OpenFDA |
-|---|---|---|---|---|
-| `product_name` | ✅ ~0% null | ✅ ~0% null | ✅ ~0% null | ✅ ~0% null |
-| `brand_owner` | ⬜ 100% null | ✅ ~0% null | ⬜ 100% null | ✅ ~0% null |
-| `brand_name` | 🟡 ~18% null | 🟢 ~3% null | ⬜ 100% null | ⬜ 100% null |
-| `ingredients` | 🟡 ~46% null | ✅ ~0% null | ⬜ 100% null | ⬜ 100% null |
-| `category` | 🟡 ~23% null | ✅ ~0% null | ✅ ~0% null | ✅ ~0% null |
-| `serving_size` | 🟡 ~68% null | ✅ ~0% null | ⬜ 100% null | ⬜ 100% null |
-| `serving_size_unit` | 🟡 ~68% null | ✅ ~0% null | ⬜ 100% null | ⬜ 100% null |
-| `published_date` | ✅ ~0% null | ✅ ~0% null | ✅ ~0% null | ✅ ~0% null |
-| `data_source` | ✅ 0% null | ✅ 0% null | ✅ 0% null | ✅ 0% null |
-| `allergens` | ⬜ enrichment | ⬜ enrichment | ⬜ enrichment | ✅ ~0% (recall reason) |
+> **Column count:** unified_schema.json defines **16 columns**.  
+> **Silver layer outputs 14** — `dq_score_post` and `dq_delta` are computed only in the gold pipeline.  
+> **`SchemaEnforceBlock` guarantees all 14 silver columns are present** for every source (missing ones filled with typed null).
 
-**Legend:** ✅ Fully populated | 🟢 >95% | 🟡 Partial | ⬜ Null by design
+### Silver Layer (14 columns)
+
+| # | Unified Column | Type | OFF Silver | USDA Branded Silver | USDA Foundation Silver | OpenFDA Silver |
+|---|---|---|---|---|---|---|
+| 1 | `product_name` | string | ✅ ~0% null | ✅ ~0% null | ✅ ~0% null | ✅ ~0% null |
+| 2 | `brand_owner` | string | ⬜ 100% null | ✅ ~0% null | ⬜ 100% null | ✅ ~0% null |
+| 3 | `brand_name` | string | 🟡 ~18% null | 🟢 ~3% null | ⬜ 100% null | ⬜ 100% null |
+| 4 | `ingredients` | string | 🟡 ~46% null | ✅ ~0% null | ⬜ 100% null | ⬜ 100% null |
+| 5 | `category` | string | 🟡 ~23% null | ✅ ~0% null | ✅ ~0% null | ✅ "food" |
+| 6 | `serving_size` | float | 🟡 ~68% null | ✅ ~0% null | ⬜ 100% null | ⬜ 100% null |
+| 7 | `serving_size_unit` | string | 🟡 ~68% null | ✅ ~0% null | ⬜ 100% null | ⬜ 100% null |
+| 8 | `published_date` | string | ✅ ~0% null | ✅ ~0% null | ✅ ~0% null | ✅ ~0% null |
+| 9 | `data_source` | string | ✅ "OpenFoodFacts" | ✅ "USDA" | ✅ "USDA" | ✅ "FDA" |
+| 10 | `allergens` | string | ⬜ null* | ⬜ null* | ⬜ null* | ✅ from reason_for_recall |
+| 11 | `primary_category` | string | ⬜ null* | ⬜ null* | ⬜ null* | ⬜ null* |
+| 12 | `dietary_tags` | string | ⬜ null* | ⬜ null* | ⬜ null* | ⬜ null* |
+| 13 | `is_organic` | boolean | ⬜ null* | ⬜ null* | ⬜ null* | ⬜ null* |
+| 14 | `dq_score_pre` | float | ✅ computed | ✅ computed | ✅ computed | ✅ computed |
+
+*Enrichment columns — populated by `extract_allergens` + `llm_enrich` in the **gold pipeline**, not silver.
+
+### Gold Layer adds 2 more columns (total 16)
+
+| # | Column | Type | Source |
+|---|---|---|---|
+| 15 | `dq_score_post` | float | Computed after gold enrichment |
+| 16 | `dq_delta` | float | `dq_score_post - dq_score_pre` |
+
+**Legend:** ✅ Fully populated | 🟢 >95% | 🟡 Partial | ⬜ Null (by design or enrichment-only)
 
 ---
 

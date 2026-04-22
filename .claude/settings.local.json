@@ -112,7 +112,8 @@
       "Bash(curl -s http://localhost:9091/api/v1/metrics)",
       "Bash(bash)",
       "Bash(bq version *)",
-      "Bash(bq ls *)"
+      "Bash(bq ls *)",
+      "Bash(gsutil ls *)"
     ]
   }
 }
