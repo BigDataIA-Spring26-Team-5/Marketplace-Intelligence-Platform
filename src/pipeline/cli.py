@@ -154,7 +154,7 @@ def run_pipeline(
             _first_blob = _loader._list_blobs()[0]
             _blob_parts = _first_blob.name.rstrip("/").split("/")
             resolved_source_name = (
-                _blob_parts[-2] if len(_blob_parts) >= 2 else Path(_blob_parts[-1]).stem
+                _blob_parts[0] if len(_blob_parts) >= 2 else Path(_blob_parts[-1]).stem
             )
         except Exception as _e:
             logger.warning(f"Could not resolve glob to first blob: {_e}")
