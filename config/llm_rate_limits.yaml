@@ -6,3 +6,21 @@ anthropic:
   retry_max_attempts: 4
   retry_base_delay_seconds: 15
   retry_jitter_fraction: 0.3        # adds 0-30% random jitter to retry delay
+
+deepseek:
+  model: deepseek/deepseek-chat
+  max_requests_per_minute: 55       # safe margin under 60 RPM hard limit
+  max_tokens_per_minute: 55000      # safe margin under 60k TPM hard limit
+  estimated_tokens_per_request: 2000
+  retry_max_attempts: 4
+  retry_base_delay_seconds: 10
+  retry_jitter_fraction: 0.3
+
+groq:
+  model: groq/llama-3.1-8b-instant
+  max_requests_per_minute: 25       # safe margin under 30 RPM hard limit
+  max_tokens_per_minute: 120000     # safe margin under 131k TPM hard limit
+  estimated_tokens_per_request: 800
+  retry_max_attempts: 3
+  retry_base_delay_seconds: 8
+  retry_jitter_fraction: 0.25
