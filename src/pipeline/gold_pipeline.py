@@ -187,7 +187,14 @@ def run_gold_pipeline(
 
     duration_seconds = round(time.monotonic() - start_time, 3)
     logger.info(f"Gold blocks complete: {len(result_df)} rows after dedup/enrichment")
-    rows_written = _write_gold_bq(result_df, source_name=source_name)
+
+    bq_error: str | None = None
+    rows_written = 0
+    try:
+        rows_written = _write_gold_bq(result_df, source_name=source_name)
+    except Exception as exc:
+        bq_error = str(exc)
+        logger.error("BQ write failed (observability will still be saved): %s", exc)
 
     run_log = _build_gold_run_log(
         run_id=run_id,
@@ -197,10 +204,15 @@ def run_gold_pipeline(
         result_df=result_df,
         audit_log=audit_log,
         duration_seconds=duration_seconds,
+        status="failed" if bq_error else "success",
+        error=bq_error,
     )
     _save_gold_run_log(run_log)
     _push_gold_metrics(run_log)
     _push_gold_audit(run_log)
+
+    if bq_error:
+        raise RuntimeError(f"BQ write failed: {bq_error}")
 
     return rows_written
 
