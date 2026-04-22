@@ -1,19 +1,19 @@
 {
   "product_name": {
-    "status": "derived",
-    "required": false
-  },
-  "brand_owner": {
-    "status": "absent",
-    "required": false
-  },
-  "brand_name": {
     "status": "mapped",
     "required": true
   },
-  "ingredients": {
-    "status": "derived",
+  "brand_owner": {
+    "status": "mapped",
+    "required": true
+  },
+  "brand_name": {
+    "status": "absent",
     "required": false
+  },
+  "ingredients": {
+    "status": "mapped",
+    "required": true
   },
   "category": {
     "status": "enriched",
@@ -24,19 +24,19 @@
     "required": false
   },
   "serving_size_unit": {
-    "status": "derived",
+    "status": "mapped",
     "required": false
   },
   "published_date": {
-    "status": "derived",
-    "required": false
-  },
-  "data_source": {
     "status": "mapped",
     "required": true
   },
-  "allergens": {
+  "data_source": {
     "status": "absent",
+    "required": false
+  },
+  "allergens": {
+    "status": "enriched",
     "required": false
   },
   "primary_category": {
