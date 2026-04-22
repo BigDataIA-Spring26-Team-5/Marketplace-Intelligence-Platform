@@ -2613,6 +2613,18 @@ files = [
 referencing = ">=0.31.0"
 
 [[package]]
+name = "kafka"
+version = "1.3.5"
+description = "Pure Python client for Apache Kafka"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "kafka-1.3.5-py2.py3-none-any.whl", hash = "sha256:35a49e9a432f6792aad48b2ab09d03867357aaa06eacba2678b7fd0808156e5c"},
+    {file = "kafka-1.3.5.tar.gz", hash = "sha256:ffb3348cd918c31344b1a2eb61f692cbc423c83b1b06466a86de3db8a3f6a018"},
+]
+
+[[package]]
 name = "kiwisolver"
 version = "1.5.0"
 description = "A fast implementation of the Cassowary constraint solver"
@@ -8023,4 +8035,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "9198b4633f9b78417c7b8512f57db874d20000398bd6a13b1ea60cb4e3229921"
+content-hash = "718a1cec1a2c614979d387f67089ed4d985cd7a76943bad882dbc0c55b1bcbc4"
