@@ -214,7 +214,7 @@ class BlockRegistry:
         Reads Silver Parquet (already schema-transformed).
         """
         base = ["dedup_stage"]
-        if domain in ("nutrition", "safety"):
+        if domain in ("nutrition", "safety", "retail"):
             base.append("enrich_stage")
         base.append("dq_score_post")
         return base
