@@ -199,6 +199,19 @@ def _write_gold_bq(df: pd.DataFrame, source_name: str) -> int:
     df = df.copy()
     df["source_name"] = source_name
 
+    # Force-cast expected string columns to object (str) so BQ autodetect
+    # never infers INTEGER/FLOAT for null-only columns in sparse sources.
+    _STRING_COLS = {
+        "product_name", "brand_name", "brand_owner", "ingredients",
+        "category", "serving_size_unit", "published_date", "data_source",
+        "allergens", "primary_category", "dietary_tags", "source_name",
+        "recall_class", "recall_reason", "recall_number", "recall_status",
+        "distribution_pattern",
+    }
+    for col in _STRING_COLS:
+        if col in df.columns:
+            df[col] = df[col].where(df[col].isna(), df[col].astype(str))
+
     client = bigquery.Client(project=BQ_PROJECT)
     table_ref = f"{BQ_PROJECT}.{BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}"
 
