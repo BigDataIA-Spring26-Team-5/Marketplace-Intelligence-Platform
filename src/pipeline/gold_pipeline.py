@@ -208,9 +208,37 @@ def _write_gold_bq(df: pd.DataFrame, source_name: str) -> int:
         "recall_class", "recall_reason", "recall_number", "recall_status",
         "distribution_pattern",
     }
+    import numpy as np
+
+    def _safe_str(v):
+        if v is None:
+            return None
+        # Array-like: flatten to str repr (or None if empty) without triggering
+        # pd.isna's ambiguous-truth-value error on list/ndarray/tuple.
+        if isinstance(v, (list, tuple, set, np.ndarray)):
+            try:
+                if len(v) == 0:
+                    return None
+            except TypeError:
+                pass
+            return str(v)
+        try:
+            if bool(pd.isna(v)) is True:
+                return None
+        except (TypeError, ValueError):
+            pass
+        return str(v)
+
     for col in _STRING_COLS:
         if col in df.columns:
-            df[col] = [str(v) if not pd.isna(v) else None for v in df[col]]
+            df[col] = [_safe_str(v) for v in df[col]]
+
+    # Normalize published_date to ISO date string; BQ autodetect otherwise
+    # chokes when mixed datetime/list/str cells survive upstream merges.
+    if "published_date" in df.columns:
+        parsed = pd.to_datetime(df["published_date"], errors="coerce", utc=True)
+        iso = parsed.dt.strftime("%Y-%m-%d")
+        df["published_date"] = iso.where(parsed.notna(), None).astype(object)
 
     client = bigquery.Client(project=BQ_PROJECT)
     table_ref = f"{BQ_PROJECT}.{BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}"
