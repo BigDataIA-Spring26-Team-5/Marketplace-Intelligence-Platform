@@ -20,19 +20,28 @@ poetry install
 # API keys required — see .env.example (ANTHROPIC_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY)
 cp .env.example .env
 
+# Full platform stack (Kafka, Airflow, Postgres, Prometheus, Pushgateway, Grafana,
+# ChromaDB, Redis, MLflow) — see docker-compose.yml at repo root
+docker-compose -p mip up -d
+
 # CLI demo — runs 3 pipeline passes (USDA → FDA → FDA replay)
 poetry run python demo.py
 
 # Streamlit wizard UI with HITL approval gates
 poetry run streamlit run app.py
 
+# MCP observability server (FastAPI, Redis-cached, port 8001)
+uvicorn src.uc2_observability.mcp_server:app --host 0.0.0.0 --port 8001
+
 # (One-time) Build the KNN enrichment corpus from USDA FoodData Central
 poetry run python scripts/build_corpus.py
 poetry run python scripts/build_corpus.py --limit 10000
 
-# Tests (pytest is declared; tests/ currently contains only __init__.py)
+# Tests
 poetry run pytest
-poetry run pytest tests/path/to/test_file.py::test_name
+poetry run pytest tests/uc2_observability/test_log_writer.py::test_name
+poetry run pytest tests/unit/test_cache_client.py
+poetry run pytest tests/integration/test_cache_pipeline.py
 ```
 
 `demo.py` expects `data/usda_fooddata_sample.csv` and `data/fda_recalls_sample.csv` to exist. The `data/` directory is **gitignored** — CSVs are not in the repo and must be placed there before running. Output CSVs land in `output/` (also gitignored).
@@ -92,18 +101,59 @@ Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THR
 
 [src/models/llm.py](src/models/llm.py) wraps [LiteLLM](https://github.com/BerriAI/litellm) with three getters (`get_orchestrator_llm`, `get_codegen_llm`, `get_enrichment_llm`) — all currently point to `deepseek/deepseek-chat`. `call_llm_json()` parses responses and has a markdown-fence fallback (` ```json ... ``` `) for models that wrap JSON. Swap models here, not at call sites. [config/litellm_config.yaml](config/litellm_config.yaml) exists for provider routing configuration.
 
-### UC2 observability layer is implemented
+`src/models/llm.py` is also the **UC2 import gateway** — `_UC2_AVAILABLE`, `_emit_event`, and `_MetricsCollector` are exported from there. All other files import UC2 symbols from `src.models.llm`, not directly from `src.uc2_observability`. This guards against import failures when UC2 deps are absent.
 
-`src/uc2_observability/` now contains working implementations:
-- `log_writer.py` — `RunLogWriter`: writes atomic JSON run logs to `output/run_logs/` after every pipeline run (success or partial). Called from `save_output_node` in `src/agents/graph.py`.
+### UC2 observability layer is fully implemented
+
+`src/uc2_observability/` is all working code. The two placeholder files (`anomaly_detection.py`, `dashboard.py`) exist only as re-export shims or stubs — the real implementation lives in the files listed below:
+
+- `log_writer.py` — `RunLogWriter`: writes atomic JSON run logs to `output/run_logs/` after every pipeline run. Called from `save_output_node`.
 - `log_store.py` — `RunLogStore`: read-only query interface (`load_all`, `filter`, `get_by_run_id`, `summary_stats`) over the persisted JSON logs.
-- `rag_chatbot.py` — `ObservabilityChatbot`: structured retrieval + LLM synthesis (via `get_observability_llm()`) answering natural-language questions about run history. Returns `ChatResponse(answer, cited_run_ids, context_run_count)`.
-- `metrics_exporter.py` — `MetricsExporter`: pushes 12 labelled Prometheus gauges to Pushgateway after each run. Uses isolated `CollectorRegistry`; never raises on network failure.
-- `anomaly_detection.py`, `dashboard.py` — still placeholder (raise `NotImplementedError`).
+- `rag_chatbot.py` — `ObservabilityChatbot`: structured retrieval + LLM synthesis answering natural-language questions about run history. Returns `ChatResponse(answer, cited_run_ids, context_run_count)`.
+- `metrics_exporter.py` — `MetricsExporter`: pushes 12 labelled Prometheus gauges to Pushgateway (`:9091`). Uses isolated `CollectorRegistry`; never raises on network failure.
+- `metrics_collector.py` — `MetricsCollector`: in-process collector called by `_emit_event` at each pipeline event.
+- `anomaly_detector.py` — `AnomalyDetector`: Isolation Forest on Prometheus metrics for the last N runs per source; pushes `etl_anomaly_flag=1` to Pushgateway and writes to Postgres `anomaly_reports` table. Called after each `run_completed` event and on an hourly schedule.
+- `chunker.py` — reads new `audit_events` rows from Postgres since last cursor, embeds with `all-MiniLM-L6-v2`, upserts into ChromaDB collection `audit_corpus`. Runs as a 5-minute sleep loop.
+- `kafka_to_pg.py` — Kafka → Postgres consumer. Demuxes `pipeline.events` topic by `event_type` into four tables: `audit_events`, `block_trace`, `quarantine_rows`, `dedup_clusters`. Reconnects with exponential back-off.
+- `mcp_server.py` — FastAPI app on `:8001` with 7 MCP-style tool endpoints backed by Prometheus, Postgres, and Redis (15s TTL for Prometheus queries, 30s for Postgres).
+- `streamlit_app.py` — standalone Streamlit UI for observability (separate from `app.py`'s sidebar mode).
+- `dashboard.py` — still placeholder (raises `NotImplementedError`).
 
-`app.py` now has a sidebar Mode radio ("Pipeline" / "Observability"). Observability mode renders `_render_observability_page()` with multi-turn chat UI, refresh button, and cited run ID expanders.
+`app.py` has a sidebar Mode radio ("Pipeline" / "Observability"). Observability mode renders `_render_observability_page()` with multi-turn chat UI, refresh button, and cited run ID expanders.
 
-`grafana/docker-compose.yml` starts a local Prometheus + Pushgateway + Grafana stack (`cd grafana && docker compose up -d`). Dashboard at `http://localhost:3000`.
+Postgres schema (UC2, `localhost:5432`, db `uc2`, user `mip`/`mip_pass`): tables `audit_events`, `block_trace`, `quarantine_rows`, `dedup_clusters`, `anomaly_reports`.
+
+### Airflow DAG pipeline
+
+`airflow/dags/` contains the production orchestration. All DAGs mount `src/` and `config/` from the repo root into the Airflow container (see `docker-compose.yml` volumes). Daily schedule chain (all UTC):
+
+| DAG | Schedule | What it does |
+|---|---|---|
+| `usda_incremental_dag` / `off_incremental_dag` / `openfda_incremental_dag` | 02:00–05:00 | Ingest source → GCS Bronze JSONL (`gs://mip-bronze-2024/`) |
+| `bronze_to_bq_dag` | 03:00–06:00 | Load Bronze JSONL → BigQuery staging tables |
+| `bronze_to_silver_dag` | 07:00 | Watermark-gated: reads new Bronze partitions → UC1 ETL → GCS Silver Parquet (`gs://mip-silver-2024/`). Watermarks stored at `gs://mip-bronze-2024/_watermarks/{source}_silver_watermark.json`. |
+| `silver_to_gold_dag` | 09:00 | ExternalTaskSensor waits for bronze_to_silver. Silver Parquet → dedup + enrichment → BigQuery `mip_gold.products` (append mode). |
+| `uc2_anomaly_dag` | Hourly | Isolation Forest on UC1 Prometheus metrics; needs ≥5 completed runs per source. |
+| `uc2_chunker_dag` | Every 5 min | Postgres audit_events → ChromaDB embeddings. |
+| `esci_dag` | Manual | ESCI product dataset ingestion. |
+| `usda_dag` | Manual | Full USDA backfill. |
+
+Airflow UI: `http://localhost:8080` (admin / admin).
+
+### Kafka and GCS sink
+
+The pipeline emits events to Kafka topic `pipeline.events`. `src/consumers/kafka_gcs_sink.py` replaces the Kafka Connect S3 Sink for Bronze ingestion — runs as `python -m src.consumers.kafka_gcs_sink --topic <topic> --prefix <prefix>`, writes JSONL part files to GCS, flushing every `FLUSH_SIZE` records. `src/producers/` contains `openfda_producer.py` and `off_producer.py` for source-specific Kafka producers.
+
+### Redis embedding cache
+
+`src/cache/client.py` wraps Redis (`localhost:6379`) with numpy serialization for embedding vectors. `NULL_RATE_COLUMNS` constant in `src/pipeline/runner.py` controls which columns get null-rate stats in `block_end` Kafka events. SQLite at `output/llm_cache.db` is the fallback when Redis is unavailable.
+
+### GCS / BigQuery data flow
+
+- Bronze: `gs://mip-bronze-2024/` (JSONL, partitioned by source + date)
+- Silver: `gs://mip-silver-2024/` (Parquet, partitioned by domain + source)
+- Gold CLI: `python -m src.pipeline.gold` (local Silver → local Gold Parquet)
+- Gold BQ: `mip_gold.products` (BigQuery, schema auto-detected, append mode via Airflow)
 
 ### UC3/UC4 are scaffolding only
 
@@ -114,27 +164,5 @@ Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THR
 - **Registry key determinism** — `FunctionRegistry.save()` preserves `used_count` on updates by design; if you rewrite the save logic, keep that preservation or the "pipeline remembered" telemetry gets reset every run.
 - **Block `audit_entry()` signature** — every block extends `src/blocks/base.py:Block` and must return `{block, rows_in, rows_out, ...}` from `audit_entry()`. The UI's waterfall and `demo.py`'s trace both read those fields by name.
 - **`run_step` vs `invoke`** — the Streamlit UI calls `run_step(step_name, state)` to execute one node; `demo.py` uses `graph.invoke()` to run the whole graph. State shape must remain compatible with both paths.
+- **UC2 imports always go through `src.models.llm`** — never import `_emit_event` or `_MetricsCollector` directly from `src.uc2_observability`; the import guard in `llm.py` is what keeps things safe when UC2 deps are absent.
 - **Don't touch `final_project/`** when working on the ETL pipeline — it's a fully separate project with its own dependencies and conventions, and its own CLAUDE.md is the authoritative guide for work in that tree.
-
-## Active Technologies
-- Python 3.11 + `redis-py` (new), `numpy` (existing, for embedding serialization), `hashlib` (stdlib), `argparse` (stdlib) (009-redis-cache-layer)
-- Redis at `localhost:6379` (new); FAISS index (existing, unaffected) (009-redis-cache-layer)
-- Python 3.11 + `redis-py` (existing cache), `litellm` (existing LLM routing), `pandas` (existing), `streamlit` (existing UI) (010-observability-rag-chatbot)
-- Local JSON files in `output/run_logs/` (gitignored) (010-observability-rag-chatbot)
-- Python 3.11 + `kafka-python`/`confluent-kafka` and `prometheus_client` imported indirectly via UC2 modules; `uuid`, `hashlib`, `time`, `datetime` (stdlib) added directly (010-uc1-uc2-integration)
-- `NULL_RATE_COLUMNS` constant in `src/pipeline/runner.py` controls null-rate columns in block_end Kafka events (010-uc1-uc2-integration)
-- UC2 import guard in `src/models/llm.py` — `_UC2_AVAILABLE`, `_emit_event`, `_MetricsCollector` exported from that module; all other files import UC2 symbols from there (010-uc1-uc2-integration)
-- `prometheus_client` (push mode via `push_to_gateway` to Pushgateway at `localhost:9091`); `grafana/docker-compose.yml` Docker stack for UC2 Grafana dashboard (011-observability-rag-chatbot)
-- `RunLogWriter`, `RunLogStore`, `ObservabilityChatbot`, `MetricsExporter` in `src/uc2_observability/` fully implemented (011-observability-rag-chatbot)
-- Python 3.11 + `pyarrow` (schema validation), `rapidfuzz` (fuzzy dedup), `faiss-cpu` (batch KNN), `sentence-transformers` (embeddings), `sqlite3` (LLM cache fallback) (013-gold-layer-pipeline)
-- GCS buckets `gs://mip-silver-2024/` (input) and `gs://mip-gold-2024/` (output); CLI at `python -m src.pipeline.gold` (013-gold-layer-pipeline)
-- Python 3.11 + pandas 2.x, chromadb (HTTP client), sentence-transformers (`all-MiniLM-L6-v2`), rapidfuzz, faiss-cpu, redis-py, pyarrow (aqeel)
-- GCS (Silver Parquet input), BigQuery (Gold output), ChromaDB at localhost:8000 (corpus), Redis at localhost:6379 (embedding + dedup cache) (aqeel)
-- Python 3.11 + pandas, Pydantic v2, LangGraph, LiteLLM, pyarrow (for parquet write) (aqeel)
-- Local filesystem (`output/silver/<domain>/`, `output/gold/`) for Silver and Gold output; GCS for the silver-mode pipeline branch (unchanged) (aqeel)
-
-## Recent Changes
-- 009-redis-cache-layer: Added Python 3.11 + `redis-py` (new), `numpy` (existing, for embedding serialization), `hashlib` (stdlib), `argparse` (stdlib)
-- 010-uc1-uc2-integration: Wired UC1 pipeline to emit Kafka events (block_start/block_end, run_started/run_completed, quarantine, dedup_cluster) and push Prometheus metrics via UC2 modules; added `_llm_call_counter` to `src/models/llm.py`; added `_run_id`/`_run_start_time` to PipelineState; added `last_clusters`/`last_dedup_rate` to FuzzyDeduplicateBlock
-- 011-observability-rag-chatbot: Implemented UC2 log persistence (`RunLogWriter`), queryable log store (`RunLogStore`), RAG chatbot (`ObservabilityChatbot`), Prometheus Pushgateway exporter (`MetricsExporter`); added Observability mode to Streamlit wizard; added `grafana/` Docker Compose stack; `_run_start_time` now set in `load_source_node` via `time.monotonic()`
-- 013-gold-layer-pipeline: Gold layer pipeline (Silver → Gold) with 4-stage architecture: Unify (read + validate Silver Parquet), Dedup (blocking + fuzzy + Union-Find), Enrichment (S1 deterministic → S2 KNN → S3 RAG-LLM), Output (Gold Parquet + run log). Safety boundary: allergens S1-only. SQLite cache fallback when Redis unavailable.

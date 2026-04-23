@@ -42,6 +42,7 @@ SILVER_BUCKET   = os.environ.get("SILVER_BUCKET",   "mip-silver-2024")
 BQ_PROJECT      = os.environ.get("GCP_PROJECT",     "mip-platform-2024")
 BQ_GOLD_DATASET = os.environ.get("BQ_GOLD_DATASET", "mip_gold")
 BQ_GOLD_TABLE   = os.environ.get("BQ_GOLD_TABLE",   "products")
+GOLD_GCS_CHUNK_SIZE = int(os.environ.get("GOLD_GCS_CHUNK_SIZE", "500000"))
 
 
 def _gcs_client():
@@ -285,10 +286,14 @@ def run_gold_pipeline(
     domain: str = "nutrition",
     cache_client=None,
     skip_enrichment: bool = False,
+    limit: int | None = None,
 ) -> int:
     """
     Read Silver Parquet for source_name/date, run gold block sequence, write to BQ.
     Returns number of rows written to BigQuery.
+
+    Args:
+        limit: if set, randomly sample this many rows from Silver before processing.
     """
     from src.registry.block_registry import BlockRegistry
     from src.pipeline.runner import PipelineRunner
@@ -308,6 +313,9 @@ def run_gold_pipeline(
     start_time = time.monotonic()
 
     df = _read_silver_parquet(source_name, date)
+    if limit is not None and len(df) > limit:
+        df = df.sample(n=limit, random_state=42).reset_index(drop=True)
+        logger.info("--limit %d: sampled %d rows from Silver", limit, len(df))
     rows_in = len(df)
 
     if "published_date" in df.columns:
@@ -485,12 +493,105 @@ def _push_gold_audit(run_log: dict) -> None:
         logger.warning("Postgres audit write failed (non-fatal): %s", exc)
 
 
+def _read_domain_from_bq(sources: list[str]) -> pd.DataFrame:
+    """
+    Read all Gold rows for the given source_names from BQ.
+    Returns concatenated DataFrame. Raises if no rows found.
+    """
+    from google.cloud import bigquery
+
+    client = bigquery.Client(project=BQ_PROJECT)
+    sources_sql = ", ".join(f"'{s}'" for s in sources)
+    query = f"""
+        SELECT * FROM `{BQ_PROJECT}.{BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}`
+        WHERE source_name IN ({sources_sql})
+    """
+    logger.info("Reading domain rows from BQ: source_name IN (%s)", sources_sql)
+    df = client.query(query).to_dataframe()
+    if df.empty:
+        raise ValueError(
+            f"No rows found in BQ for source_name IN ({sources_sql}). "
+            "Run per-source gold pipelines first."
+        )
+    logger.info("BQ read: %d rows for sources %s", len(df), sources)
+    return df
+
+
+def run_domain_gold_gcs(
+    domain: str,
+    date: str,
+    sources: list[str],
+    cache_client=None,
+) -> int:
+    """
+    Read already-enriched Gold rows for all sources in the domain from BQ,
+    run cross-source dedup, and write canonical records to
+    gs://mip-gold-2024/{domain}/{date}/.
+
+    Per-source local dedup + enrichment must already be done (run_gold_pipeline
+    per source writes to BQ first). This step only does cross-source dedup.
+
+    Returns total rows written to GCS.
+    """
+    from src.registry.block_registry import BlockRegistry
+    from src.pipeline.runner import PipelineRunner
+    from src.schema.analyzer import get_domain_schema
+    from src.blocks.dq_score import _SKIP_ALWAYS
+    from src.pipeline.writers.gcs_gold_writer import GCSGoldWriter
+
+    if cache_client is None:
+        try:
+            from src.cache.client import CacheClient
+            cache_client = CacheClient()
+            if not cache_client._available:
+                logger.warning("Redis unavailable — running without cache for domain GCS gold")
+        except Exception as e:
+            logger.warning("Cache init failed for domain GCS gold: %s", e)
+
+    combined = _read_domain_from_bq(sources)
+    logger.info("Domain GCS gold: %d rows from BQ for domain=%s sources=%s", len(combined), domain, sources)
+
+    combined.attrs["dq_reference_columns"] = [c for c in combined.columns if c not in _SKIP_ALWAYS]
+
+    # Cross-source dedup only — enrichment already done per-source before BQ write
+    _DEDUP_BLOCKS = ["fuzzy_deduplicate", "column_wise_merge", "golden_record_select"]
+
+    unified = get_domain_schema(domain)
+    config = {
+        "dq_weights": unified.dq_weights.model_dump(),
+        "domain": domain,
+        "unified_schema": unified,
+        "cache_client": cache_client,
+    }
+
+    block_reg = BlockRegistry.instance()
+    runner = PipelineRunner(block_reg)
+    result_df, _ = runner.run(df=combined, block_sequence=_DEDUP_BLOCKS, config=config)
+
+    logger.info("Domain GCS gold: %d canonical rows after cross-source dedup (domain=%s)", len(result_df), domain)
+
+    writer = GCSGoldWriter()
+    rows_written = 0
+    if len(result_df) <= GOLD_GCS_CHUNK_SIZE:
+        writer.write(result_df, domain=domain, date=date, chunk_idx=0)
+        rows_written = len(result_df)
+    else:
+        for chunk_idx, start in enumerate(range(0, len(result_df), GOLD_GCS_CHUNK_SIZE)):
+            chunk = result_df.iloc[start: start + GOLD_GCS_CHUNK_SIZE]
+            writer.write(chunk, domain=domain, date=date, chunk_idx=chunk_idx)
+            rows_written += len(chunk)
+
+    logger.info("Domain GCS gold complete: %d rows → gs://mip-gold-2024/%s/%s/", rows_written, domain, date)
+    return rows_written
+
+
 def main():
     parser = argparse.ArgumentParser(description="Silver → Gold pipeline (dedup + enrichment → BQ)")
     parser.add_argument("--source", required=True, help="Source name (e.g. off, usda/branded, usda/survey)")
     parser.add_argument("--date",   required=True, help="Silver partition date YYYY/MM/DD")
     parser.add_argument("--domain", default="nutrition", choices=["nutrition", "safety", "pricing", "retail"])
     parser.add_argument("--skip-enrichment", action="store_true", help="Skip enrichment blocks (dedup-only run)")
+    parser.add_argument("--limit", type=int, default=None, help="Random sample N rows from Silver before processing")
     args = parser.parse_args()
 
     rows = run_gold_pipeline(
@@ -498,6 +599,7 @@ def main():
         date=args.date,
         domain=args.domain,
         skip_enrichment=args.skip_enrichment,
+        limit=args.limit,
     )
     logger.info(f"Gold pipeline complete: {rows} rows written to BQ {BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}")
 
