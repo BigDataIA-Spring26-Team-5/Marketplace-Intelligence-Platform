@@ -417,7 +417,7 @@ def main():
     parser = argparse.ArgumentParser(description="Silver → Gold pipeline (dedup + enrichment → BQ)")
     parser.add_argument("--source", required=True, help="Source name (e.g. off, usda/branded, usda/survey)")
     parser.add_argument("--date",   required=True, help="Silver partition date YYYY/MM/DD")
-    parser.add_argument("--domain", default="nutrition", choices=["nutrition", "safety", "pricing"])
+    parser.add_argument("--domain", default="nutrition", choices=["nutrition", "safety", "pricing", "retail"])
     parser.add_argument("--skip-enrichment", action="store_true", help="Skip enrichment blocks (dedup-only run)")
     args = parser.parse_args()
 
