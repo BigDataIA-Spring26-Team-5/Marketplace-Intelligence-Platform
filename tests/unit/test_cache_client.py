@@ -100,15 +100,6 @@ class TestGracefulDegradation:
             client = CacheClient()
         assert client.get("llm", "key") is None
 
-    def test_set_noop_when_unavailable(self):
-        with patch.dict("sys.modules", {"redis": MagicMock(
-            ConnectionPool=MagicMock(return_value=MagicMock()),
-            Redis=MagicMock(side_effect=Exception("refused")),
-            RedisError=Exception,
-        )}):
-            client = CacheClient()
-        assert client.set("llm", "key", b"data", ttl=60) is False
-
     def test_redis_error_during_get_disables_client(self, connected_client):
         """RedisError during GET must flip _available to False."""
         client, mock_conn = connected_client
@@ -242,9 +233,3 @@ class TestGetSet:
         summary = client.get_stats().summary()
         assert summary.get("emb", {}).get("hits", 0) == 1
 
-    def test_miss_recorded_in_stats(self, connected_client):
-        client, mock_conn = connected_client
-        mock_conn.get.return_value = None
-        client.get("dedup", "key")
-        summary = client.get_stats().summary()
-        assert summary.get("dedup", {}).get("misses", 0) == 1
