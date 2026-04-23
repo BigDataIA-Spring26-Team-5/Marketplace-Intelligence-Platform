@@ -1,4 +1,6 @@
- Making it Truly Domain-Agnostic
+ # UNIQUE SELLING POINT
+ 
+ Making it Truly Domain-Agnostic --> Means can run it for any Domain. 
 
   Already Generic (no changes needed)
 
@@ -65,3 +67,44 @@
 
   Honest positioning: "Domain-extensible ETL with manual schema onboarding — enrichment requires domain-specific implementation." Not plug-and-play for arbitrary input,
   but adding a new domain is bounded and well-defined work.
+
+  ----
+
+    UC3 HybridSearch result fields today: product_name, brand_name, primary_category, allergens — no recall awareness. UC4 ProductRecommender takes enriched_df = nutrition
+  Gold only, no safety signal.
+
+  ---
+  What it should look like:
+
+  Silver/nutrition ──┐
+                     ├──→ Gold/nutrition  (LEFT JOIN safety on product_name+brand_name)
+  Silver/safety  ────┘         │
+                               │  adds: is_recalled, recall_class, recall_reason
+                               ↓
+                        UC3 HybridSearch  →  filter Class I recalls, penalize Class II
+                        UC4 Recommender   →  never surface recalled products
+                               │
+  Silver/retail (ESCI) ────────┘  (product_id linkage for transaction-based recs)
+
+  ---
+  Gap summary — what needs building:
+
+  ┌───────────────┬──────────────────────────────┬───────────────────────────────────────────────────────────────────────┐
+  │     Layer     │           Current            │                                Missing                                │
+  ├───────────────┼──────────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ Gold pipeline │ nutrition-only dedup+enrich  │ cross-domain join with safety Silver                                  │
+  ├───────────────┼──────────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ UC3 results   │ product_name, allergens, ... │ is_recalled, recall_class, recall_reason fields                       │
+  ├───────────────┼──────────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ UC3 ranking   │ RRF score only               │ safety penalty: Class I → suppress, Class II → demote                 │
+  ├───────────────┼──────────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ UC4 build()   │ nutrition enriched_df        │ recall filter before mining association rules                         │
+  ├───────────────┼──────────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ ESCI linkage  │ None                         │ match retail.product_id → nutrition.product_name for transaction data │
+  └───────────────┴──────────────────────────────┴───────────────────────────────────────────────────────────────────────┘
+
+  OpenFDA in UC3/UC4 specifically:
+
+  - UC3: post-filter on recall status before returning results. Already has allergens in result schema — recall_reason from OpenFDA IS allergen ground truth (more reliable
+   than S1 extraction).
+  - UC4: AssociationRuleMiner mines co-purchase patterns — recalled products in those patterns corrupt recommendations. Need a safety filter before mine_rules().

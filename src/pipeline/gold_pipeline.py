@@ -49,6 +49,75 @@ def _gcs_client():
     return storage.Client()
 
 
+def _enrich_with_safety_signals(gold_df: pd.DataFrame, date: str) -> pd.DataFrame:
+    """
+    LEFT JOIN nutrition Gold with safety Silver on (product_name, brand_name).
+    Adds is_recalled (bool), recall_class, recall_reason columns.
+    Overwrites allergens with recall_reason where an OpenFDA match is found
+    (ground-truth allergen data overrides S1 extraction).
+    Non-fatal — on any failure returns gold_df with is_recalled=False.
+    """
+    try:
+        prefix = f"openfda/{date}/"
+        client = _gcs_client()
+        bucket = client.bucket(SILVER_BUCKET)
+        blobs = [
+            b for b in bucket.list_blobs(prefix=prefix)
+            if b.name.endswith(".parquet") and not b.name.split("/")[-1].startswith("sample")
+        ]
+        if not blobs:
+            logger.warning("No safety Silver Parquet found at gs://%s/%s — skipping safety join", SILVER_BUCKET, prefix)
+            gold_df["is_recalled"]  = False
+            gold_df["recall_class"] = None
+            gold_df["recall_reason"] = None
+            return gold_df
+
+        frames = []
+        for blob in sorted(blobs, key=lambda b: b.name):
+            buf = io.BytesIO(blob.download_as_bytes())
+            frames.append(pd.read_parquet(buf, engine="pyarrow"))
+        safety_df = pd.concat(frames, ignore_index=True)
+
+        # Keep only rows with actual recall info; deduplicate on join keys
+        recall_cols = [c for c in ["product_name", "brand_name", "recall_class", "recall_reason", "recall_status"] if c in safety_df.columns]
+        safety_df = safety_df[recall_cols].dropna(subset=["recall_class"])
+        safety_df = safety_df.drop_duplicates(subset=["product_name", "brand_name"], keep="first")
+
+        logger.info("Safety join: %d recall records from openfda/%s", len(safety_df), date)
+
+        merged = gold_df.merge(
+            safety_df.rename(columns={
+                "recall_class":  "_rc_class",
+                "recall_reason": "_rc_reason",
+                "recall_status": "_rc_status",
+            }),
+            on=["product_name", "brand_name"],
+            how="left",
+        )
+
+        merged["is_recalled"]  = merged["_rc_class"].notna()
+        merged["recall_class"] = merged.pop("_rc_class")
+        merged["recall_reason"] = merged.pop("_rc_reason")
+        if "_rc_status" in merged.columns:
+            merged.pop("_rc_status")
+
+        # Ground-truth allergen override for matched rows
+        matched = merged["is_recalled"] & merged["recall_reason"].notna()
+        if matched.any():
+            merged.loc[matched, "allergens"] = merged.loc[matched, "recall_reason"]
+            logger.info("Allergen override: %d rows updated from recall_reason", matched.sum())
+
+        logger.info("Safety join complete: %d recalled products in nutrition Gold", merged["is_recalled"].sum())
+        return merged
+
+    except Exception as exc:
+        logger.warning("Safety enrichment failed (non-fatal) — setting is_recalled=False: %s", exc)
+        gold_df["is_recalled"]   = False
+        gold_df["recall_class"]  = None
+        gold_df["recall_reason"] = None
+        return gold_df
+
+
 _REQUIRED_SILVER_COLUMNS = {"product_name"}
 _EXPECTED_SILVER_COLUMNS = {
     "product_name", "brand_name", "ingredients",
@@ -203,6 +272,9 @@ def run_gold_pipeline(
 
     duration_seconds = round(time.monotonic() - start_time, 3)
     logger.info(f"Gold blocks complete: {len(result_df)} rows after dedup/enrichment")
+
+    if domain == "nutrition":
+        result_df = _enrich_with_safety_signals(result_df, date)
 
     bq_error: str | None = None
     rows_written = 0

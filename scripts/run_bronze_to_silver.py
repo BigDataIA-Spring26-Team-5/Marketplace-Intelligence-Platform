@@ -34,7 +34,7 @@ SOURCE_DOMAIN = {
     "usda":    "nutrition",
     "openfda": "safety",
     "off":     "nutrition",
-    "esci":    "pricing",
+    "esci":    "retail",
 }
 
 import re as _re

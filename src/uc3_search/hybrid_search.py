@@ -50,23 +50,41 @@ class HybridSearch:
 
     # ── public API ─────────────────────────────────────────────────────────────
 
-    def search(self, query: str, top_k: int = 10, mode: str = "hybrid") -> list[dict]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        mode: str = "hybrid",
+        suppress_recalled: bool = False,
+    ) -> list[dict]:
         """
         Execute search and return ranked results.
 
         mode: "hybrid" | "bm25" | "semantic"
+        suppress_recalled: if True, drop Class I recalled products from results.
         Each result: {product_name, brand_name, primary_category, allergens,
                       dietary_tags, is_organic, dq_score_post, data_source,
-                      score, rank, mode}
+                      is_recalled, recall_class, score, rank, mode}
         """
         if mode == "bm25":
-            return self.bm25_search(query, top_k)
-        if mode == "semantic":
-            return self.semantic_search(query, top_k)
+            results = self.bm25_search(query, top_k)
+        elif mode == "semantic":
+            results = self.semantic_search(query, top_k)
+        else:
+            bm25_hits     = self.bm25_search(query, CANDIDATE_N)
+            semantic_hits = self.semantic_search(query, CANDIDATE_N)
+            results = self.reciprocal_rank_fusion(bm25_hits, semantic_hits, top_k)
 
-        bm25_hits     = self.bm25_search(query, CANDIDATE_N)
-        semantic_hits = self.semantic_search(query, CANDIDATE_N)
-        return self.reciprocal_rank_fusion(bm25_hits, semantic_hits, top_k)
+        if suppress_recalled:
+            results = [
+                r for r in results
+                if not (
+                    r.get("is_recalled") == "True"
+                    and str(r.get("recall_class") or "").upper().startswith("CLASS I")
+                )
+            ]
+
+        return results
 
     def bm25_search(self, query: str, top_k: int = 50) -> list[dict]:
         """BM25 keyword search over indexed product text."""
