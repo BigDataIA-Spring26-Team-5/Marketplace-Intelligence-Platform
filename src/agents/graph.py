@@ -40,6 +40,36 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
 
 
+def _push_silver_audit(run_log: dict) -> None:
+    """Write audit events to Postgres audit_events table. Non-fatal."""
+    import json
+    from datetime import datetime, timezone
+    try:
+        import psycopg2
+        from src.uc2_observability.kafka_to_pg import PG_DSN
+        conn = psycopg2.connect(PG_DSN)
+        ts = datetime.now(timezone.utc)
+        with conn.cursor() as cur:
+            for event_type in ("run_started", "run_completed"):
+                cur.execute(
+                    """INSERT INTO audit_events (run_id, source, event_type, status, ts, payload)
+                       VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                    (
+                        run_log["run_id"],
+                        run_log.get("source_name", "unknown"),
+                        event_type,
+                        run_log.get("status", "unknown"),
+                        ts,
+                        json.dumps(run_log),
+                    ),
+                )
+        conn.commit()
+        conn.close()
+        logger.info("Postgres audit events written for run_id=%s", run_log["run_id"])
+    except Exception as exc:
+        logger.warning("Postgres audit write failed (non-fatal): %s", exc)
+
+
 def _silver_normalize(
     df: pd.DataFrame,
     domain_schema,
@@ -621,7 +651,7 @@ def save_output_node(state: PipelineState) -> dict:
         # Write structured run log
         log_path = RunLogWriter().save(state, status="success", start_time=_run_start)
 
-        # Push Prometheus metrics via Pushgateway
+        # Push Prometheus metrics via Pushgateway + Postgres audit_events
         if log_path is not None:
             try:
                 import json as _json
@@ -629,10 +659,19 @@ def save_output_node(state: PipelineState) -> dict:
                 MetricsExporter().push(run_log_dict)
             except Exception as e:
                 logger.warning(f"MetricsExporter.push failed: {e}")
+            try:
+                import json as _json2
+                _rl = _json2.loads(log_path.read_text(encoding="utf-8"))
+                _push_silver_audit(_rl)
+            except Exception as e:
+                logger.warning(f"Silver audit push failed: {e}")
 
     except Exception as e:
         try:
-            RunLogWriter().save(state, status="partial", error=str(e), start_time=_run_start)
+            _partial_log_path = RunLogWriter().save(state, status="partial", error=str(e), start_time=_run_start)
+            if _partial_log_path is not None:
+                import json as _json3
+                _push_silver_audit(_json3.loads(_partial_log_path.read_text(encoding="utf-8")))
         except Exception as inner:
             logger.warning(f"RunLogWriter.save (partial) failed: {inner}")
         raise
