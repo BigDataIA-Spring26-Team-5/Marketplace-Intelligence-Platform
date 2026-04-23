@@ -48,7 +48,13 @@ class ExtractAllergensBlock(Block):
             return ", ".join(sorted(found)) if found else ""
 
         def _get_scan_text(row) -> str:
-            return str(row.get("ingredients") or row.get("recall_reason") or "")
+            for col in ("ingredients", "recall_reason"):
+                val = row.get(col)
+                if val is not None:
+                    s = str(val)
+                    if s.lower() not in ("nan", "none", "<na>", ""):
+                        return s
+            return ""
 
         if "ingredients" not in df.columns and "recall_reason" not in df.columns:
             df["allergens"] = pd.NA

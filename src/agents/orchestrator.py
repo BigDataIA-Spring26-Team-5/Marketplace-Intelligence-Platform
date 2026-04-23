@@ -659,6 +659,7 @@ def check_registry_node(state: PipelineState) -> dict:
     dataset_name = state.get("resolved_source_name") or Path(_raw_source).stem
     if "*" in dataset_name:
         dataset_name = "glob"
+    dataset_name = dataset_name.replace("/", "_")
     column_mapping = state.get("column_mapping", {})
     missing_columns = state.get("missing_columns", [])
     derivable_gaps = state.get("derivable_gaps", [])

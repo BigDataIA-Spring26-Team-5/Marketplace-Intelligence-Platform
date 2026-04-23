@@ -6,15 +6,15 @@
     },
     "brand_owner": {
       "type": "string",
-      "required": true
+      "required": false
     },
     "brand_name": {
       "type": "string",
-      "required": true
+      "required": false
     },
     "ingredients": {
       "type": "string",
-      "required": true
+      "required": false
     },
     "category": {
       "type": "string",
@@ -31,11 +31,11 @@
     },
     "published_date": {
       "type": "string",
-      "required": true
+      "required": false
     },
     "data_source": {
       "type": "string",
-      "required": true
+      "required": false
     },
     "allergens": {
       "type": "string",
@@ -64,12 +64,12 @@
     },
     "dq_score_post": {
       "type": "float",
-      "required": true,
+      "required": false,
       "computed": true
     },
     "dq_delta": {
       "type": "float",
-      "required": true,
+      "required": false,
       "computed": true
     }
   },
