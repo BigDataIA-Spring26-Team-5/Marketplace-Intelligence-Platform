@@ -121,3 +121,4 @@ CLAUDE.md
 
 *.tmp
 *.bak
+airflow/airflow.db
