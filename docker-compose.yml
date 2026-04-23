@@ -156,6 +156,7 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE:  Viewer
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_SERVER_ROOT_URL:          "http://35.239.47.242:3000"
+      GF_USERS_DEFAULT_THEME:      "light"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
