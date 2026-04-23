@@ -1,16 +1,20 @@
 """
 Open Food Facts — incremental daily DAG.
 
-Strategy: OFF publishes daily delta JSONL.GZ files at:
-  https://static.openfoodfacts.org/data/delta/{YYYY-MM-DD}.jsonl.gz
+Strategy: OFF publishes delta files indexed at:
+  https://static.openfoodfacts.org/data/delta/index.txt
+
+Each line in index.txt is a filename like:
+  openfoodfacts_products_{start_ts}_{end_ts}.json.gz
 
 Watermark stored in GCS: mip-bronze-2024/_watermarks/off_watermark.json
-  {"last_date": "2026-04-20"}
+  {"last_ts": 1776000000}  (Unix timestamp of last processed end_ts)
 
 Each run:
-  1. Read watermark → find all delta dates not yet ingested
-  2. Download each delta file, decompress, write JSONL to GCS bronze
-  3. Update watermark to today
+  1. Fetch index.txt → parse all available delta files
+  2. Download files whose start_ts >= last_ts watermark (i.e. not yet ingested)
+  3. Decompress, parse JSON, filter fields, write JSONL to GCS bronze
+  4. Update watermark to latest end_ts processed
 """
 from __future__ import annotations
 
@@ -26,22 +30,21 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from botocore.config import Config
 
-GCS_ACCESS_KEY = os.getenv("GCS_ACCESS_KEY", "REMOVED_GCS_ACCESS_KEY ")
-GCS_SECRET_KEY = os.getenv("GCS_SECRET_KEY", "REMOVED_GCS_SECRET_KEY")
-GCS_ENDPOINT   = os.getenv("GCS_ENDPOINT", "https://storage.googleapis.com")
-BRONZE_BUCKET  = os.getenv("BRONZE_BUCKET", "mip-bronze-2024")
-WATERMARK_KEY  = "_watermarks/off_watermark.json"
-OFF_DELTA_URL  = "https://static.openfoodfacts.org/data/delta/{date}.jsonl.gz"
-FLUSH_EVERY    = 10_000
+GCS_ACCESS_KEY  = os.getenv("GCS_ACCESS_KEY", "REMOVED_GCS_ACCESS_KEY ")
+GCS_SECRET_KEY  = os.getenv("GCS_SECRET_KEY", "REMOVED_GCS_SECRET_KEY")
+GCS_ENDPOINT    = os.getenv("GCS_ENDPOINT", "https://storage.googleapis.com")
+BRONZE_BUCKET   = os.getenv("BRONZE_BUCKET", "mip-bronze-2024")
+WATERMARK_KEY   = "_watermarks/off_watermark.json"
+OFF_INDEX_URL   = "https://static.openfoodfacts.org/data/delta/index.txt"
+OFF_DELTA_BASE  = "https://static.openfoodfacts.org/data/delta/"
+FLUSH_EVERY     = 10_000
 
 KEEP_FIELDS = [
     "code", "product_name", "brands", "ingredients_text",
     "categories", "pnns_groups_1", "pnns_groups_2",
     "allergens", "traces", "labels", "countries",
-    "serving_size", "energy_100g", "fat_100g",
-    "carbohydrates_100g", "proteins_100g", "salt_100g",
-    "nova_group", "nutriscore_grade", "data_quality_tags",
-    "last_modified_t",
+    "serving_size", "nova_group", "nutriscore_grade",
+    "data_quality_tags", "last_modified_t",
 ]
 
 default_args = {
@@ -63,26 +66,47 @@ def _gcs():
     )
 
 
-def _read_watermark(client) -> str:
-    """Return last ingested date string YYYY-MM-DD, or 7 days ago as default."""
+def _read_watermark(client) -> int:
+    """Return last processed end_ts as Unix int. Default: oldest file in index."""
     try:
         obj = client.get_object(Bucket=BRONZE_BUCKET, Key=WATERMARK_KEY)
         data = json.loads(obj["Body"].read())
-        return data["last_date"]
-    except client.exceptions.NoSuchKey:
-        return (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+        # support old date-string watermark — treat as 0 so all available deltas are fetched
+        if "last_ts" in data:
+            return int(data["last_ts"])
+        return 0
+    except Exception:
+        return 0
 
 
-def _write_watermark(client, date_str: str) -> None:
-    body = json.dumps({"last_date": date_str, "updated_at": datetime.utcnow().isoformat()})
+def _write_watermark(client, end_ts: int) -> None:
+    body = json.dumps({"last_ts": end_ts, "updated_at": datetime.utcnow().isoformat()})
     client.put_object(
         Bucket=BRONZE_BUCKET, Key=WATERMARK_KEY,
         Body=body.encode(), ContentType="application/json",
     )
 
 
+def _parse_index(index_text: str) -> list[tuple[int, int, str]]:
+    """Parse index.txt → sorted list of (start_ts, end_ts, filename)."""
+    files = []
+    for line in index_text.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # openfoodfacts_products_{start}_{end}.json.gz
+        parts = line.replace(".json.gz", "").split("_")
+        try:
+            end_ts   = int(parts[-1])
+            start_ts = int(parts[-2])
+            files.append((start_ts, end_ts, line))
+        except (ValueError, IndexError):
+            continue
+    return sorted(files, key=lambda x: x[0])
+
+
 def _flush(client, buffer: list, date_str: str, chunk_idx: int) -> None:
-    key = f"off/{date_str.replace('-', '/')}/delta/part_{chunk_idx:04d}.jsonl"
+    key = f"off/{date_str}/delta_part_{chunk_idx:04d}.jsonl"
     body = "\n".join(json.dumps(r) for r in buffer).encode("utf-8")
     client.put_object(
         Bucket=BRONZE_BUCKET, Key=key,
@@ -92,38 +116,38 @@ def _flush(client, buffer: list, date_str: str, chunk_idx: int) -> None:
 
 
 def ingest_incremental(execution_date=None, **kwargs):
-    client = _gcs()
-    last_date = _read_watermark(client)
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    client   = _gcs()
+    last_ts  = _read_watermark(client)
 
-    # Build list of dates to backfill since watermark
-    start = datetime.strptime(last_date, "%Y-%m-%d") + timedelta(days=1)
-    end   = datetime.utcnow()
-    dates = []
-    cur = start
-    while cur <= end:
-        dates.append(cur.strftime("%Y-%m-%d"))
-        cur += timedelta(days=1)
+    headers = {"User-Agent": "MIP-Pipeline/1.0 (mip-data-platform; contact@mip.io)"}
 
-    if not dates:
-        print("OFF: already up to date, nothing to ingest.")
+    # Fetch available delta file list
+    resp = requests.get(OFF_INDEX_URL, timeout=30, headers=headers)
+    resp.raise_for_status()
+    all_files = _parse_index(resp.text)
+
+    # Only files not yet ingested (start_ts >= last_ts)
+    pending = [(s, e, f) for s, e, f in all_files if s >= last_ts]
+
+    if not pending:
+        print(f"OFF: already up to date (last_ts={last_ts}). Nothing to ingest.")
         return 0
 
-    grand_total = 0
-    last_successful = last_date
+    print(f"OFF: {len(pending)} delta file(s) to process since ts={last_ts}")
 
-    for date_str in dates:
-        url = OFF_DELTA_URL.format(date=date_str)
-        print(f"Fetching OFF delta: {url}")
+    grand_total  = 0
+    last_end_ts  = last_ts
+
+    for start_ts, end_ts, filename in pending:
+        url      = OFF_DELTA_BASE + filename
+        date_str = datetime.utcfromtimestamp(start_ts).strftime("%Y/%m/%d")
+        print(f"Fetching: {filename}  ({date_str})")
+
         try:
-            resp = requests.get(url, timeout=120, stream=True)
-            if resp.status_code == 404:
-                print(f"  No delta file for {date_str} (404) — skipping.")
-                last_successful = date_str
-                continue
-            resp.raise_for_status()
+            r = requests.get(url, timeout=180, stream=True, headers=headers)
+            r.raise_for_status()
 
-            raw = gzip.decompress(resp.content)
+            raw   = gzip.decompress(r.content)
             lines = raw.decode("utf-8").splitlines()
 
             buffer    = []
@@ -139,8 +163,8 @@ def ingest_incremental(execution_date=None, **kwargs):
                     continue
                 if not record.get("product_name"):
                     continue
+
                 row = {k: record.get(k) for k in KEEP_FIELDS}
-                # Nutritional values live under nutriments{} in OFF JSON, not top-level
                 nutriments = record.get("nutriments") or {}
                 row["energy_100g"]        = nutriments.get("energy-kcal_100g") or nutriments.get("energy_100g")
                 row["fat_100g"]           = nutriments.get("fat_100g")
@@ -158,23 +182,23 @@ def ingest_incremental(execution_date=None, **kwargs):
             if buffer:
                 _flush(client, buffer, date_str, chunk_idx)
 
-            print(f"  {date_str}: {total} records ingested.")
+            print(f"  {filename}: {total} records.")
             grand_total += total
-            last_successful = date_str
+            last_end_ts  = end_ts
 
         except Exception as exc:
-            print(f"  ERROR on {date_str}: {exc} — stopping here, watermark preserved at {last_successful}.")
+            print(f"  ERROR on {filename}: {exc} — stopping, watermark preserved at {last_end_ts}.")
             break
 
-    _write_watermark(client, last_successful)
-    print(f"OFF incremental done. Total: {grand_total}. Watermark → {last_successful}")
+    _write_watermark(client, last_end_ts)
+    print(f"OFF incremental done. Total: {grand_total}. Watermark → {last_end_ts}")
     return grand_total
 
 
 with DAG(
     dag_id="off_incremental_ingest",
     default_args=default_args,
-    description="Daily OFF delta ingestion → GCS bronze (incremental)",
+    description="Daily OFF delta ingestion → GCS bronze (incremental, timestamp-based)",
     schedule="0 4 * * *",
     start_date=datetime(2026, 4, 21),
     catchup=False,
