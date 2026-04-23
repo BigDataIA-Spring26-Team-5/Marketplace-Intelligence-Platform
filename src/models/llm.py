@@ -42,7 +42,7 @@ def _infer_provider(model: str) -> str:
     return "anthropic"
 
 # ── Model routing — override via env vars ────────────────────────────
-_ORCHESTRATOR_MODEL  = os.environ.get("ORCHESTRATOR_LLM",  "claude-sonnet-4-5")
+_ORCHESTRATOR_MODEL  = os.environ.get("ORCHESTRATOR_LLM",  "deepseek/deepseek-chat")
 _CODEGEN_MODEL       = os.environ.get("CODEGEN_LLM",       "deepseek/deepseek-chat")
 _ENRICHMENT_MODEL    = os.environ.get("ENRICHMENT_LLM",    "claude-haiku-4-5-20251001")
 _CRITIC_MODEL        = os.environ.get("CRITIC_LLM",        "anthropic/claude-sonnet-4-6")
