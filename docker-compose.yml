@@ -88,9 +88,15 @@ services:
       AIRFLOW__CORE__EXECUTOR: SequentialExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "mip_secret_key_2024"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: "admin"
+      _AIRFLOW_WWW_USER_PASSWORD: "admin"
       PYTHONPATH: /opt/airflow
     volumes:
       - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/airflow.db:/opt/airflow/airflow.db
       - ./src:/opt/airflow/src
       - ./config:/opt/airflow/config
       - ./output:/opt/airflow/output
