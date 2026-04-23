@@ -87,7 +87,8 @@ def write_mapping_yaml(
     domain_dir = _GENERATED_DIR / domain
     domain_dir.mkdir(parents=True, exist_ok=True)
 
-    file_path = domain_dir / f"DYNAMIC_MAPPING_{dataset_name}.yaml"
+    safe_name = dataset_name.replace("/", "_")
+    file_path = domain_dir / f"DYNAMIC_MAPPING_{safe_name}.yaml"
     data = {"column_operations": operations}
     file_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
     logger.info(f"Wrote mapping YAML: {file_path} ({len(operations)} operations)")
