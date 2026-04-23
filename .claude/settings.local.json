@@ -136,7 +136,8 @@
       "WebFetch(domain:world.openfoodfacts.org)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:static.openfoodfacts.org)",
-      "Bash(curl -s \"https://static.openfoodfacts.org/data/delta/index.txt\")"
+      "Bash(curl -s \"https://static.openfoodfacts.org/data/delta/index.txt\")",
+      "Bash(kaggle --version)"
     ]
   }
 }
