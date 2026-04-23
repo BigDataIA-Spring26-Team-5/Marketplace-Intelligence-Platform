@@ -39,9 +39,9 @@ class MetricsExporter:
             enrichment = run_log.get("enrichment_stats") or {}
 
             registry = CollectorRegistry()
-            labels = ["source_name", "status", "run_id"]
+            labels = ["source", "status", "run_id"]
             label_vals = [source_name, status, run_id]
-            short_labels = ["source_name", "run_id"]
+            short_labels = ["source", "run_id"]
             short_vals = [source_name, run_id]
 
             def _gauge(name: str, value: float, lnames: list, lvals: list) -> None:
