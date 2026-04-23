@@ -210,10 +210,14 @@ class BlockRegistry:
 
     def get_gold_sequence(self, domain: str = "nutrition") -> list[str]:
         """
-        Block sequence for Silver→Gold: dedup + enrichment + final DQ score.
+        Block sequence for Silver→Gold: re-score pre, dedup + enrichment, final DQ score.
         Reads Silver Parquet (already schema-transformed).
+
+        dq_score_pre runs first so pre and post share the exact same reference column
+        set (all Silver columns incl. empty enrichment cols). The delta then measures
+        the enrichment lift honestly: how many previously-null cells got filled.
         """
-        base = ["dedup_stage"]
+        base = ["dq_score_pre", "dedup_stage"]
         if domain in ("nutrition", "safety", "retail"):
             base.append("enrich_stage")
         base.append("dq_score_post")
