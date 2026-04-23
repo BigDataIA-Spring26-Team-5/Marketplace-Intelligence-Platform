@@ -53,7 +53,8 @@ SOURCE_ALIAS: dict[str, str] = {
 # For these sources, only the latest date partition is processed.
 # Older date partitions are superseded by the most recent full snapshot.
 # off: 04/21 is a full snapshot that includes all prior incremental dates (04/09-04/20).
-LATEST_ONLY_SOURCES: set[str] = {"off"}
+# esci: 2024/01/01 and 2026/04/20 are the same dataset re-partitioned; keep latest.
+LATEST_ONLY_SOURCES: set[str] = {"off", "esci"}
 
 
 def _extract_partition(blob_name: str) -> tuple[str, str] | None:
