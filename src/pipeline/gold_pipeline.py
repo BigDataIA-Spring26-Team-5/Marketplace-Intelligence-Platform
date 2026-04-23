@@ -442,6 +442,8 @@ def _build_gold_run_log(
             "corpus_augmented": es.get("corpus_augmented", 0),
             "corpus_size_after": es.get("corpus_size_after", 0),
         },
+        "llm_calls": es.get("llm", 0),
+        "cost_usd":  round(es.get("llm", 0) * 0.0004, 6),
         "audit_log": audit_log,
     }
 
