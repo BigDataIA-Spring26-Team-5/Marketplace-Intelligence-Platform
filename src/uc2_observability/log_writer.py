@@ -30,7 +30,17 @@ class RunLogWriter:
         start_time: float | None = None,
     ) -> dict:
         source_path = state.get("source_path", "unknown")
-        source_name = Path(source_path).stem if source_path != "unknown" else "unknown"
+        source_name = (
+            state.get("resolved_source_name")
+            or (Path(source_path).stem if source_path != "unknown" else "unknown")
+        )
+        # GCS glob paths produce stem="*"; extract source folder (parts[3])
+        if source_name == "*":
+            if source_path.startswith("gs://"):
+                _parts = source_path.split("/")
+                source_name = _parts[3] if len(_parts) > 3 else "unknown"
+            else:
+                source_name = Path(source_path.replace("*", "")).parent.name or "unknown"
 
         run_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -80,6 +90,8 @@ class RunLogWriter:
             "dq_delta": dq_delta,
             "enrichment_stats": state.get("enrichment_stats", {}),
             "block_sequence": state.get("block_sequence", []),
+            "sequence_reasoning": state.get("sequence_reasoning", ""),
+            "skipped_blocks": state.get("skipped_blocks", {}),
             "audit_log": state.get("audit_log", []),
             "column_mapping": state.get("column_mapping", {}),
             "operations": list(operations) if operations else [],

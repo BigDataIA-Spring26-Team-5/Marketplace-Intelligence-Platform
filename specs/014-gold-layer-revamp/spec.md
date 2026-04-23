@@ -202,7 +202,7 @@ Silver GCS Parquet
     ├─ S2 KNN corpus              ← Change 2: ratio-aware augmentation
     │    └─ knn_search_batch      ← Change 3: chunked query loop (500/call)
     │    └─ short-circuit gate    ← Change 4: MIN_ENRICHMENT_CORPUS=1000
-    └─ S3 RAG-LLM                 ← Change 5: _safe_text helper
+    └─ S3 LLM                 ← Change 5: _safe_text helper
        │
        ▼
   dq_score_post

@@ -56,7 +56,7 @@
 
 ## Phase 4: User Story 2 — LLM Response Cache (Priority: P1)
 
-**Goal**: S3 RAG-LLM enrichment hits Redis before batching; only cache-miss rows sent to LLM. Cache hit rate >50% by partition 3.
+**Goal**: S3 LLM enrichment hits Redis before batching; only cache-miss rows sent to LLM. Cache hit rate >50% by partition 3.
 
 **Independent Test**: Run on `part_0000.jsonl`, note S3 row count. Run on `part_0001.jsonl`, confirm logs show `llm: {n} hits, {m} misses` where n > 0. Verify enrichment values for cache-hit rows match original LLM output.
 

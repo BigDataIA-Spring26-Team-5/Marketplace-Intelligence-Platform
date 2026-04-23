@@ -39,9 +39,9 @@ class MetricsExporter:
             enrichment = run_log.get("enrichment_stats") or {}
 
             registry = CollectorRegistry()
-            labels = ["source_name", "status", "run_id"]
+            labels = ["source", "status", "run_id"]
             label_vals = [source_name, status, run_id]
-            short_labels = ["source_name", "run_id"]
+            short_labels = ["source", "run_id"]
             short_vals = [source_name, run_id]
 
             def _gauge(name: str, value: float, lnames: list, lvals: list) -> None:
@@ -59,6 +59,8 @@ class MetricsExporter:
             _gauge("etl_enrichment_s2_resolved", float(enrichment.get("embedding") or 0), short_labels, short_vals)
             _gauge("etl_enrichment_s3_resolved", float(enrichment.get("llm") or 0), short_labels, short_vals)
             _gauge("etl_enrichment_unresolved", float(enrichment.get("unresolved") or 0), short_labels, short_vals)
+            _gauge("etl_corpus_augmented", float(enrichment.get("corpus_augmented") or 0), short_labels, short_vals)
+            _gauge("etl_corpus_size_after", float(enrichment.get("corpus_size_after") or 0), short_labels, short_vals)
             _gauge("etl_run_status", _STATUS_VALUES.get(status, 0.0), short_labels, short_vals)
 
             push_to_gateway(

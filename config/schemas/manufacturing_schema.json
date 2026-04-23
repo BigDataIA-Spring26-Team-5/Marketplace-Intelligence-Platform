@@ -18,8 +18,7 @@
     },
     "category": {
       "type": "string",
-      "required": false,
-      "enrichment_alias": "primary_category"
+      "required": false
     },
     "serving_size": {
       "type": "float",
@@ -37,25 +36,21 @@
       "type": "string",
       "required": true
     },
-    "allergens": {
+    "manufacturer_name": {
       "type": "string",
-      "required": false,
-      "enrichment": true
+      "required": true
     },
-    "primary_category": {
+    "facility_id": {
       "type": "string",
-      "required": false,
-      "enrichment": true
+      "required": false
     },
-    "dietary_tags": {
+    "country_of_origin": {
       "type": "string",
-      "required": false,
-      "enrichment": true
+      "required": false
     },
-    "is_organic": {
-      "type": "boolean",
-      "required": false,
-      "enrichment": true
+    "production_batch": {
+      "type": "string",
+      "required": false
     },
     "dq_score_pre": {
       "type": "float",

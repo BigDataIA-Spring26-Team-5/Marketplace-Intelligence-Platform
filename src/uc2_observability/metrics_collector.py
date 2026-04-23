@@ -35,7 +35,7 @@ _GAUGE_METRICS = [
     ("dedup_rate",            "etl_dedup_rate",            "Fraction of rows identified as duplicates"),
     ("s1_count",              "etl_enrichment_s1_resolved","Rows resolved by S1 deterministic enrichment"),
     ("s2_count",              "etl_enrichment_s2_resolved","Rows resolved by S2 KNN enrichment"),
-    ("s3_count",              "etl_enrichment_s3_resolved","Rows resolved by S3 RAG-LLM enrichment"),
+    ("s3_count",              "etl_enrichment_s3_resolved","Rows resolved by S3 LLM enrichment"),
     ("s4_count",              "etl_enrichment_unresolved", "Rows resolved by S4 fallback enrichment"),
     ("quarantine_rows",       "etl_rows_quarantined",      "Rows sent to quarantine"),
     ("block_duration_seconds","etl_duration_seconds",      "Total pipeline wall-clock duration in seconds"),
@@ -137,6 +137,36 @@ class MetricsCollector:
             logger.error("Failed to push metrics to Pushgateway (%s): %s",
                          self.pushgateway_url, exc)
             raise
+
+    def push_block_dq(
+        self,
+        run_id: str,
+        source: str,
+        block_name: str,
+        block_seq: int,
+        dq_score: float,
+        rows: int,
+    ) -> None:
+        """Push per-block DQ score to Pushgateway for real-time trend chart in Grafana."""
+        try:
+            registry = CollectorRegistry()
+            labels = ["source", "run_id", "block_name", "block_seq"]
+            label_vals = [source, run_id, block_name, str(block_seq)]
+
+            g1 = Gauge("etl_block_dq_score", "DQ score after block", labels, registry=registry)
+            g1.labels(*label_vals).set(dq_score)
+
+            g2 = Gauge("etl_block_rows", "Row count after block", labels, registry=registry)
+            g2.labels(*label_vals).set(float(rows))
+
+            push_to_gateway(
+                self.pushgateway_url,
+                job=f"etl_block_{source}",
+                grouping_key={"run_id": run_id, "block_name": block_name},
+                registry=registry,
+            )
+        except Exception as exc:
+            logger.warning("push_block_dq failed (block=%s): %s", block_name, exc)
 
     def push_anomaly_flag(self, run_id: str, source: str, signal: str, value: float = 1.0) -> None:
         """

@@ -32,12 +32,83 @@ from src.models.llm import (
 )
 from src.registry.block_registry import BlockRegistry
 from src.pipeline.runner import PipelineRunner, DEFAULT_CHUNK_SIZE, NULL_RATE_COLUMNS
-from src.schema.analyzer import get_unified_schema
+from src.schema.analyzer import get_domain_schema
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
+
+
+def _sanitize_for_json(obj):
+    """Replace NaN/Inf floats with None so json.dumps produces valid JSON."""
+    import math
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
+
+
+def _push_silver_audit(run_log: dict) -> None:
+    """Write audit events to Postgres audit_events table. Non-fatal."""
+    import json
+    from datetime import datetime, timezone
+    try:
+        import psycopg2
+        from src.uc2_observability.kafka_to_pg import PG_DSN
+        conn = psycopg2.connect(PG_DSN)
+        ts = datetime.now(timezone.utc)
+        with conn.cursor() as cur:
+            for event_type in ("run_started", "run_completed"):
+                cur.execute(
+                    """INSERT INTO audit_events (run_id, source, event_type, status, ts, payload)
+                       VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                    (
+                        run_log["run_id"],
+                        run_log.get("source_name", "unknown"),
+                        event_type,
+                        run_log.get("status", "unknown"),
+                        ts,
+                        json.dumps(_sanitize_for_json(run_log)),
+                    ),
+                )
+        conn.commit()
+        conn.close()
+        logger.info("Postgres audit events written for run_id=%s", run_log["run_id"])
+    except Exception as exc:
+        logger.warning("Postgres audit write failed (non-fatal): %s", exc)
+
+
+def _silver_normalize(
+    df: pd.DataFrame,
+    domain_schema,
+    dq_weights: dict,
+) -> pd.DataFrame:
+    """Enforce domain schema column set and order post-block-sequence.
+
+    Adds null-filled columns for any schema column absent from df.
+    Recomputes dq_score_pre if any required non-computed column was null-filled.
+    Drops columns not in domain schema.
+    Returns df with exactly domain_schema.columns keys in declaration order.
+    """
+    canonical_cols = list(domain_schema.columns.keys())
+    added_required = []
+
+    for col in canonical_cols:
+        if col not in df.columns:
+            df[col] = pd.NA
+            spec = domain_schema.columns[col]
+            if spec.required and not spec.computed:
+                added_required.append(col)
+
+    if added_required:
+        from src.blocks.dq_score import compute_dq_score
+        df["dq_score_pre"] = compute_dq_score(df, dq_weights)
+
+    return df[canonical_cols]
 
 
 # ── Pipeline execution nodes ─────────────────────────────────────────
@@ -55,11 +126,10 @@ def route_after_analyze_schema(state: PipelineState) -> str:
 
 def plan_sequence_node(state: PipelineState) -> dict:
     """
-    Agent 3: LLM call to determine optimal block execution order.
+    Agent 3: LLM selects which optional blocks to run and orders them.
 
-    Receives the block pool (determined by domain/enrichment settings) plus
-    domain, source schema, and gap/registry context. Returns an ordered sequence.
-    Agent 3 can only reorder — it cannot add or remove blocks from the pool.
+    Mandatory blocks always run. Optional blocks are included only if
+    beneficial for this specific source based on its schema characteristics.
     """
     if state.get("block_sequence"):
         return {}
@@ -71,24 +141,25 @@ def plan_sequence_node(state: PipelineState) -> dict:
     enable_enrichment = state.get("enable_enrichment", True)
 
     block_reg = BlockRegistry.instance()
-
     pipeline_mode = state.get("pipeline_mode") or "full"
+
+    # Mandatory blocks per mode — always forced into the sequence
     if pipeline_mode == "silver":
-        pool = block_reg.get_silver_sequence(domain=domain)
-        logger.info(f"Silver mode: using silver sequence ({len(pool)} blocks)")
-        return {
-            "block_sequence": pool,
-            "sequence_reasoning": "silver mode — schema transform only, no dedup/enrichment",
-        }
+        mandatory = ["dq_score_pre", "__generated__", "schema_enforce"]
+        optional_names = [
+            "strip_whitespace", "lowercase_brand", "remove_noise_words",
+            "strip_punctuation", "extract_quantity_column",
+        ]
+    else:
+        mandatory = ["dq_score_pre", "__generated__", "dedup_stage", "dq_score_post"]
+        optional_names = [
+            "strip_whitespace", "lowercase_brand", "remove_noise_words",
+            "strip_punctuation", "extract_quantity_column", "enrich_stage",
+        ]
 
-    pool = block_reg.get_default_sequence(
-        domain=domain,
-        unified_schema=get_unified_schema(),
-        enable_enrichment=enable_enrichment,
-    )
-    blocks_metadata = block_reg.get_blocks_with_metadata(pool)
-
-    generated_block_prefixes = ("DYNAMIC_MAPPING_",)
+    # Build metadata for mandatory and optional blocks separately
+    mandatory_metadata = block_reg.get_blocks_with_metadata(mandatory)
+    optional_metadata = block_reg.get_blocks_with_metadata(optional_names)
 
     gap_summary = {
         "gaps_detected": len(gaps),
@@ -96,7 +167,6 @@ def plan_sequence_node(state: PipelineState) -> dict:
         "misses_requiring_generated_blocks": [
             g["target_column"] for g in registry_misses
         ],
-        "generated_block_prefixes": generated_block_prefixes,
     }
 
     compact_schema = {
@@ -114,35 +184,35 @@ def plan_sequence_node(state: PipelineState) -> dict:
                     domain=domain,
                     source_schema=json.dumps(compact_schema, indent=2),
                     gap_summary=json.dumps(gap_summary, indent=2),
-                    blocks_metadata=json.dumps(blocks_metadata, indent=2),
+                    mandatory_blocks=json.dumps(mandatory_metadata, indent=2),
+                    optional_blocks=json.dumps(optional_metadata, indent=2),
                 ),
             }
         ],
     )
 
-    sequence = result.get("block_sequence", pool)
+    sequence = result.get("block_sequence", [])
     reasoning = result.get("reasoning", "")
+    skipped = result.get("skipped_blocks", {})
 
-    # Expand stages in pool so the missing-check uses individual block names,
-    # matching what Agent 3 received and returned (get_blocks_with_metadata expands stages).
-    expanded_pool = []
-    for item in pool:
-        if block_reg.is_stage(item):
-            expanded_pool.extend(block_reg.expand_stage(item))
-        else:
-            expanded_pool.append(item)
+    # Force-insert any missing mandatory blocks in their correct positions
+    if "dq_score_pre" not in sequence:
+        sequence.insert(0, "dq_score_pre")
+    if "__generated__" not in sequence:
+        idx = sequence.index("dq_score_pre") + 1 if "dq_score_pre" in sequence else 0
+        sequence.insert(idx, "__generated__")
+    if pipeline_mode == "silver" and "schema_enforce" not in sequence:
+        sequence.append("schema_enforce")
+    if pipeline_mode != "silver":
+        if "dedup_stage" not in sequence:
+            insert_at = len(sequence) - 1 if "dq_score_post" in sequence else len(sequence)
+            sequence.insert(insert_at, "dedup_stage")
+        if "dq_score_post" not in sequence:
+            sequence.append("dq_score_post")
 
-    missing = [b for b in expanded_pool if b not in sequence]
-    if missing:
-        logger.warning(
-            f"Agent 3 omitted blocks {missing} — appending at end before dq_score_post"
-        )
-        if "dq_score_post" in sequence:
-            idx = sequence.index("dq_score_post")
-            for b in missing:
-                sequence.insert(idx, b)
-        else:
-            sequence.extend(missing)
+    if skipped:
+        for block, reason in skipped.items():
+            logger.info(f"Agent 3 skipped '{block}': {reason}")
 
     logger.info(f"Agent 3 planned sequence ({len(sequence)} blocks): {sequence}")
     if reasoning:
@@ -151,6 +221,7 @@ def plan_sequence_node(state: PipelineState) -> dict:
     result: dict = {
         "block_sequence": sequence,
         "sequence_reasoning": reasoning,
+        "skipped_blocks": skipped,
     }
 
     # Write complete YAML cache entry now that all three agents have run.
@@ -176,6 +247,7 @@ def plan_sequence_node(state: PipelineState) -> dict:
                 "block_registry_hits": state.get("block_registry_hits", {}),
                 "block_sequence": sequence,
                 "sequence_reasoning": reasoning,
+                "skipped_blocks": skipped,
                 "enrichment_columns_to_generate": state.get("enrichment_columns_to_generate", []),
                 "enrich_alias_ops": state.get("enrich_alias_ops", []),
                 "gaps": state.get("gaps", []),
@@ -203,7 +275,7 @@ def run_pipeline_node(state: PipelineState) -> dict:
     runner = PipelineRunner(block_registry)
 
     domain = state.get("domain", "nutrition")
-    unified = get_unified_schema()
+    unified = get_domain_schema(domain)
     block_sequence = state.get("block_sequence") or block_registry.get_default_sequence(
         domain=domain,
         unified_schema=unified,
@@ -222,7 +294,11 @@ def run_pipeline_node(state: PipelineState) -> dict:
         raise ValueError("Missing 'source_path' in state — cannot stream data for pipeline execution.")
     source_name = state.get("resolved_source_name") or Path(source_path).stem
     if "*" in source_name:
-        source_name = "glob"
+        if source_path.startswith("gs://"):
+            _parts = source_path.split("/")
+            source_name = _parts[3] if len(_parts) > 3 else "unknown"
+        else:
+            source_name = Path(source_path.replace("*", "")).parent.name or "unknown"
     column_mapping = state.get("column_mapping", {})
 
     # UC2: generate run_id, thread into config, reset LLM counter
@@ -258,6 +334,7 @@ def run_pipeline_node(state: PipelineState) -> dict:
             chunk_size=state.get("chunk_size", DEFAULT_CHUNK_SIZE),
             sep=state.get("source_sep", ","),
         )
+        result_df = _silver_normalize(result_df, unified, config["dq_weights"])
     except Exception:
         _run_status = "failed"
         raise
@@ -480,7 +557,7 @@ def save_output_node(state: PipelineState) -> dict:
             if _dm:
                 _silver_date = _dm.group(1)
 
-    output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
+    output_path = OUTPUT_DIR / f"{source_name.replace('/', '_')}_unified.csv"
     silver_uri: str | None = None
     quarantine_uri: str | None = None
 
@@ -505,9 +582,30 @@ def save_output_node(state: PipelineState) -> dict:
             df.to_csv(output_path, index=False)
             logger.info(f"Output saved to {output_path} ({len(df)} rows)")
             if quarantined_df is not None and len(quarantined_df) > 0:
-                q_path = OUTPUT_DIR / f"{source_name}_quarantined.csv"
+                q_path = OUTPUT_DIR / f"{source_name.replace('/', '_')}_quarantined.csv"
                 quarantined_df.to_csv(q_path, index=False)
                 logger.info(f"Quarantine: {len(quarantined_df)} rows → {q_path}")
+
+        # Silver local parquet write + Gold rebuild (all pipeline modes)
+        domain = state.get("domain", "nutrition")
+        silver_local_dir = OUTPUT_DIR / "silver" / domain
+        silver_local_dir.mkdir(parents=True, exist_ok=True)
+        safe_source_name = source_name.replace("/", "_")
+        silver_local_path = silver_local_dir / f"{safe_source_name}.parquet"
+        df.to_parquet(silver_local_path, index=False)
+        logger.info("Silver: %d rows → %s", len(df), silver_local_path)
+
+        silver_files = sorted(silver_local_dir.glob("*.parquet"))
+        gold_path: str | None = None
+        if silver_files:
+            gold_df = pd.concat([pd.read_parquet(p) for p in silver_files], ignore_index=True)
+            gold_dir = OUTPUT_DIR / "gold"
+            gold_dir.mkdir(parents=True, exist_ok=True)
+            gold_path = str(gold_dir / f"{domain}.parquet")
+            gold_df.to_parquet(gold_path, index=False)
+            logger.info("Gold: %d rows → %s", len(gold_df), gold_path)
+        else:
+            logger.warning("No Silver parquet files for domain '%s' — Gold write skipped", domain)
 
         cache_client = state.get("cache_client")
         if cache_client is not None:
@@ -551,8 +649,8 @@ def save_output_node(state: PipelineState) -> dict:
                     "dedup_rate": round(float(dedup_rate), 4),
                     "s1_count": int(enrichment_stats.get("deterministic", 0)),
                     "s2_count": int(enrichment_stats.get("embedding", 0)),
-                    "s3_count": 0,
-                    "s4_count": int(enrichment_stats.get("llm", 0)),
+                    "s3_count": int(enrichment_stats.get("llm", 0)),
+                    "s4_count": int(enrichment_stats.get("unresolved", 0)),
                     "cost_usd": round(llm_calls * 0.002, 6),
                     "llm_calls": llm_calls,
                     "quarantine_rows": quarantine_rows,
@@ -570,7 +668,7 @@ def save_output_node(state: PipelineState) -> dict:
         # Write structured run log
         log_path = RunLogWriter().save(state, status="success", start_time=_run_start)
 
-        # Push Prometheus metrics via Pushgateway
+        # Push Prometheus metrics via Pushgateway + Postgres audit_events
         if log_path is not None:
             try:
                 import json as _json
@@ -578,10 +676,19 @@ def save_output_node(state: PipelineState) -> dict:
                 MetricsExporter().push(run_log_dict)
             except Exception as e:
                 logger.warning(f"MetricsExporter.push failed: {e}")
+            try:
+                import json as _json2
+                _rl = _json2.loads(log_path.read_text(encoding="utf-8"))
+                _push_silver_audit(_rl)
+            except Exception as e:
+                logger.warning(f"Silver audit push failed: {e}")
 
     except Exception as e:
         try:
-            RunLogWriter().save(state, status="partial", error=str(e), start_time=_run_start)
+            _partial_log_path = RunLogWriter().save(state, status="partial", error=str(e), start_time=_run_start)
+            if _partial_log_path is not None:
+                import json as _json3
+                _push_silver_audit(_json3.loads(_partial_log_path.read_text(encoding="utf-8")))
         except Exception as inner:
             logger.warning(f"RunLogWriter.save (partial) failed: {inner}")
         raise
@@ -590,6 +697,8 @@ def save_output_node(state: PipelineState) -> dict:
         "output_path": silver_uri or str(output_path),
         "silver_output_uri": silver_uri,
         "quarantine_output_uri": quarantine_uri,
+        "silver_local_path": str(silver_local_path),
+        "gold_path": gold_path,
     }
 
 

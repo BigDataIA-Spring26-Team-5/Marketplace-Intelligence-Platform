@@ -11,7 +11,7 @@ No runtime code generation. Dataset-specific transforms persist as YAML under `s
 | Node | What it does |
 |------|-------------|
 | `load_source` | Auto-detect delimiter, adaptive sampling (~5K rows) |
-| `analyze_schema` | Agent 1 maps source → unified schema; emits RENAME/CAST/FORMAT/DELETE/ADD/SPLIT/UNIFY/DERIVE ops |
+| `analyze_schema` | Agent 1 maps source → domain schema; emits RENAME/CAST/FORMAT/DELETE/ADD/SPLIT/UNIFY/DERIVE ops |
 | `critique_schema` | Agent 2 (reasoning model) validates ops against 7 deterministic rules |
 | `check_registry` | HITL gate — human decides handling for missing columns |
 | `plan_sequence` | Agent 3 reorders registered blocks (cannot add/remove) |
@@ -31,13 +31,13 @@ Cascading, three-tier for missing fields:
 
 1. **S1 Deterministic** — rule-based for `allergens`, `dietary_tags`, `is_organic`
 2. **S2 KNN** — FAISS + sentence-transformers for `primary_category`
-3. **S3 RAG-LLM** — deepseek-chat + retrieved context for low-confidence categories
+3. **S3 LLM** — deepseek-chat + retrieved context for low-confidence categories
 
 > **Safety boundary**: `allergens`, `dietary_tags`, `is_organic` are S1-only — never sent to probabilistic tiers.
 
 ### Core Behaviors
 
-- **Schema-first**: every dataset compared to `config/unified_schema.json` before execution
+- **Schema-first**: every dataset compared to `config/schemas/<domain>_schema.json` before execution
 - **DQ enforcement**: `dq_score_pre`/`dq_score_post` computed; rows failing required-field validation are quarantined
 - **Checkpoint/resume**: SQLite-backed state at `checkpoints.db` via `src/pipeline/checkpoint/`
 - **Audit trail**: every block logs `rows_in`/`rows_out`
@@ -101,7 +101,7 @@ src/
 ├── agents/          # LangGraph nodes + prompts + state
 ├── blocks/          # Static blocks + DynamicMappingBlock
 │   └── generated/   # Per-domain/dataset YAML mappings
-├── enrichment/      # S1 deterministic, S2 KNN, S3 RAG-LLM
+├── enrichment/      # S1 deterministic, S2 KNN, S3 LLM
 ├── models/          # LiteLLM model wrappers
 ├── pipeline/        # Runner, CLI, checkpoint manager
 ├── registry/        # Block registry
@@ -112,7 +112,10 @@ src/
 └── uc4_recommendations/
 
 config/
-├── unified_schema.json   # Master 14-column schema
+├── schemas/              # Per-domain schema files
+│   ├── nutrition_schema.json
+│   ├── safety_schema.json
+│   └── pricing_schema.json
 └── litellm_config.yaml
 
 specs/               # Feature specs (001–006)

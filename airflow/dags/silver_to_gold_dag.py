@@ -3,19 +3,18 @@ Silver → Gold DAG.
 
 Pipeline position:
   GCS silver (Parquet) → [dedup + enrichment] → BigQuery mip_gold.products
+                                               → GCS mip-gold-2024/{domain}/{date}/
 
-Flow per source (all 3 sources run in parallel):
-  1. Read Silver Parquet for the current execution_date partition.
-  2. Run gold block sequence: fuzzy_deduplicate → column_wise_merge →
-     golden_record_select → extract_allergens → llm_enrich → dq_score_post.
-  3. Append deduplicated + enriched rows to BQ mip_gold.products.
+Flow:
+  1. Per-source tasks (parallel): read Silver Parquet → gold blocks → append to BQ.
+  2. Per-domain fan-in tasks: concatenate all source Silver Parquets for the domain
+     → cross-source dedup → write canonical Parquet to gs://mip-gold-2024/{domain}/.
+
+Domain fan-in waits for all per-source BQ tasks in the domain to finish, then
+writes the unified deduplicated view to GCS Gold.
 
 Schedule: daily 09:00 — after bronze_to_silver (07:00) has written Silver files.
-  Extra 2-hour buffer lets Silver writes complete across all sources before Gold reads.
-
 ExternalTaskSensor waits for bronze_to_silver DAG to complete before starting.
-
-Gold BQ table: mip_gold.products (schema auto-detected via BQ load job, append mode).
 """
 from __future__ import annotations
 
@@ -41,6 +40,12 @@ SOURCE_CONFIG: dict[str, dict[str, Any]] = {
     "off":     {"domain": "nutrition"},
     "usda":    {"domain": "nutrition"},
     "openfda": {"domain": "safety"},
+}
+
+# Which sources contribute to each domain (for the GCS Gold fan-in step)
+DOMAIN_SOURCES: dict[str, list[str]] = {
+    "nutrition": ["off", "usda"],
+    "safety":    ["openfda"],
 }
 
 default_args = {
@@ -79,17 +84,39 @@ def load_source_to_gold(source: str, **kwargs) -> int:
     return rows
 
 
+# ── domain GCS gold fan-in ────────────────────────────────────────────────────
+
+def write_domain_to_gcs_gold(domain: str, sources: list[str], **kwargs) -> int:
+    """
+    Concatenate Silver Parquet for all sources in domain, cross-source dedup,
+    and write canonical Gold records to gs://mip-gold-2024/{domain}/{date}/.
+    Returns rows written.
+    """
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    from src.pipeline.gold_pipeline import run_domain_gold_gcs
+
+    execution_date: datetime = kwargs["execution_date"]
+    date_partition = execution_date.strftime("%Y/%m/%d")
+
+    print(f"[{domain}] GCS Gold fan-in for partition {date_partition} (sources={sources})")
+    rows = run_domain_gold_gcs(domain=domain, date=date_partition, sources=sources)
+    print(f"[{domain}] GCS Gold complete: {rows} rows → gs://mip-gold-2024/{domain}/{date_partition}/")
+    return rows
+
+
 # ── DAG ───────────────────────────────────────────────────────────────────────
 
 with DAG(
     dag_id="silver_to_gold",
     default_args=default_args,
-    description="Silver GCS Parquet → BigQuery mip_gold.products (dedup + enrichment, all sources parallel)",
+    description="Silver GCS Parquet → BigQuery mip_gold.products + GCS mip-gold-2024/{domain}/ (dedup + enrichment)",
     schedule="0 9 * * *",
     start_date=datetime(2026, 4, 21),
     catchup=False,
     max_active_runs=1,
-    tags=["gold", "bigquery", "etl", "incremental"],
+    tags=["gold", "bigquery", "gcs", "etl", "incremental"],
 ) as dag:
 
     # Wait for bronze_to_silver to succeed for the same execution_date
@@ -104,12 +131,24 @@ with DAG(
         mode="reschedule",
     )
 
-    # All gold tasks run in parallel after the sensor clears
+    # Per-source BQ tasks — run in parallel after sensor clears
+    source_tasks: dict[str, PythonOperator] = {}
     for _source_name in SOURCE_CONFIG:
-        gold_task = PythonOperator(
+        source_tasks[_source_name] = PythonOperator(
             task_id=f"gold_{_source_name}",
             python_callable=load_source_to_gold,
             op_kwargs={"source": _source_name},
             provide_context=True,
         )
-        wait_for_silver >> gold_task
+        wait_for_silver >> source_tasks[_source_name]
+
+    # Per-domain GCS fan-in tasks — run after all per-source BQ tasks for that domain
+    for _domain, _sources in DOMAIN_SOURCES.items():
+        gcs_gold_task = PythonOperator(
+            task_id=f"gold_gcs_{_domain}",
+            python_callable=write_domain_to_gcs_gold,
+            op_kwargs={"domain": _domain, "sources": _sources},
+            provide_context=True,
+        )
+        for _src in _sources:
+            source_tasks[_src] >> gcs_gold_task

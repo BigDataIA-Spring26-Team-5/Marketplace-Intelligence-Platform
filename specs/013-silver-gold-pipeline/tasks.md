@@ -88,7 +88,7 @@
 
 - [x] T023 [P] [US3] Implement S1 deterministic — DONE `src/enrichment/deterministic.py`
 - [x] T024 [P] [US3] Implement S2 batch FAISS KNN — DONE `src/enrichment/embedding.py`
-- [x] T025 [P] [US3] Implement S3 RAG-LLM — DONE `src/enrichment/llm_tier.py`
+- [x] T025 [P] [US3] Implement S3 LLM — DONE `src/enrichment/llm_tier.py`
 - [x] T026 [US3] Wire cache into S3 — DONE via `src/cache/client.py` (Redis)
 - [x] T027 [US3] Create enrichment orchestrator — DONE `src/blocks/llm_enrich.py`
 - [x] T028 [US3] Implement dq_score_post — DONE `src/blocks/dq_score.py`
@@ -161,7 +161,7 @@
 # Launch all enrichment tiers together (different files):
 Task: "Implement S1 deterministic rules in tier1_deterministic.py"
 Task: "Implement S2 batch FAISS KNN in tier2_knn.py"
-Task: "Implement S3 RAG-LLM with batching in tier3_rag_llm.py"
+Task: "Implement S3 LLM with batching in tier3_rag_llm.py"
 ```
 
 ---

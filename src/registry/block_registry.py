@@ -19,6 +19,7 @@ from src.blocks.column_wise_merge import ColumnWiseMergeBlock
 from src.blocks.golden_record_select import GoldenRecordSelectBlock
 from src.blocks.dq_score import DQScorePreBlock, DQScorePostBlock
 from src.blocks.llm_enrich import LLMEnrichBlock
+from src.blocks.schema_enforce import SchemaEnforceBlock
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ _BLOCKS: dict[str, Block] = {
     "dq_score_pre": DQScorePreBlock(),
     "dq_score_post": DQScorePostBlock(),
     "llm_enrich": LLMEnrichBlock(),
+    "schema_enforce": SchemaEnforceBlock(),
 }
 
 # Stage definitions: stage_name -> list of constituent blocks
@@ -203,6 +205,7 @@ class BlockRegistry:
             base.append("keep_quantity_in_name")
         else:
             base.append("extract_quantity_column")
+        base.append("schema_enforce")
         return base
 
     def get_gold_sequence(self, domain: str = "nutrition") -> list[str]:
@@ -211,7 +214,7 @@ class BlockRegistry:
         Reads Silver Parquet (already schema-transformed).
         """
         base = ["dedup_stage"]
-        if domain in ("nutrition", "safety"):
+        if domain in ("nutrition", "safety", "retail"):
             base.append("enrich_stage")
         base.append("dq_score_post")
         return base

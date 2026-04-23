@@ -1,0 +1,42 @@
+{
+  "product_id": {
+    "status": "mapped",
+    "required": true
+  },
+  "product_name": {
+    "status": "mapped",
+    "required": true
+  },
+  "brand_name": {
+    "status": "mapped",
+    "required": true
+  },
+  "product_description": {
+    "status": "mapped",
+    "required": false
+  },
+  "product_features": {
+    "status": "mapped",
+    "required": false
+  },
+  "color": {
+    "status": "mapped",
+    "required": false
+  },
+  "locale": {
+    "status": "mapped",
+    "required": false
+  },
+  "relevance_label": {
+    "status": "mapped",
+    "required": false
+  },
+  "data_source": {
+    "status": "absent",
+    "required": false
+  },
+  "published_date": {
+    "status": "absent",
+    "required": false
+  }
+}

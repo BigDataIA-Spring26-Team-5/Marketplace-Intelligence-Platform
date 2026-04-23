@@ -3,8 +3,12 @@
 import json
 import logging
 import os
+import random
+import time
+from pathlib import Path
 
 import litellm
+import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,8 +21,28 @@ litellm.suppress_debug_info = True
 for _name in ("LiteLLM", "litellm", "httpx", "httpcore"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
+_RATE_LIMITS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "llm_rate_limits.yaml"
+_rate_limits_cache: dict = {}
+
+
+def _load_rate_config(provider: str) -> dict:
+    global _rate_limits_cache
+    if not _rate_limits_cache:
+        with open(_RATE_LIMITS_PATH) as f:
+            _rate_limits_cache = yaml.safe_load(f)
+    return _rate_limits_cache.get(provider, _rate_limits_cache.get("anthropic", {}))
+
+
+def _infer_provider(model: str) -> str:
+    m = model.lower()
+    if m.startswith("deepseek"):
+        return "deepseek"
+    if m.startswith("groq"):
+        return "groq"
+    return "anthropic"
+
 # ── Model routing — override via env vars ────────────────────────────
-_ORCHESTRATOR_MODEL  = os.environ.get("ORCHESTRATOR_LLM",  "claude-sonnet-4-5")
+_ORCHESTRATOR_MODEL  = os.environ.get("ORCHESTRATOR_LLM",  "deepseek/deepseek-chat")
 _CODEGEN_MODEL       = os.environ.get("CODEGEN_LLM",       "deepseek/deepseek-chat")
 _ENRICHMENT_MODEL    = os.environ.get("ENRICHMENT_LLM",    "claude-haiku-4-5-20251001")
 _CRITIC_MODEL        = os.environ.get("CRITIC_LLM",        "anthropic/claude-sonnet-4-6")
@@ -36,7 +60,7 @@ def get_codegen_llm() -> str:
 
 
 def get_enrichment_llm() -> str:
-    """Model string for S3 RAG-LLM enrichment."""
+    """Model string for S3 LLM enrichment."""
     return _ENRICHMENT_MODEL
 
 
@@ -51,13 +75,31 @@ def get_observability_llm() -> str:
 
 
 def call_llm(model: str, messages: list[dict], temperature: float = 0.0) -> str:
-    """Unified LLM call through LiteLLM. Returns the assistant message content."""
-    response = litellm.completion(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-    )
-    return response.choices[0].message.content
+    """Unified LLM call through LiteLLM with retry on rate-limit errors."""
+    provider = _infer_provider(model)
+    cfg = _load_rate_config(provider)
+    max_attempts: int = cfg.get("retry_max_attempts", 4)
+    base_delay: float = cfg.get("retry_base_delay_seconds", 15)
+    jitter: float = cfg.get("retry_jitter_fraction", 0.3)
+
+    for attempt in range(max_attempts):
+        try:
+            response = litellm.completion(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+            )
+            return response.choices[0].message.content
+        except litellm.exceptions.RateLimitError as exc:
+            if attempt >= max_attempts - 1:
+                raise
+            delay = base_delay * (2 ** attempt) * (1.0 + random.uniform(0, jitter))
+            logger.warning(
+                "Rate limit hit (provider=%s attempt=%d/%d) — retry in %.1fs: %s",
+                provider, attempt + 1, max_attempts, delay, exc,
+            )
+            time.sleep(delay)
+    raise RuntimeError("call_llm: exhausted retries without returning")
 
 
 def call_llm_json(model: str, messages: list[dict], temperature: float = 0.0) -> dict:

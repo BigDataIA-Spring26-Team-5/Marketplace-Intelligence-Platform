@@ -1,42 +1,16 @@
 column_operations:
-- target: brand_name
-  type: string
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: ingredients
-  type: string
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: serving_size
-  type: float
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: serving_size_unit
-  type: string
-  action: set_null
-  status: missing
-  reason: No source data available
-- target: data_source
-  type: string
-  action: set_default
-  default_value: FDA
 - target: product_name
   type: string
   action: strip_whitespace
-  source: product_name
-  normalize_before_dedup: true
+  source: product_description
 - target: brand_owner
   type: string
   action: strip_whitespace
-  source: brand_owner
-  normalize_before_dedup: true
+  source: recalling_firm
 - target: category
   type: string
   action: to_lowercase
-  source: category
+  source: product_type
 - target: published_date
   type: string
   action: coalesce
@@ -48,9 +22,35 @@ column_operations:
   type: string
   action: format_transform
   source: published_date
+- target: allergens
+  type: string
+  action: strip_whitespace
+  source: reason_for_recall
+- target: data_source
+  type: string
+  action: set_default
+  default_value: FDA
+- target: brand_name
+  type: string
+  action: set_null
+  status: missing
+  reason: No brand_name field in FDA recalls
+- target: ingredients
+  type: string
+  action: set_null
+  status: missing
+  reason: No ingredients field in FDA recalls
+- target: serving_size
+  type: float
+  action: set_null
+  status: missing
+  reason: No serving_size field in FDA recalls
+- target: serving_size_unit
+  type: string
+  action: set_null
+  status: missing
+  reason: No serving_size_unit field in FDA recalls
 - source: recall_number
-  action: drop_column
-- source: reason_for_recall
   action: drop_column
 - source: classification
   action: drop_column
@@ -62,6 +62,8 @@ column_operations:
   action: drop_column
 - source: code_info
   action: drop_column
+- source: more_code_info
+  action: drop_column
 - source: city
   action: drop_column
 - source: state
@@ -69,4 +71,24 @@ column_operations:
 - source: country
   action: drop_column
 - source: event_id
+  action: drop_column
+- source: postal_code
+  action: drop_column
+- source: address_1
+  action: drop_column
+- source: address_2
+  action: drop_column
+- source: initial_firm_notification
+  action: drop_column
+- source: product_quantity
+  action: drop_column
+- source: openfda
+  action: drop_column
+- source: termination_date
+  action: drop_column
+- source: report_date
+  action: drop_column
+- source: center_classification_date
+  action: drop_column
+- source: recall_initiation_date
   action: drop_column

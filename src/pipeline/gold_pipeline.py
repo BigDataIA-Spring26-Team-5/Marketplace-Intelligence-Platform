@@ -42,11 +42,94 @@ SILVER_BUCKET   = os.environ.get("SILVER_BUCKET",   "mip-silver-2024")
 BQ_PROJECT      = os.environ.get("GCP_PROJECT",     "mip-platform-2024")
 BQ_GOLD_DATASET = os.environ.get("BQ_GOLD_DATASET", "mip_gold")
 BQ_GOLD_TABLE   = os.environ.get("BQ_GOLD_TABLE",   "products")
+GOLD_GCS_CHUNK_SIZE = int(os.environ.get("GOLD_GCS_CHUNK_SIZE", "500000"))
 
 
 def _gcs_client():
     from google.cloud import storage
     return storage.Client()
+
+
+def _sanitize_nan(obj):
+    """Replace NaN/Inf floats with None for valid JSON serialization."""
+    import math
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
+
+
+def _enrich_with_safety_signals(gold_df: pd.DataFrame, date: str) -> pd.DataFrame:
+    """
+    LEFT JOIN nutrition Gold with safety Silver on (product_name, brand_name).
+    Adds is_recalled (bool), recall_class, recall_reason columns.
+    Overwrites allergens with recall_reason where an OpenFDA match is found
+    (ground-truth allergen data overrides S1 extraction).
+    Non-fatal — on any failure returns gold_df with is_recalled=False.
+    """
+    try:
+        prefix = f"openfda/{date}/"
+        client = _gcs_client()
+        bucket = client.bucket(SILVER_BUCKET)
+        blobs = [
+            b for b in bucket.list_blobs(prefix=prefix)
+            if b.name.endswith(".parquet") and not b.name.split("/")[-1].startswith("sample")
+        ]
+        if not blobs:
+            logger.warning("No safety Silver Parquet found at gs://%s/%s — skipping safety join", SILVER_BUCKET, prefix)
+            gold_df["is_recalled"]    = False
+            gold_df["recall_class"]   = None
+            gold_df["recall_reason"]  = None
+            gold_df["published_date"] = None
+            return gold_df
+
+        frames = []
+        for blob in sorted(blobs, key=lambda b: b.name):
+            buf = io.BytesIO(blob.download_as_bytes())
+            frames.append(pd.read_parquet(buf, engine="pyarrow"))
+        safety_df = pd.concat(frames, ignore_index=True)
+
+        # Keep only rows with actual recall info; deduplicate on join keys
+        recall_cols = [c for c in ["product_name", "brand_name", "recall_class", "recall_reason", "recall_status"] if c in safety_df.columns]
+        safety_df = safety_df[recall_cols].dropna(subset=["recall_class"])
+        safety_df = safety_df.drop_duplicates(subset=["product_name", "brand_name"], keep="first")
+
+        logger.info("Safety join: %d recall records from openfda/%s", len(safety_df), date)
+
+        merged = gold_df.merge(
+            safety_df.rename(columns={
+                "recall_class":  "_rc_class",
+                "recall_reason": "_rc_reason",
+                "recall_status": "_rc_status",
+            }),
+            on=["product_name", "brand_name"],
+            how="left",
+        )
+
+        merged["is_recalled"]  = merged["_rc_class"].notna()
+        merged["recall_class"] = merged.pop("_rc_class")
+        merged["recall_reason"] = merged.pop("_rc_reason")
+        if "_rc_status" in merged.columns:
+            merged.pop("_rc_status")
+
+        # Ground-truth allergen override for matched rows
+        matched = merged["is_recalled"] & merged["recall_reason"].notna()
+        if matched.any():
+            merged.loc[matched, "allergens"] = merged.loc[matched, "recall_reason"]
+            logger.info("Allergen override: %d rows updated from recall_reason", matched.sum())
+
+        logger.info("Safety join complete: %d recalled products in nutrition Gold", merged["is_recalled"].sum())
+        return merged
+
+    except Exception as exc:
+        logger.warning("Safety enrichment failed (non-fatal) — setting is_recalled=False: %s", exc)
+        gold_df["is_recalled"]   = False
+        gold_df["recall_class"]  = None
+        gold_df["recall_reason"] = None
+        return gold_df
 
 
 _REQUIRED_SILVER_COLUMNS = {"product_name"}
@@ -118,12 +201,75 @@ def _write_gold_bq(df: pd.DataFrame, source_name: str) -> int:
     df = df.copy()
     df["source_name"] = source_name
 
+    # Force-cast expected string columns to object (str) so BQ autodetect
+    # never infers INTEGER/FLOAT for null-only columns in sparse sources.
+    _STRING_COLS = {
+        "product_name", "brand_name", "brand_owner", "ingredients",
+        "category", "serving_size_unit", "published_date", "data_source",
+        "allergens", "primary_category", "dietary_tags", "source_name",
+        "recall_class", "recall_reason", "recall_number", "recall_status",
+        "distribution_pattern",
+    }
+    import numpy as np
+
+    def _safe_str(v):
+        if v is None:
+            return None
+        # Array-like: flatten to str repr (or None if empty) without triggering
+        # pd.isna's ambiguous-truth-value error on list/ndarray/tuple.
+        if isinstance(v, (list, tuple, set, np.ndarray)):
+            try:
+                if len(v) == 0:
+                    return None
+            except TypeError:
+                pass
+            return str(v)
+        try:
+            if bool(pd.isna(v)) is True:
+                return None
+        except (TypeError, ValueError):
+            pass
+        return str(v)
+
+    for col in _STRING_COLS:
+        if col in df.columns:
+            df[col] = [_safe_str(v) for v in df[col]]
+
+    # Normalize published_date to pandas datetime64 (tz-naive) so BQ maps it to
+    # DATETIME (matching existing table schema). Scalar-extract first to unwrap
+    # any list/array cells produced by upstream column-wise merges.
+    if "published_date" in df.columns:
+        def _extract_date_scalar(v):
+            if isinstance(v, (list, tuple, np.ndarray)):
+                return v[0] if len(v) > 0 else None
+            return v
+
+        df["published_date"] = df["published_date"].map(_extract_date_scalar)
+        parsed = pd.to_datetime(df["published_date"], errors="coerce", utc=True)
+        # Drop tz so pyarrow writes DATETIME, not TIMESTAMP.
+        df["published_date"] = parsed.dt.tz_convert(None)
+
     client = bigquery.Client(project=BQ_PROJECT)
     table_ref = f"{BQ_PROJECT}.{BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}"
+
+    # Pin string-typed columns explicitly so BQ autodetect does not infer
+    # INTEGER/FLOAT for all-null columns (sparse sources collide with the
+    # existing STRING schema in mip_gold.products).
+    explicit_schema = [
+        bigquery.SchemaField(col, "STRING")
+        for col in _STRING_COLS
+        if col in df.columns and col != "published_date"
+    ]
+    if "published_date" in df.columns:
+        explicit_schema.append(bigquery.SchemaField("published_date", "DATETIME"))
 
     job_config = bigquery.LoadJobConfig(
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
         autodetect=True,
+        schema=explicit_schema,
+        schema_update_options=[
+            bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION,
+        ],
     )
 
     job = client.load_table_from_dataframe(df, table_ref, job_config=job_config)
@@ -140,14 +286,18 @@ def run_gold_pipeline(
     domain: str = "nutrition",
     cache_client=None,
     skip_enrichment: bool = False,
+    limit: int | None = None,
 ) -> int:
     """
     Read Silver Parquet for source_name/date, run gold block sequence, write to BQ.
     Returns number of rows written to BigQuery.
+
+    Args:
+        limit: if set, randomly sample this many rows from Silver before processing.
     """
     from src.registry.block_registry import BlockRegistry
     from src.pipeline.runner import PipelineRunner
-    from src.schema.analyzer import get_unified_schema
+    from src.schema.analyzer import get_domain_schema
     from src.blocks.dq_score import _SKIP_ALWAYS
 
     if cache_client is None:
@@ -163,7 +313,18 @@ def run_gold_pipeline(
     start_time = time.monotonic()
 
     df = _read_silver_parquet(source_name, date)
+    if limit is not None and len(df) > limit:
+        df = df.sample(n=limit, random_state=42).reset_index(drop=True)
+        logger.info("--limit %d: sampled %d rows from Silver", limit, len(df))
     rows_in = len(df)
+
+    if "published_date" in df.columns:
+        logger.info(
+            "published_date dtype=%s type_counts=%s",
+            df["published_date"].dtype,
+            df["published_date"].apply(type).value_counts().to_dict(),
+        )
+        logger.info("published_date head: %s", df["published_date"].head(5).tolist())
 
     # Fix: restore dq_reference_columns so dq_score_post uses the same column set
     # as dq_score_pre did during the silver run (df.attrs is not preserved in Parquet)
@@ -185,7 +346,7 @@ def run_gold_pipeline(
         else:
             expanded.append(item)
 
-    unified = get_unified_schema()
+    unified = get_domain_schema(domain)
     config = {
         "dq_weights": unified.dq_weights.model_dump(),
         "domain": domain,
@@ -203,6 +364,9 @@ def run_gold_pipeline(
 
     duration_seconds = round(time.monotonic() - start_time, 3)
     logger.info(f"Gold blocks complete: {len(result_df)} rows after dedup/enrichment")
+
+    if domain == "nutrition":
+        result_df = _enrich_with_safety_signals(result_df, date)
 
     bq_error: str | None = None
     rows_written = 0
@@ -320,7 +484,7 @@ def _push_gold_audit(run_log: dict) -> None:
                     """INSERT INTO audit_events (run_id, source, event_type, status, ts, payload)
                        VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
                     (run_log["run_id"], run_log["source_name"], event_type,
-                     run_log["status"], ts, json.dumps(run_log)),
+                     run_log["status"], ts, json.dumps(_sanitize_nan(run_log))),
                 )
         conn.commit()
         conn.close()
@@ -329,12 +493,105 @@ def _push_gold_audit(run_log: dict) -> None:
         logger.warning("Postgres audit write failed (non-fatal): %s", exc)
 
 
+def _read_domain_from_bq(sources: list[str]) -> pd.DataFrame:
+    """
+    Read all Gold rows for the given source_names from BQ.
+    Returns concatenated DataFrame. Raises if no rows found.
+    """
+    from google.cloud import bigquery
+
+    client = bigquery.Client(project=BQ_PROJECT)
+    sources_sql = ", ".join(f"'{s}'" for s in sources)
+    query = f"""
+        SELECT * FROM `{BQ_PROJECT}.{BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}`
+        WHERE source_name IN ({sources_sql})
+    """
+    logger.info("Reading domain rows from BQ: source_name IN (%s)", sources_sql)
+    df = client.query(query).to_dataframe()
+    if df.empty:
+        raise ValueError(
+            f"No rows found in BQ for source_name IN ({sources_sql}). "
+            "Run per-source gold pipelines first."
+        )
+    logger.info("BQ read: %d rows for sources %s", len(df), sources)
+    return df
+
+
+def run_domain_gold_gcs(
+    domain: str,
+    date: str,
+    sources: list[str],
+    cache_client=None,
+) -> int:
+    """
+    Read already-enriched Gold rows for all sources in the domain from BQ,
+    run cross-source dedup, and write canonical records to
+    gs://mip-gold-2024/{domain}/{date}/.
+
+    Per-source local dedup + enrichment must already be done (run_gold_pipeline
+    per source writes to BQ first). This step only does cross-source dedup.
+
+    Returns total rows written to GCS.
+    """
+    from src.registry.block_registry import BlockRegistry
+    from src.pipeline.runner import PipelineRunner
+    from src.schema.analyzer import get_domain_schema
+    from src.blocks.dq_score import _SKIP_ALWAYS
+    from src.pipeline.writers.gcs_gold_writer import GCSGoldWriter
+
+    if cache_client is None:
+        try:
+            from src.cache.client import CacheClient
+            cache_client = CacheClient()
+            if not cache_client._available:
+                logger.warning("Redis unavailable — running without cache for domain GCS gold")
+        except Exception as e:
+            logger.warning("Cache init failed for domain GCS gold: %s", e)
+
+    combined = _read_domain_from_bq(sources)
+    logger.info("Domain GCS gold: %d rows from BQ for domain=%s sources=%s", len(combined), domain, sources)
+
+    combined.attrs["dq_reference_columns"] = [c for c in combined.columns if c not in _SKIP_ALWAYS]
+
+    # Cross-source dedup only — enrichment already done per-source before BQ write
+    _DEDUP_BLOCKS = ["fuzzy_deduplicate", "column_wise_merge", "golden_record_select"]
+
+    unified = get_domain_schema(domain)
+    config = {
+        "dq_weights": unified.dq_weights.model_dump(),
+        "domain": domain,
+        "unified_schema": unified,
+        "cache_client": cache_client,
+    }
+
+    block_reg = BlockRegistry.instance()
+    runner = PipelineRunner(block_reg)
+    result_df, _ = runner.run(df=combined, block_sequence=_DEDUP_BLOCKS, config=config)
+
+    logger.info("Domain GCS gold: %d canonical rows after cross-source dedup (domain=%s)", len(result_df), domain)
+
+    writer = GCSGoldWriter()
+    rows_written = 0
+    if len(result_df) <= GOLD_GCS_CHUNK_SIZE:
+        writer.write(result_df, domain=domain, date=date, chunk_idx=0)
+        rows_written = len(result_df)
+    else:
+        for chunk_idx, start in enumerate(range(0, len(result_df), GOLD_GCS_CHUNK_SIZE)):
+            chunk = result_df.iloc[start: start + GOLD_GCS_CHUNK_SIZE]
+            writer.write(chunk, domain=domain, date=date, chunk_idx=chunk_idx)
+            rows_written += len(chunk)
+
+    logger.info("Domain GCS gold complete: %d rows → gs://mip-gold-2024/%s/%s/", rows_written, domain, date)
+    return rows_written
+
+
 def main():
     parser = argparse.ArgumentParser(description="Silver → Gold pipeline (dedup + enrichment → BQ)")
-    parser.add_argument("--source", required=True, choices=["off", "usda", "openfda"], help="Source name")
+    parser.add_argument("--source", required=True, help="Source name (e.g. off, usda/branded, usda/survey)")
     parser.add_argument("--date",   required=True, help="Silver partition date YYYY/MM/DD")
-    parser.add_argument("--domain", default="nutrition", choices=["nutrition", "safety", "pricing"])
+    parser.add_argument("--domain", default="nutrition", choices=["nutrition", "safety", "pricing", "retail"])
     parser.add_argument("--skip-enrichment", action="store_true", help="Skip enrichment blocks (dedup-only run)")
+    parser.add_argument("--limit", type=int, default=None, help="Random sample N rows from Silver before processing")
     args = parser.parse_args()
 
     rows = run_gold_pipeline(
@@ -342,6 +599,7 @@ def main():
         date=args.date,
         domain=args.domain,
         skip_enrichment=args.skip_enrichment,
+        limit=args.limit,
     )
     logger.info(f"Gold pipeline complete: {rows} rows written to BQ {BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}")
 

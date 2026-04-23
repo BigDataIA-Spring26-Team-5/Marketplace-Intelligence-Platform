@@ -5,9 +5,9 @@ SCHEMA_ANALYSIS_PROMPT = """You are a schema analysis agent for a data enrichmen
 You are given:
 1. An incoming data source's schema — column names, types, null rates, sample values, AND structural metadata (detected_structure, inferred_keys, inferred_value_types, parsed_sample).
 2. Optional dataset-level metadata (__meta__) with numeric_columns, structured_columns, candidate_unify_groups.
-3. A unified output schema that all data sources must conform to.
+3. A domain output schema that all data sources must conform to.
 
-Your task: For each column in the unified schema, determine how to map it from the incoming source using the 8-primitive taxonomy below.
+Your task: For each column in the domain schema (`config/schemas/<domain>_schema.json`), determine how to map it from the incoming source using the 8-primitive taxonomy below.
 
 ## Incoming Source Schema
 {source_schema}
@@ -15,7 +15,7 @@ Your task: For each column in the unified schema, determine how to map it from t
 ## Dataset Metadata
 {source_meta}
 
-## Unified Output Schema
+## Domain Output Schema
 {unified_schema}
 
 ## Semantic Mapping Examples
@@ -247,7 +247,7 @@ ENRICH_ALIAS goes in operations[], not unresolvable[].
 
 
 FIRST_RUN_SCHEMA_PROMPT = """You are a schema analysis agent. This is the FIRST data source for this pipeline.
-There is no unified schema yet — you must derive one.
+There is no domain schema yet for this source — you must derive one.
 
 ## Incoming Source Schema
 {source_schema}
@@ -338,7 +338,7 @@ Do not include any text outside the JSON object."""
 
 SEQUENCE_PLANNING_PROMPT = """You are a pipeline sequence planner for a data enrichment ETL system.
 
-You are given a set of pipeline blocks that MUST ALL run. Your task is to determine the optimal execution order.
+Your job is to select which optional blocks to run and determine the optimal execution order based on the source data characteristics.
 
 ## Domain
 {domain}
@@ -349,31 +349,36 @@ You are given a set of pipeline blocks that MUST ALL run. Your task is to determ
 ## Schema Gaps and Registry Results
 {gap_summary}
 
-## Available Blocks (all must appear exactly once in your output)
-{blocks_metadata}
+## Mandatory Blocks (MUST always appear in output, in correct position)
+{mandatory_blocks}
+
+## Optional Blocks (include ONLY if beneficial for this source)
+{optional_blocks}
+
+## Selection Rules for Optional Blocks
+- strip_whitespace: include if any string columns exist (almost always yes)
+- lowercase_brand: include if brand_name or brand_owner columns are present and non-trivially populated
+- remove_noise_words: include if product_name likely contains legal suffixes, language filler words, or marketing noise (e.g. OpenFoodFacts multilingual data). Skip for clean structured sources like USDA.
+- strip_punctuation: include if product_name or ingredients contain excessive punctuation noise. Skip for clean structured sources.
+- extract_quantity_column: include if product_name likely embeds quantity/weight info (e.g. "Coca Cola 330ml"). Skip if product names are plain descriptors.
+- enrich_stage: include if the domain has enrichment columns (allergens, primary_category, dietary_tags, is_organic) and the source has ingredients or product text to enrich from.
 
 ## Ordering Rules
-- dq_score_pre MUST be first
-- dq_score_post MUST be last
-- Normalization blocks (strip_whitespace, lowercase_brand, remove_noise_words, strip_punctuation) must run before deduplication
-- extract_allergens must run before llm_enrich
-- Deduplication blocks (fuzzy_deduplicate, column_wise_merge, golden_record_select) must run after normalization
-- llm_enrich must run after deduplication
-- __generated__ (dynamically generated schema transformation blocks) should run after dq_score_pre but before normalization blocks
-- Use stage names: "dedup_stage" expands to [fuzzy_deduplicate, column_wise_merge, golden_record_select]
-- Use stage names: "enrich_stage" expands to [extract_allergens, llm_enrich]
+- Mandatory blocks keep their fixed positions (dq_score_pre first, __generated__ second, schema_enforce or dq_score_post last)
+- Normalization blocks (strip_whitespace, lowercase_brand, remove_noise_words, strip_punctuation) run before deduplication
+- extract_allergens runs before llm_enrich
+- Deduplication (dedup_stage) runs after all normalization
+- enrich_stage runs after dedup_stage
+- Stage names: "dedup_stage" = [fuzzy_deduplicate, column_wise_merge, golden_record_select]
+- Stage names: "enrich_stage" = [extract_allergens, llm_enrich]
 
-## Stage Expansion
-- dedup_stage = ["fuzzy_deduplicate", "column_wise_merge", "golden_record_select"]
-- enrich_stage = ["extract_allergens", "llm_enrich"]
-
-Return ONLY a JSON object with this exact structure:
+Return ONLY a JSON object:
 {{
   "block_sequence": ["block_name_1", "block_name_2", ...],
-  "reasoning": "One sentence explaining the key ordering decision made"
+  "reasoning": "One sentence explaining key selection and ordering decisions",
+  "skipped_blocks": {{"block_name": "reason skipped"}}
 }}
 
-Include every block from the input list exactly once. Do not add or remove any blocks.
-You may use stage names (dedup_stage, enrich_stage) or expand them — either is valid."""
+Include all mandatory blocks. Include only the optional blocks that add value for this specific source."""
 
 

@@ -1,0 +1,101 @@
+{
+  "columns": {
+    "product_name": {
+      "type": "string",
+      "required": true
+    },
+    "brand_owner": {
+      "type": "string",
+      "required": true
+    },
+    "brand_name": {
+      "type": "string",
+      "required": true
+    },
+    "ingredients": {
+      "type": "string",
+      "required": true
+    },
+    "category": {
+      "type": "string",
+      "required": false,
+      "enrichment_alias": "primary_category"
+    },
+    "serving_size": {
+      "type": "float",
+      "required": false
+    },
+    "serving_size_unit": {
+      "type": "string",
+      "required": false
+    },
+    "published_date": {
+      "type": "string",
+      "required": true
+    },
+    "data_source": {
+      "type": "string",
+      "required": true
+    },
+    "recall_number": {
+      "type": "string",
+      "required": false
+    },
+    "recall_class": {
+      "type": "string",
+      "required": false
+    },
+    "recall_reason": {
+      "type": "string",
+      "required": false
+    },
+    "recall_status": {
+      "type": "string",
+      "required": false
+    },
+    "distribution_pattern": {
+      "type": "string",
+      "required": false
+    },
+    "allergens": {
+      "type": "string",
+      "required": false,
+      "enrichment": true
+    },
+    "primary_category": {
+      "type": "string",
+      "required": false,
+      "enrichment": true
+    },
+    "dietary_tags": {
+      "type": "string",
+      "required": false,
+      "enrichment": true
+    },
+    "is_organic": {
+      "type": "boolean",
+      "required": false,
+      "enrichment": true
+    },
+    "dq_score_pre": {
+      "type": "float",
+      "required": true,
+      "computed": true
+    },
+    "dq_score_post": {
+      "type": "float",
+      "required": true,
+      "computed": true
+    },
+    "dq_delta": {
+      "type": "float",
+      "required": true,
+      "computed": true
+    }
+  },
+  "dq_weights": {
+    "completeness": 0.4,
+    "freshness": 0.35,
+    "ingredient_richness": 0.25
+  }
+}

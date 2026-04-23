@@ -6,6 +6,8 @@ Usage:
     python -m src.pipeline.cli --source data/fda_recalls_sample.csv --resume
     python -m src.pipeline.cli --source data/usda_sample_raw.csv --force-fresh
     python -m src.pipeline.cli --source gs://mip-bronze-2024/usda/2026/04/20/*.jsonl --domain nutrition
+    python -m src.pipeline.cli --source gs://mip-bronze-2024/usda/bulk/2026/04/21/branded/*.jsonl --domain nutrition
+    python -m src.pipeline.cli --source gs://mip-bronze-2024/usda/bulk/2026/04/21/survey/*.jsonl --domain nutrition --source-name usda/survey
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -35,6 +38,30 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _resolve_source_name_from_blob(blob_name: str) -> str:
+    """Derive logical source name from a GCS blob path.
+
+    Finds the YYYY date partition and combines the root source prefix with any
+    sub-type directory that follows the date, skipping intermediate path segments
+    (e.g. 'bulk') that are DAG/infra artifacts.
+
+    Examples:
+        usda/2026/04/20/part_0000.jsonl            → usda
+        usda/bulk/2026/04/21/branded/part_0000.jsonl → usda/branded
+        usda/bulk/2026/04/21/survey/part_0000.jsonl  → usda/survey
+        off/2026/04/21/part_0000.jsonl             → off
+        esci/2024/01/01/part_0000.jsonl            → esci
+    """
+    parts = blob_name.rstrip("/").split("/")
+    year_idx = next((i for i, p in enumerate(parts) if re.match(r"^\d{4}$", p)), None)
+    if year_idx is None:
+        return parts[0]
+    root = parts[0]
+    # segments after YYYY/MM/DD, excluding the filename (has a '.')
+    after_date = [p for p in parts[year_idx + 3:] if "." not in p]
+    return f"{root}/{'/'.join(after_date)}" if after_date else root
 
 
 def _gcs_checkpoint_source_file(uri: str) -> Path:
@@ -90,6 +117,7 @@ def run_pipeline(
     chunk_size: int = 10000,
     with_critic: bool = False,
     pipeline_mode: str = "full",
+    source_name_override: str | None = None,
 ) -> dict:
     """Execute the pipeline with checkpoint support."""
     gcs_source = is_gcs_uri(source_path)
@@ -145,17 +173,15 @@ def run_pipeline(
 
     graph = build_graph()
 
-    # Resolve glob → first blob's parent folder for stable dataset_name and Silver path
-    resolved_source_name = None
-    if is_gcs_uri(source_path) and "*" in source_path:
+    # Resolve source name: explicit override wins, then auto-derive from first blob path
+    resolved_source_name = source_name_override or None
+    if resolved_source_name is None and is_gcs_uri(source_path) and "*" in source_path:
         from src.pipeline.loaders.gcs_loader import GCSSourceLoader
         try:
             _loader = GCSSourceLoader(source_path)
             _first_blob = _loader._list_blobs()[0]
-            _blob_parts = _first_blob.name.rstrip("/").split("/")
-            resolved_source_name = (
-                _blob_parts[0] if len(_blob_parts) >= 2 else Path(_blob_parts[-1]).stem
-            )
+            resolved_source_name = _resolve_source_name_from_blob(_first_blob.name)
+            logger.info(f"Auto-resolved source name: {resolved_source_name}")
         except Exception as _e:
             logger.warning(f"Could not resolve glob to first blob: {_e}")
 
@@ -228,6 +254,14 @@ def main():
         help="Enable Agent 2 (Critic) for schema correction review. Off by default.",
     )
     parser.add_argument(
+        "--source-name",
+        default=None,
+        help=(
+            "Override the logical source name written to Silver (e.g. 'usda/branded'). "
+            "Auto-derived from the GCS blob path when omitted."
+        ),
+    )
+    parser.add_argument(
         "--mode",
         default="full",
         choices=["full", "silver", "gold"],
@@ -249,6 +283,7 @@ def main():
         chunk_size=args.chunk_size,
         with_critic=args.with_critic,
         pipeline_mode=args.mode,
+        source_name_override=args.source_name,
     )
 
     rows = len(result.get("working_df", []))

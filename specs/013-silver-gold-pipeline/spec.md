@@ -70,7 +70,7 @@ On Gold pipeline startup, read the schema of every Silver Parquet file. If any f
 │  │          │   │          │   │                  │ │
 │  │ Read all │   │ Blocking │   │ Tier 1: Determ.  │ │
 │  │ Silver   │   │ Fuzzy    │   │ Tier 2: KNN      │ │
-│  │ Validate │   │ Cluster  │   │ Tier 3: RAG-LLM  │ │
+│  │ Validate │   │ Cluster  │   │ Tier 3: LLM  │ │
 │  │ Concat   │   │ Merge    │   │                  │ │
 │  │          │   │ Select   │   │ DQ Score Final   │ │
 │  └──────────┘   └──────────┘   └──────────────────┘ │
@@ -208,7 +208,7 @@ Batch operation: embed all golden records in one pass, build FAISS index once, q
 
 New file: `src/pipeline/gold/enrichment/tier2_knn.py`
 
-### Tier 3 — RAG-LLM (S3)
+### Tier 3 — LLM (S3)
 
 For remaining nulls after Tier 2, use LLM with context from the product's own fields plus retrieved similar products.
 

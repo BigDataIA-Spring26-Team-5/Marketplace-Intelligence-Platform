@@ -96,7 +96,7 @@ Config: 3-char prefix blocking, weighted score (name 0.5 / brand 0.2 / combined 
 - Confidence threshold: 0.60 cosine similarity
 - Estimated **25–35%** of S1-remaining rows resolved by S2
 
-### Strategy 3 — RAG-LLM (DeepSeek)
+### Strategy 3 — LLM (DeepSeek)
 - Batch size: 20 rows/call
 - Est. calls per chunk: 15–30
 - Total across 9 chunks: **~135–270 batch LLM calls**
@@ -258,10 +258,10 @@ aq@mip-vm:~/work/Marketplace-Intelligence-Platform$ poetry run python -m src.pip
 08:22:45 [src.enrichment.corpus] INFO: Saved corpus: 6719 vectors
 08:22:45 [src.enrichment.embedding] INFO: S2 KNN: resolved 8 rows
 08:22:45 [src.blocks.llm_enrich] INFO:   S2 (KNN corpus): resolved 8 rows
-08:22:45 [src.enrichment.llm_tier] INFO: S3 RAG-LLM: 748 rows need primary_category (batch_size=20)
+08:22:45 [src.enrichment.llm_tier] INFO: S3 LLM: 748 rows need primary_category (batch_size=20)
 08:22:45 [src.enrichment.corpus] INFO: Loaded corpus: 6719 vectors
 08:32:01 [src.enrichment.corpus] INFO: Saved corpus: 7453 vectors
-08:32:01 [src.blocks.llm_enrich] INFO:   S3 (RAG-LLM): resolved 734 rows
+08:32:01 [src.blocks.llm_enrich] INFO:   S3 (LLM): resolved 734 rows
 08:32:01 [src.blocks.llm_enrich] INFO:   Unresolved: 14 rows
 /home/aq/work/Marketplace-Intelligence-Platform/src/blocks/llm_enrich.py:92: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
   after.loc[s3_llm_rows].fillna("__null__")

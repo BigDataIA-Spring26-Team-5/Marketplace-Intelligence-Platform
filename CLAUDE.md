@@ -11,6 +11,11 @@ poetry install
 # API keys — see .env.example (DEEPSEEK_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY)
 cp .env.example .env
 
+# Full platform stack (Kafka, Airflow, Postgres, Prometheus, Pushgateway, Grafana,
+# ChromaDB, Redis, MLflow) — see docker-compose.yml at repo root
+docker-compose -p mip up -d
+
+# CLI demo — runs 3 pipeline passes (USDA → FDA → FDA replay)
 # CLI demo — runs 3 passes (USDA → FDA → FDA replay) showcasing YAML cache hits
 poetry run python demo.py
 poetry run python demo.py --no-cache        # bypass Redis
@@ -29,6 +34,18 @@ poetry run python -m src.pipeline.gold_pipeline --source off --date 2026/04/21
 # Streamlit wizard (HITL gates + Observability chatbot)
 poetry run streamlit run app.py
 
+# MCP observability server (FastAPI, Redis-cached, port 8001)
+uvicorn src.uc2_observability.mcp_server:app --host 0.0.0.0 --port 8001
+
+# (One-time) Build the KNN enrichment corpus from USDA FoodData Central
+poetry run python scripts/build_corpus.py
+poetry run python scripts/build_corpus.py --limit 10000
+
+# Tests
+poetry run pytest
+poetry run pytest tests/uc2_observability/test_log_writer.py::test_name
+poetry run pytest tests/unit/test_cache_client.py
+poetry run pytest tests/integration/test_cache_pipeline.py
 # (One-time) build FAISS KNN corpus from USDA FoodData Central
 poetry run python scripts/build_corpus.py
 poetry run python scripts/build_corpus.py --limit 10000
@@ -119,8 +136,9 @@ S2's `_knn_neighbors` column is a pipeline-internal JSON string consumed only by
 
 Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THRESHOLD_CATEGORY=0.60`, `K_NEIGHBORS=5`.
 
-### Unified schema is auto-generated once, then reused
+### Domain schemas are the canonical target per-run
 
+`config/schemas/<domain>_schema.json` is the canonical target schema for each domain (`nutrition`, `safety`, `pricing`). The domain is always operator-supplied via `--domain <domain>` (CLI) or `PipelineState["domain"]` (Streamlit) — it is never auto-inferred. On the **first run** for a new source, Agent 1 uses `FIRST_RUN_SCHEMA_PROMPT` to derive unified column names, then [src/schema/analyzer.py](src/schema/analyzer.py) `derive_unified_schema_from_source()` writes to the correct domain schema file — including auto-added enrichment columns (`allergens`, `primary_category`, `dietary_tags`, `is_organic`) and computed DQ columns (`dq_score_pre`, `dq_score_post`, `dq_delta`). On **subsequent runs**, Agent 1 uses `SCHEMA_ANALYSIS_PROMPT` which excludes enrichment and computed columns from the mappable set. After block execution, `_silver_normalize()` enforces exact domain schema column set/order and writes `output/silver/<domain>/<source_name>.parquet`. Gold output is rebuilt each run by concatenating all Silver parquets for the domain into `output/gold/<domain>.parquet`. `config/unified_schema.json` is retired — do not load it.
 [config/unified_schema.json](config/unified_schema.json) is the canonical target schema. On the **first run** (file absent), Agent 1 uses `FIRST_RUN_SCHEMA_PROMPT` and [src/schema/analyzer.py](src/schema/analyzer.py) `derive_unified_schema_from_source()` writes the JSON — including auto-added enrichment columns (`allergens`, `primary_category`, `dietary_tags`, `is_organic`) and computed DQ columns (`dq_score_pre`, `dq_score_post`, `dq_delta`). On **subsequent runs**, Agent 1 uses `SCHEMA_ANALYSIS_PROMPT` which explicitly **excludes enrichment and computed columns from the mappable set** — those aren't sourceable. If you add a computed or enrichment column, extend both `derive_unified_schema_from_source()` **and** the exclusion filter in `analyze_schema_node`, otherwise the LLM will be asked to map columns that don't come from the source.
 
 ### LLM routing is centralized and multi-provider
@@ -137,6 +155,59 @@ Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THR
 
 Swap models here or via env, not at call sites. `call_llm_json()` parses responses and has a markdown-fence fallback for models that wrap JSON in ` ```json ... ``` `.
 
+`src/models/llm.py` is also the **UC2 import gateway** — `_UC2_AVAILABLE`, `_emit_event`, and `_MetricsCollector` are exported from there. All other files import UC2 symbols from `src.models.llm`, not directly from `src.uc2_observability`. This guards against import failures when UC2 deps are absent.
+
+### UC2 observability layer is fully implemented
+
+`src/uc2_observability/` is all working code. The two placeholder files (`anomaly_detection.py`, `dashboard.py`) exist only as re-export shims or stubs — the real implementation lives in the files listed below:
+
+- `log_writer.py` — `RunLogWriter`: writes atomic JSON run logs to `output/run_logs/` after every pipeline run. Called from `save_output_node`.
+- `log_store.py` — `RunLogStore`: read-only query interface (`load_all`, `filter`, `get_by_run_id`, `summary_stats`) over the persisted JSON logs.
+- `rag_chatbot.py` — `ObservabilityChatbot`: structured retrieval + LLM synthesis answering natural-language questions about run history. Returns `ChatResponse(answer, cited_run_ids, context_run_count)`.
+- `metrics_exporter.py` — `MetricsExporter`: pushes 12 labelled Prometheus gauges to Pushgateway (`:9091`). Uses isolated `CollectorRegistry`; never raises on network failure.
+- `metrics_collector.py` — `MetricsCollector`: in-process collector called by `_emit_event` at each pipeline event.
+- `anomaly_detector.py` — `AnomalyDetector`: Isolation Forest on Prometheus metrics for the last N runs per source; pushes `etl_anomaly_flag=1` to Pushgateway and writes to Postgres `anomaly_reports` table. Called after each `run_completed` event and on an hourly schedule.
+- `chunker.py` — reads new `audit_events` rows from Postgres since last cursor, embeds with `all-MiniLM-L6-v2`, upserts into ChromaDB collection `audit_corpus`. Runs as a 5-minute sleep loop.
+- `kafka_to_pg.py` — Kafka → Postgres consumer. Demuxes `pipeline.events` topic by `event_type` into four tables: `audit_events`, `block_trace`, `quarantine_rows`, `dedup_clusters`. Reconnects with exponential back-off.
+- `mcp_server.py` — FastAPI app on `:8001` with 7 MCP-style tool endpoints backed by Prometheus, Postgres, and Redis (15s TTL for Prometheus queries, 30s for Postgres).
+- `streamlit_app.py` — standalone Streamlit UI for observability (separate from `app.py`'s sidebar mode).
+- `dashboard.py` — still placeholder (raises `NotImplementedError`).
+
+`app.py` has a sidebar Mode radio ("Pipeline" / "Observability"). Observability mode renders `_render_observability_page()` with multi-turn chat UI, refresh button, and cited run ID expanders.
+
+Postgres schema (UC2, `localhost:5432`, db `uc2`, user `mip`/`mip_pass`): tables `audit_events`, `block_trace`, `quarantine_rows`, `dedup_clusters`, `anomaly_reports`.
+
+### Airflow DAG pipeline
+
+`airflow/dags/` contains the production orchestration. All DAGs mount `src/` and `config/` from the repo root into the Airflow container (see `docker-compose.yml` volumes). Daily schedule chain (all UTC):
+
+| DAG | Schedule | What it does |
+|---|---|---|
+| `usda_incremental_dag` / `off_incremental_dag` / `openfda_incremental_dag` | 02:00–05:00 | Ingest source → GCS Bronze JSONL (`gs://mip-bronze-2024/`) |
+| `bronze_to_bq_dag` | 03:00–06:00 | Load Bronze JSONL → BigQuery staging tables |
+| `bronze_to_silver_dag` | 07:00 | Watermark-gated: reads new Bronze partitions → UC1 ETL → GCS Silver Parquet (`gs://mip-silver-2024/`). Watermarks stored at `gs://mip-bronze-2024/_watermarks/{source}_silver_watermark.json`. |
+| `silver_to_gold_dag` | 09:00 | ExternalTaskSensor waits for bronze_to_silver. Silver Parquet → dedup + enrichment → BigQuery `mip_gold.products` (append mode). |
+| `uc2_anomaly_dag` | Hourly | Isolation Forest on UC1 Prometheus metrics; needs ≥5 completed runs per source. |
+| `uc2_chunker_dag` | Every 5 min | Postgres audit_events → ChromaDB embeddings. |
+| `esci_dag` | Manual | ESCI product dataset ingestion. |
+| `usda_dag` | Manual | Full USDA backfill. |
+
+Airflow UI: `http://localhost:8080` (admin / admin).
+
+### Kafka and GCS sink
+
+The pipeline emits events to Kafka topic `pipeline.events`. `src/consumers/kafka_gcs_sink.py` replaces the Kafka Connect S3 Sink for Bronze ingestion — runs as `python -m src.consumers.kafka_gcs_sink --topic <topic> --prefix <prefix>`, writes JSONL part files to GCS, flushing every `FLUSH_SIZE` records. `src/producers/` contains `openfda_producer.py` and `off_producer.py` for source-specific Kafka producers.
+
+### Redis embedding cache
+
+`src/cache/client.py` wraps Redis (`localhost:6379`) with numpy serialization for embedding vectors. `NULL_RATE_COLUMNS` constant in `src/pipeline/runner.py` controls which columns get null-rate stats in `block_end` Kafka events. SQLite at `output/llm_cache.db` is the fallback when Redis is unavailable.
+
+### GCS / BigQuery data flow
+
+- Bronze: `gs://mip-bronze-2024/` (JSONL, partitioned by source + date)
+- Silver: `gs://mip-silver-2024/` (Parquet, partitioned by domain + source)
+- Gold CLI: `python -m src.pipeline.gold` (local Silver → local Gold Parquet)
+- Gold BQ: `mip_gold.products` (BigQuery, schema auto-detected, append mode via Airflow)
 ### Checkpoint/resume is SQLite-backed
 
 [src/pipeline/checkpoint/manager.py](src/pipeline/checkpoint/manager.py) stores run state in `checkpoints.db` (SHA256 of source file, schema version, completed chunks, plan YAML, corpus snapshots). The CLI `--resume` validates the SHA256 before rehydrating; `--force-fresh` clears all checkpoint rows. For **GCS sources** the source file doesn't exist on disk, so `src/pipeline/cli.py` `_create_gcs_checkpoint()` inserts directly into the SQLite with the URI's SHA256 instead of the file's.
@@ -167,6 +238,11 @@ UC2 event emission from the graph (`run_started`, `run_completed`, `block_start`
 
 ## Things to double-check before editing
 
+- **Registry key determinism** — `FunctionRegistry.save()` preserves `used_count` on updates by design; if you rewrite the save logic, keep that preservation or the "pipeline remembered" telemetry gets reset every run.
+- **Block `audit_entry()` signature** — every block extends `src/blocks/base.py:Block` and must return `{block, rows_in, rows_out, ...}` from `audit_entry()`. The UI's waterfall and `demo.py`'s trace both read those fields by name.
+- **`run_step` vs `invoke`** — the Streamlit UI calls `run_step(step_name, state)` to execute one node; `demo.py` uses `graph.invoke()` to run the whole graph. State shape must remain compatible with both paths.
+- **UC2 imports always go through `src.models.llm`** — never import `_emit_event` or `_MetricsCollector` directly from `src.uc2_observability`; the import guard in `llm.py` is what keeps things safe when UC2 deps are absent.
+- **Don't touch `final_project/`** when working on the ETL pipeline — it's a fully separate project with its own dependencies and conventions, and its own CLAUDE.md is the authoritative guide for work in that tree.
 - **Block `audit_entry()` signature** — every block extends [src/blocks/base.py](src/blocks/base.py):`Block` and must return `{block, rows_in, rows_out, ...}` from `audit_entry()`. The UI waterfall and `demo.py`'s trace both read those fields by name.
 - **`run_step` vs `invoke`** — Streamlit calls `run_step(step_name, state)`; `demo.py`/CLI use `graph.invoke()`. State shape must remain compatible with both paths.
 - **YAML cache writer coherence** — `plan_sequence_node` is where the full cacheable blob is written. If you add fields that Agent 1/2/3 produce, extend the `cacheable` dict there, or replayed runs will silently drop them.

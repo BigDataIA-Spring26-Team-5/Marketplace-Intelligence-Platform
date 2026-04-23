@@ -1,0 +1,59 @@
+column_operations:
+- target: brand_owner
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: brand_name
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: ingredients
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: serving_size
+  type: float
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: serving_size_unit
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: category
+  type: string
+  action: extract_json_field
+  source: category
+  key: ''
+- target: data_source
+  type: string
+  action: value_map
+  source: data_source
+  mapping:
+    Foundation: USDA
+- source: foodClass
+  action: drop_column
+- source: foodNutrients
+  action: drop_column
+- source: foodAttributes
+  action: drop_column
+- source: nutrientConversionFactors
+  action: drop_column
+- source: isHistoricalReference
+  action: drop_column
+- source: ndbNumber
+  action: drop_column
+- source: fdcId
+  action: drop_column
+- source: foodPortions
+  action: drop_column
+- source: inputFoods
+  action: drop_column
+- source: _dataType
+  action: drop_column
+- source: scientificName
+  action: drop_column

@@ -35,6 +35,26 @@
     "status": "absent",
     "required": false
   },
+  "recall_number": {
+    "status": "mapped",
+    "required": false
+  },
+  "recall_class": {
+    "status": "mapped",
+    "required": false
+  },
+  "recall_reason": {
+    "status": "mapped",
+    "required": false
+  },
+  "recall_status": {
+    "status": "mapped",
+    "required": false
+  },
+  "distribution_pattern": {
+    "status": "mapped",
+    "required": false
+  },
   "allergens": {
     "status": "enriched",
     "required": false

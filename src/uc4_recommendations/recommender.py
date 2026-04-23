@@ -21,6 +21,11 @@ import pandas as pd
 from src.uc4_recommendations.association_rules import AssociationRuleMiner
 from src.uc4_recommendations.graph_store import ProductGraph
 
+GCP_PROJECT  = "mip-platform-2024"
+BQ_DATASET   = "instacart"
+TX_VIEW      = f"{GCP_PROJECT}.{BQ_DATASET}.transactions_with_names"
+PRODUCTS_TBL = f"{GCP_PROJECT}.{BQ_DATASET}.products"
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,13 +48,19 @@ class ProductRecommender:
 
     # ── build ──────────────────────────────────────────────────────────────────
 
-    def build(self, enriched_df: pd.DataFrame, transactions_df: pd.DataFrame) -> dict:
+    def build(
+        self,
+        enriched_df: pd.DataFrame,
+        transactions_df: pd.DataFrame,
+        safety_filter: bool = True,
+    ) -> dict:
         """
         Full build from UC1 output.
 
         enriched_df:     UC1 unified catalog (product_id or product_name, brand_name,
                          primary_category, dietary_tags, allergens, dq_score_post)
         transactions_df: [transaction_id, product_id] — IDs must match enriched_df
+        safety_filter:   if True, remove Class I recalled products before building indexes.
 
         Returns build stats dict.
         """
@@ -58,6 +69,23 @@ class ProductRecommender:
         # Add product_id if not present — use index
         if "product_id" not in self._products.columns:
             self._products["product_id"] = self._products.index.astype(str)
+
+        if safety_filter and "is_recalled" in self._products.columns:
+            class1_mask = (
+                (self._products["is_recalled"] == True)  # noqa: E712
+                & self._products["recall_class"].fillna("").str.upper().str.startswith("CLASS I")
+            )
+            n_removed = class1_mask.sum()
+            if n_removed > 0:
+                removed_ids = set(self._products.loc[class1_mask, "product_id"])
+                self._products = self._products[~class1_mask].reset_index(drop=True)
+                transactions_df = transactions_df[
+                    ~transactions_df["product_id"].isin(removed_ids)
+                ].reset_index(drop=True)
+                logger.warning(
+                    "Safety filter removed %d Class I recalled product(s) from UC4 catalog",
+                    n_removed,
+                )
 
         # Mine rules
         self._miner = AssociationRuleMiner(transactions_df)
@@ -76,6 +104,50 @@ class ProductRecommender:
         }
         logger.info("UC4 recommender built: %s", stats)
         return stats
+
+    # ── BigQuery loader ────────────────────────────────────────────────────────
+
+    @classmethod
+    def load_from_bigquery(
+        cls,
+        sample_orders: int = 100_000,
+        project: str = GCP_PROJECT,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Load Instacart data from BigQuery and return (transactions_df, products_df).
+
+        transactions_df: [transaction_id, product_id, product_name]
+        products_df:     [product_id, product_name, aisle_id, department_id]
+
+        sample_orders: number of orders to sample (default 100k — enough for FP-Growth
+                       without running out of memory on 32M row full table).
+        """
+        try:
+            from google.cloud import bigquery
+        except ImportError:
+            raise ImportError("google-cloud-bigquery required: pip install google-cloud-bigquery")
+
+        client = bigquery.Client(project=project)
+
+        # Sample a fixed set of order IDs for reproducibility
+        tx_query = f"""
+            SELECT t.transaction_id, t.product_id, t.product_name
+            FROM `{TX_VIEW}` t
+            WHERE t.transaction_id IN (
+                SELECT DISTINCT order_id
+                FROM `{GCP_PROJECT}.{BQ_DATASET}.order_products_prior`
+                LIMIT {sample_orders}
+            )
+        """
+        logger.info("Loading %d sampled orders from BigQuery...", sample_orders)
+        transactions_df = client.query(tx_query).to_dataframe()
+        logger.info("Loaded %d transaction rows", len(transactions_df))
+
+        products_query = f"SELECT product_id, product_name, aisle_id, department_id FROM `{PRODUCTS_TBL}`"
+        products_df = client.query(products_query).to_dataframe()
+        logger.info("Loaded %d products", len(products_df))
+
+        return transactions_df, products_df
 
     # ── recommendations ────────────────────────────────────────────────────────
 

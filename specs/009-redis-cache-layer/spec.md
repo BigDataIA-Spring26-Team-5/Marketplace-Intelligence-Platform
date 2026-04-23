@@ -25,9 +25,9 @@ When the Orchestrator + Critic produce a YAML mapping for a source schema (e.g.,
 
 ### User Story 2 — LLM Response Cache (Priority: P1)
 
-Individual product rows that pass through S3 RAG-LLM enrichment have their enrichment results cached in Redis, keyed by a hash of the product's identifying text (product name + description). Subsequent partitions or re-runs that encounter the same product retrieve cached enrichment results instead of making LLM calls.
+Individual product rows that pass through S3 LLM enrichment have their enrichment results cached in Redis, keyed by a hash of the product's identifying text (product name + description). Subsequent partitions or re-runs that encounter the same product retrieve cached enrichment results instead of making LLM calls.
 
-**Why this priority**: S3 RAG-LLM enrichment is the throughput bottleneck — 922 rows at batch_size=20 means ~46 sequential LLM round-trips per partition. Across 13 partitions with significant product overlap, caching resolves the majority of S3 rows after the first 2–3 partitions. This directly reduces both wall-clock time and LLM API cost.
+**Why this priority**: S3 LLM enrichment is the throughput bottleneck — 922 rows at batch_size=20 means ~46 sequential LLM round-trips per partition. Across 13 partitions with significant product overlap, caching resolves the majority of S3 rows after the first 2–3 partitions. This directly reduces both wall-clock time and LLM API cost.
 
 **Independent Test**: Run the pipeline on `part_0000.jsonl` and note the S3 row count. Run on `part_0001.jsonl` and confirm logs show `S3 cache HIT: {n} rows resolved from Redis, {m} rows sent to LLM`. Verify the cached enrichment values (e.g., `primary_category`, `dietary_tags`) match the original LLM output.
 
@@ -116,7 +116,7 @@ Fuzzy deduplication signatures (TF-IDF vectors or minhash signatures) and cluste
 ### Measurable Outcomes
 
 - **SC-001**: Partitions 2–13 of USDA ingest skip Orchestrator + Critic entirely (0 LLM calls for schema analysis), saving ≥2 minutes per partition.
-- **SC-002**: S3 RAG-LLM enrichment cache hit rate exceeds 50% by partition 3 and 75% by partition 6, reported in per-run cache statistics logs.
+- **SC-002**: S3 LLM enrichment cache hit rate exceeds 50% by partition 3 and 75% by partition 6, reported in per-run cache statistics logs.
 - **SC-003**: Total wall-clock time for a full 13-partition USDA ingest is reduced by ≥60% compared to the uncached baseline.
 - **SC-004**: Pipeline produces identical output (same row counts, same enrichment values, same dedup clusters) with and without cache — verified by running `--no-cache` and diffing output DataFrames.
 - **SC-005**: Redis failure (simulated by stopping the Redis service mid-run) does not crash the pipeline — run completes with full computation and warning logs.

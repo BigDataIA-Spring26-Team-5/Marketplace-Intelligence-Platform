@@ -39,6 +39,7 @@ def _build_text(row: dict) -> str:
         row.get("ingredients") or "",
         row.get("dietary_tags") or "",
         row.get("allergens") or "",
+        row.get("recall_reason") or "",
     ]
     return " ".join(p for p in parts if p).lower()
 
@@ -129,6 +130,8 @@ class ProductIndexer:
                 "is_organic":       str(row_dict.get("is_organic") or ""),
                 "dq_score_post":    float(row_dict.get("dq_score_post") or 0.0),
                 "data_source":      str(row_dict.get("data_source") or ""),
+                "is_recalled":      str(row_dict.get("is_recalled") or "False"),
+                "recall_class":     str(row_dict.get("recall_class") or ""),
             })
 
             if len(ids) >= batch_size:

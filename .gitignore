@@ -121,3 +121,5 @@ CLAUDE.md
 
 *.tmp
 *.bak
+airflow/airflow.db
+.claude/settings.local.json

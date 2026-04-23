@@ -8,11 +8,6 @@ column_operations:
   action: set_null
   status: missing
   reason: No source data available
-- target: ingredients
-  type: string
-  action: set_null
-  status: missing
-  reason: No source data available
 - target: serving_size
   type: float
   action: set_null
@@ -23,20 +18,22 @@ column_operations:
   action: set_null
   status: missing
   reason: No source data available
+- target: ingredients
+  type: string
+  action: set_null
+  status: missing
+  reason: "No ingredient statement exists in source \u2014 product_description contains\
+    \ product names and packaging info, not ingredient lists"
 - target: published_date
   type: string
   action: parse_date
   source: report_date
-  format: '%Y%m%d'
-- source: status
-  action: drop_column
+  format: YYYYMMDD
 - source: city
   action: drop_column
 - source: state
   action: drop_column
 - source: country
-  action: drop_column
-- source: classification
   action: drop_column
 - source: openfda
   action: drop_column
@@ -54,13 +51,7 @@ column_operations:
   action: drop_column
 - source: initial_firm_notification
   action: drop_column
-- source: distribution_pattern
-  action: drop_column
-- source: recall_number
-  action: drop_column
 - source: product_quantity
-  action: drop_column
-- source: reason_for_recall
   action: drop_column
 - source: recall_initiation_date
   action: drop_column

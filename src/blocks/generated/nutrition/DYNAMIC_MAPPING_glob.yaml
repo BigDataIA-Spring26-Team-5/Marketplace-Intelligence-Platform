@@ -1,5 +1,25 @@
 column_operations:
+- target: brand_owner
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
 - target: brand_name
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: ingredients
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: serving_size
+  type: float
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: serving_size_unit
   type: string
   action: set_null
   status: missing
@@ -8,44 +28,3 @@ column_operations:
   type: string
   action: set_default
   default_value: USDA
-- target: serving_size_unit
-  type: string
-  action: value_map
-  source: serving_size_unit
-  mapping:
-    g: g
-    ml: ml
-- source: foodClass
-  action: drop_column
-- source: foodNutrients
-  action: drop_column
-- source: foodAttributes
-  action: drop_column
-- source: modifiedDate
-  action: drop_column
-- source: availableDate
-  action: drop_column
-- source: marketCountry
-  action: drop_column
-- source: gtinUpc
-  action: drop_column
-- source: dataSource
-  action: drop_column
-- source: householdServingFullText
-  action: drop_column
-- source: labelNutrients
-  action: drop_column
-- source: tradeChannels
-  action: drop_column
-- source: microbes
-  action: drop_column
-- source: brandedFoodCategory
-  action: drop_column
-- source: fdcId
-  action: drop_column
-- source: dataType
-  action: drop_column
-- source: foodUpdateLog
-  action: drop_column
-- source: _dataType
-  action: drop_column

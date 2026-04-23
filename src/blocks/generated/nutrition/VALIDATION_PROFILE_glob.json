@@ -4,27 +4,27 @@
     "required": true
   },
   "brand_owner": {
-    "status": "mapped",
-    "required": true
+    "status": "absent",
+    "required": false
   },
   "brand_name": {
     "status": "absent",
     "required": false
   },
   "ingredients": {
-    "status": "mapped",
-    "required": true
+    "status": "absent",
+    "required": false
   },
   "category": {
     "status": "enriched",
     "required": false
   },
   "serving_size": {
-    "status": "mapped",
+    "status": "absent",
     "required": false
   },
   "serving_size_unit": {
-    "status": "mapped",
+    "status": "absent",
     "required": false
   },
   "published_date": {
@@ -40,7 +40,7 @@
     "required": false
   },
   "primary_category": {
-    "status": "enriched",
+    "status": "derived",
     "required": false
   },
   "dietary_tags": {
