@@ -294,7 +294,11 @@ def run_pipeline_node(state: PipelineState) -> dict:
         raise ValueError("Missing 'source_path' in state — cannot stream data for pipeline execution.")
     source_name = state.get("resolved_source_name") or Path(source_path).stem
     if "*" in source_name:
-        source_name = "glob"
+        if source_path.startswith("gs://"):
+            _parts = source_path.split("/")
+            source_name = _parts[3] if len(_parts) > 3 else "unknown"
+        else:
+            source_name = Path(source_path.replace("*", "")).parent.name or "unknown"
     column_mapping = state.get("column_mapping", {})
 
     # UC2: generate run_id, thread into config, reset LLM counter

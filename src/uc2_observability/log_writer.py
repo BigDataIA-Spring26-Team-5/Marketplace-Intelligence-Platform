@@ -34,9 +34,13 @@ class RunLogWriter:
             state.get("resolved_source_name")
             or (Path(source_path).stem if source_path != "unknown" else "unknown")
         )
-        # GCS glob paths produce stem="*"; fall back to parent dir name
+        # GCS glob paths produce stem="*"; extract source folder (parts[3])
         if source_name == "*":
-            source_name = Path(source_path.replace("*", "")).parent.name or "unknown"
+            if source_path.startswith("gs://"):
+                _parts = source_path.split("/")
+                source_name = _parts[3] if len(_parts) > 3 else "unknown"
+            else:
+                source_name = Path(source_path.replace("*", "")).parent.name or "unknown"
 
         run_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
