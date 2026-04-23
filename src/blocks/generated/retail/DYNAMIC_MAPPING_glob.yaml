@@ -1,0 +1,10 @@
+column_operations:
+- target: data_source
+  type: string
+  action: set_default
+  default_value: Amazon_ESCI
+- target: published_date
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available

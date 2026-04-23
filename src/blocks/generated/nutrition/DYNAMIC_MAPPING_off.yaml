@@ -1,0 +1,56 @@
+column_operations:
+- target: brand_owner
+  type: string
+  action: set_null
+  status: missing
+  reason: No source data available
+- target: serving_size_unit
+  type: string
+  action: set_null
+  status: missing
+  reason: Unit extraction from composite serving_size column may fail for some values;
+    fallback to null
+- target: serving_size_unit
+  type: string
+  action: regex_extract
+  source: serving_size
+  pattern: (g|ml|l|kg|mg|oz|lb)\b
+  keep_source: true
+- target: serving_size
+  type: float
+  action: regex_extract
+  source: serving_size
+  pattern: ([0-9]+(?:\.[0-9]+)?)
+- target: published_date
+  type: string
+  action: parse_date
+  source: published_date
+  format: unix_timestamp
+- target: data_source
+  type: string
+  action: format_transform
+  source: data_source
+- source: pnns_groups_1
+  action: drop_column
+- source: pnns_groups_2
+  action: drop_column
+- source: traces
+  action: drop_column
+- source: nova_group
+  action: drop_column
+- source: nutriscore_grade
+  action: drop_column
+- source: data_quality_tags
+  action: drop_column
+- source: energy_100g
+  action: drop_column
+- source: fat_100g
+  action: drop_column
+- source: carbohydrates_100g
+  action: drop_column
+- source: proteins_100g
+  action: drop_column
+- source: salt_100g
+  action: drop_column
+- source: countries
+  action: drop_column

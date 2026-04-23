@@ -4,8 +4,8 @@
     "required": true
   },
   "brand_owner": {
-    "status": "mapped",
-    "required": true
+    "status": "absent",
+    "required": false
   },
   "brand_name": {
     "status": "absent",
@@ -16,7 +16,7 @@
     "required": false
   },
   "category": {
-    "status": "enriched",
+    "status": "mapped",
     "required": false
   },
   "serving_size": {
@@ -28,30 +28,10 @@
     "required": false
   },
   "published_date": {
-    "status": "derived",
+    "status": "mapped",
     "required": false
   },
   "data_source": {
-    "status": "absent",
-    "required": false
-  },
-  "recall_number": {
-    "status": "mapped",
-    "required": false
-  },
-  "recall_class": {
-    "status": "mapped",
-    "required": false
-  },
-  "recall_reason": {
-    "status": "mapped",
-    "required": false
-  },
-  "recall_status": {
-    "status": "mapped",
-    "required": false
-  },
-  "distribution_pattern": {
     "status": "mapped",
     "required": false
   },
