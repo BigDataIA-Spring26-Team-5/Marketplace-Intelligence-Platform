@@ -80,14 +80,18 @@ class DQScorePreBlock(Block):
     inputs = ["all columns"]
     outputs = ["dq_score_pre"]
 
+    # Class-level stash: survives pd.concat / reset_index / merge that drop df.attrs
+    _last_reference_columns: list[str] = []
+
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()
         weights = (config or {}).get("dq_weights")
         df["dq_score_pre"] = compute_dq_score(df, weights)
-        # Store the column set so dq_score_post uses the same columns for a fair delta
-        df.attrs["dq_reference_columns"] = [c for c in df.columns if c not in _SKIP_ALWAYS]
+        ref_cols = [c for c in df.columns if c not in _SKIP_ALWAYS]
+        df.attrs["dq_reference_columns"] = ref_cols
+        DQScorePreBlock._last_reference_columns = ref_cols
         mean_score = df["dq_score_pre"].mean()
-        logger.info(f"DQ Score (pre): mean={mean_score:.1f}%, min={df['dq_score_pre'].min():.1f}%, max={df['dq_score_pre'].max():.1f}%")
+        logger.info(f"DQ Score (pre): mean={mean_score:.1f}%, min={df['dq_score_pre'].min():.1f}%, max={df['dq_score_pre'].max():.1f}%, cols={len(ref_cols)}")
         return df
 
 
@@ -101,11 +105,14 @@ class DQScorePostBlock(Block):
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()
         weights = (config or {}).get("dq_weights")
-        # Use the same column set as dq_score_pre for a fair pre/post comparison
-        reference_columns = df.attrs.get("dq_reference_columns")
+        reference_columns = df.attrs.get("dq_reference_columns") or DQScorePreBlock._last_reference_columns or None
+        attrs_lost = not df.attrs.get("dq_reference_columns") and bool(DQScorePreBlock._last_reference_columns)
+        if attrs_lost:
+            logger.warning("dq_score_post: df.attrs lost between pre/post — falling back to class-level reference columns")
         df["dq_score_post"] = compute_dq_score(df, weights, reference_columns=reference_columns)
         if "dq_score_pre" in df.columns:
             df["dq_delta"] = (df["dq_score_post"] - df["dq_score_pre"]).round(2)
             mean_delta = df["dq_delta"].mean()
-            logger.info(f"DQ Score (post): mean={df['dq_score_post'].mean():.1f}%, delta={mean_delta:+.1f}%")
+            ref_count = len(reference_columns) if reference_columns else len(df.columns)
+            logger.info(f"DQ Score (post): mean={df['dq_score_post'].mean():.1f}%, delta={mean_delta:+.1f}%, cols={ref_count}")
         return df
