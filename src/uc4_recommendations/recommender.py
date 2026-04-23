@@ -43,13 +43,19 @@ class ProductRecommender:
 
     # ── build ──────────────────────────────────────────────────────────────────
 
-    def build(self, enriched_df: pd.DataFrame, transactions_df: pd.DataFrame) -> dict:
+    def build(
+        self,
+        enriched_df: pd.DataFrame,
+        transactions_df: pd.DataFrame,
+        safety_filter: bool = True,
+    ) -> dict:
         """
         Full build from UC1 output.
 
         enriched_df:     UC1 unified catalog (product_id or product_name, brand_name,
                          primary_category, dietary_tags, allergens, dq_score_post)
         transactions_df: [transaction_id, product_id] — IDs must match enriched_df
+        safety_filter:   if True, remove Class I recalled products before building indexes.
 
         Returns build stats dict.
         """
@@ -58,6 +64,23 @@ class ProductRecommender:
         # Add product_id if not present — use index
         if "product_id" not in self._products.columns:
             self._products["product_id"] = self._products.index.astype(str)
+
+        if safety_filter and "is_recalled" in self._products.columns:
+            class1_mask = (
+                (self._products["is_recalled"] == True)  # noqa: E712
+                & self._products["recall_class"].fillna("").str.upper().str.startswith("CLASS I")
+            )
+            n_removed = class1_mask.sum()
+            if n_removed > 0:
+                removed_ids = set(self._products.loc[class1_mask, "product_id"])
+                self._products = self._products[~class1_mask].reset_index(drop=True)
+                transactions_df = transactions_df[
+                    ~transactions_df["product_id"].isin(removed_ids)
+                ].reset_index(drop=True)
+                logger.warning(
+                    "Safety filter removed %d Class I recalled product(s) from UC4 catalog",
+                    n_removed,
+                )
 
         # Mine rules
         self._miner = AssociationRuleMiner(transactions_df)

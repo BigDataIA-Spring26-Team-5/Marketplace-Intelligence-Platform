@@ -37,6 +37,26 @@
       "type": "string",
       "required": true
     },
+    "recall_number": {
+      "type": "string",
+      "required": false
+    },
+    "recall_class": {
+      "type": "string",
+      "required": false
+    },
+    "recall_reason": {
+      "type": "string",
+      "required": false
+    },
+    "recall_status": {
+      "type": "string",
+      "required": false
+    },
+    "distribution_pattern": {
+      "type": "string",
+      "required": false
+    },
     "allergens": {
       "type": "string",
       "required": false,

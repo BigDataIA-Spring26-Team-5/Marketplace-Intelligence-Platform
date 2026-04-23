@@ -37,9 +37,6 @@ class ExtractAllergensBlock(Block):
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         df = df.copy()
-        if "ingredients" not in df.columns:
-            df["allergens"] = pd.NA
-            return df
 
         def scan_allergens(text: str) -> str | None:
             if not isinstance(text, str) or text.strip() == "" or text == "nan":
@@ -50,7 +47,14 @@ class ExtractAllergensBlock(Block):
                     found.append(allergen)
             return ", ".join(sorted(found)) if found else ""
 
-        df["allergens"] = df["ingredients"].apply(scan_allergens)
+        def _get_scan_text(row) -> str:
+            return str(row.get("ingredients") or row.get("recall_reason") or "")
+
+        if "ingredients" not in df.columns and "recall_reason" not in df.columns:
+            df["allergens"] = pd.NA
+            return df
+
+        df["allergens"] = df.apply(lambda row: scan_allergens(_get_scan_text(row)), axis=1)
         detected = df["allergens"].notna().sum()
         logger.info(f"Allergens: detected in {detected}/{len(df)} rows ({detected/len(df)*100:.1f}%)")
         return df
