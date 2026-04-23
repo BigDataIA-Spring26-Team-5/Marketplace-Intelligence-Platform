@@ -119,6 +119,7 @@ class PipelineState(TypedDict, total=False):
     pipeline_mode: Optional[str]        # "silver" | "gold" | "full" (None = "full")
     silver_output_uri: Optional[str]    # gs:// URI written by save_output_node in silver mode
     quarantine_output_uri: Optional[str]  # gs:// URI (silver mode) or local path (full mode) for quarantined rows
+    resolved_source_name: Optional[str]  # canonical logical source name (e.g. "usda/branded"); overrides auto-derived name
 
     # UC2 observability
     _run_id: str  # UUID4 generated at start of run_pipeline_node; threaded to all emission points
