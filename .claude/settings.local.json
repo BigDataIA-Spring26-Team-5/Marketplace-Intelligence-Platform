@@ -137,7 +137,11 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:static.openfoodfacts.org)",
       "Bash(curl -s \"https://static.openfoodfacts.org/data/delta/index.txt\")",
-      "Bash(kaggle --version)"
+      "Bash(kaggle --version)",
+      "Bash(export KAGGLE_API_TOKEN=KGAT_bfb02f207a7bb9d6874be4c84383c939)",
+      "Bash(kaggle datasets *)",
+      "Bash(mkdir -p ~/.kaggle)",
+      "Bash(chmod 600 ~/.kaggle/kaggle.json)"
     ]
   }
 }
