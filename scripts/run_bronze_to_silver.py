@@ -45,9 +45,16 @@ SKIP_SOURCES = {"usda/sr_legacy", "usda/survey"}
 # Remap logical source names to canonical Silver source names.
 # Use when a DAG sub-directory is an infra artifact, not a semantic sub-type.
 # e.g. usda/bulk/2026/04/23/incremental/ is still plain USDA API data.
+# off/delta is a DAG-generated delta dir on top of the full 04/21 snapshot.
 SOURCE_ALIAS: dict[str, str] = {
     "usda/incremental": "usda",
+    "off/delta":        "off",
 }
+
+# For these sources, only the latest date partition is processed.
+# Older date partitions are superseded by the most recent full snapshot.
+# off: 04/21 is a full snapshot that includes all prior incremental dates (04/09-04/20).
+LATEST_ONLY_SOURCES: set[str] = {"off"}
 
 
 def _extract_partition(blob_name: str) -> tuple[str, str] | None:
@@ -127,6 +134,31 @@ def _list_partitions(bucket_name: str, source_filter: str | None) -> list[tuple[
         if canonical_source != logical_source:
             logger.info("Aliasing %s → %s", logical_source, canonical_source)
         result_list.append((canonical_source, partition_prefix, gcs_glob, domain))
+
+    # For LATEST_ONLY_SOURCES: drop all partitions except the newest date per source.
+    if LATEST_ONLY_SOURCES:
+        max_dates: dict[str, str] = {}
+        for canonical_source, partition_prefix, _, _ in result_list:
+            if canonical_source in LATEST_ONLY_SOURCES:
+                m = re.search(r"/(\d{4}/\d{2}/\d{2})(?:/|$)", partition_prefix)
+                if m:
+                    date = m.group(1)
+                    if canonical_source not in max_dates or date > max_dates[canonical_source]:
+                        max_dates[canonical_source] = date
+        filtered = []
+        for item in result_list:
+            canonical_source, partition_prefix, _, _ = item
+            if canonical_source in LATEST_ONLY_SOURCES:
+                m = re.search(r"/(\d{4}/\d{2}/\d{2})(?:/|$)", partition_prefix)
+                date = m.group(1) if m else ""
+                if date != max_dates.get(canonical_source, ""):
+                    logger.info(
+                        "Skipping older %s partition %s (latest=%s)",
+                        canonical_source, partition_prefix, max_dates[canonical_source],
+                    )
+                    continue
+            filtered.append(item)
+        result_list = filtered
 
     # Warn about unknown root sources (once)
     all_roots = set()
