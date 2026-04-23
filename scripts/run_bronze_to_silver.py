@@ -210,7 +210,8 @@ def main():
                 chunk_size=args.chunk_size,
                 source_name_override=logical_source,
             )
-            rows = len(result.get("working_df") or [])
+            _df = result.get("working_df")
+            rows = len(_df) if _df is not None else 0
             logger.info("Done: %s — %d rows written to Silver", logical_source, rows)
         except Exception as exc:
             logger.error("FAILED: %s — %s", logical_source, exc)

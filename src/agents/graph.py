@@ -40,6 +40,18 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
 
 
+def _sanitize_for_json(obj):
+    """Replace NaN/Inf floats with None so json.dumps produces valid JSON."""
+    import math
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
+
+
 def _push_silver_audit(run_log: dict) -> None:
     """Write audit events to Postgres audit_events table. Non-fatal."""
     import json
@@ -60,7 +72,7 @@ def _push_silver_audit(run_log: dict) -> None:
                         event_type,
                         run_log.get("status", "unknown"),
                         ts,
-                        json.dumps(run_log),
+                        json.dumps(_sanitize_for_json(run_log)),
                     ),
                 )
         conn.commit()
