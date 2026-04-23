@@ -25,7 +25,7 @@
           "type": "prometheus",
           "uid": "PBFA97CFB590B2093"
         },
-        "query": "label_values(etl_dq_score_post{source!~\"20|21\"}, source)",
+        "query": "label_values({__name__=~\"etl_dq_score_post|etl_block_dq_score\",source!~\"20|21|branded|foundation\"}, source)",
         "includeAll": true,
         "allValue": ".+",
         "multi": true,
