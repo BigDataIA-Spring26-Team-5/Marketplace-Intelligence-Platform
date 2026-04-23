@@ -557,7 +557,7 @@ def save_output_node(state: PipelineState) -> dict:
             if _dm:
                 _silver_date = _dm.group(1)
 
-    output_path = OUTPUT_DIR / f"{source_name}_unified.csv"
+    output_path = OUTPUT_DIR / f"{source_name.replace('/', '_')}_unified.csv"
     silver_uri: str | None = None
     quarantine_uri: str | None = None
 
@@ -582,7 +582,7 @@ def save_output_node(state: PipelineState) -> dict:
             df.to_csv(output_path, index=False)
             logger.info(f"Output saved to {output_path} ({len(df)} rows)")
             if quarantined_df is not None and len(quarantined_df) > 0:
-                q_path = OUTPUT_DIR / f"{source_name}_quarantined.csv"
+                q_path = OUTPUT_DIR / f"{source_name.replace('/', '_')}_quarantined.csv"
                 quarantined_df.to_csv(q_path, index=False)
                 logger.info(f"Quarantine: {len(quarantined_df)} rows → {q_path}")
 
@@ -590,7 +590,8 @@ def save_output_node(state: PipelineState) -> dict:
         domain = state.get("domain", "nutrition")
         silver_local_dir = OUTPUT_DIR / "silver" / domain
         silver_local_dir.mkdir(parents=True, exist_ok=True)
-        silver_local_path = silver_local_dir / f"{source_name}.parquet"
+        safe_source_name = source_name.replace("/", "_")
+        silver_local_path = silver_local_dir / f"{safe_source_name}.parquet"
         df.to_parquet(silver_local_path, index=False)
         logger.info("Silver: %d rows → %s", len(df), silver_local_path)
 
