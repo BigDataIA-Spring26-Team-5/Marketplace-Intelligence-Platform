@@ -210,7 +210,7 @@ def _write_gold_bq(df: pd.DataFrame, source_name: str) -> int:
     }
     for col in _STRING_COLS:
         if col in df.columns:
-            df[col] = df[col].where(df[col].isna(), df[col].astype(str))
+            df[col] = df[col].where(df[col].isna(), df[col].astype(str)).astype(object)
 
     client = bigquery.Client(project=BQ_PROJECT)
     table_ref = f"{BQ_PROJECT}.{BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}"
