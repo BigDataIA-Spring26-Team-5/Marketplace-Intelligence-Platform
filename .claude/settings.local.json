@@ -141,7 +141,15 @@
       "Bash(export KAGGLE_API_TOKEN=KGAT_bfb02f207a7bb9d6874be4c84383c939)",
       "Bash(kaggle datasets *)",
       "Bash(mkdir -p ~/.kaggle)",
-      "Bash(chmod 600 ~/.kaggle/kaggle.json)"
+      "Bash(chmod 600 ~/.kaggle/kaggle.json)",
+      "Bash(gsutil mb *)",
+      "Bash(gsutil *)",
+      "Bash(bq mk *)",
+      "Bash(wait)",
+      "Bash(poetry run python3 -c ' *)",
+      "Bash(grep -v \"^$\\\\|UserWarning\\\\|WARNING\\\\|FutureWarning\")",
+      "Bash(grep -v \"^$\\\\|UserWarning\\\\|WARNING\\\\|FutureWarning\\\\|DeprecationWarning\")",
+      "Bash(git rm *)"
     ]
   }
 }
