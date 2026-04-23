@@ -113,7 +113,8 @@
       "Bash(bash)",
       "Read(//home/aq/work/Marketplace-Intelligence-Platform/src/**)",
       "Read(//home/aq/work/**)",
-      "Read(//home/aq/**)"
+      "Read(//home/aq/**)",
+      "Bash(poetry run *)"
     ]
   }
 }
