@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -94,6 +95,10 @@ class TestSave:
         assert "timestamp" in data
         assert data["source_path"] == "data/usda_fooddata_sample.csv"
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="chmod read-only is not enforced on Windows NTFS; cannot simulate unwritable dir cross-platform",
+    )
     def test_returns_none_on_unwritable_dir(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         ro_dir = tmp_path / "readonly"
         ro_dir.mkdir()

@@ -33,6 +33,11 @@ poetry run streamlit run app.py
 poetry run python scripts/build_corpus.py
 poetry run python scripts/build_corpus.py --limit 10000
 
+# Bronze (JSONL) vs Silver (Parquet) row-count audit — Parquet metadata only, no full scan
+poetry run python scripts/count_rows.py
+poetry run python scripts/count_rows.py --sources off usda openfda --date 2026/04/21
+poetry run python scripts/count_rows.py --all-dates
+
 # Full platform stack (Kafka, Airflow, Postgres, Prometheus, Pushgateway, Grafana, ChromaDB, Redis, MLflow)
 docker-compose -p mip up -d
 
@@ -91,7 +96,9 @@ A `yaml` cache hit sets `cache_yaml_hit` in state, which causes `route_after_ana
 
 - **`full`** (default): `dq_score_pre → __generated__ → cleaning → dedup_stage → enrich_stage → dq_score_post`. Output: CSV to `output/`.
 - **`silver`**: schema transform only via `get_silver_sequence()` — **no dedup, no enrichment**. Output: Parquet to `gs://mip-silver-2024/<source>/<YYYY/MM/DD>/`. `save_output_node` also updates the watermark.
-- **`gold`**: invoked via `src/pipeline/gold_pipeline.py` (separate entry point, not the graph). Reads all Silver Parquet for a `source+date`, runs dedup + enrichment + DQ scoring, appends to BigQuery `mip_gold.products`.
+- **`gold`**: invoked via `src/pipeline/gold_pipeline.py` (separate entry point, not the graph). Reads all Silver Parquet for a `source+date` via `BlockRegistry.get_gold_sequence(domain)`, runs dedup + enrichment + DQ scoring, appends to BigQuery `mip_gold.products`. `_read_silver_parquet` skips blobs whose name starts with `sample` (avoids pulling the dev sample into full runs) and **casts Arrow `StringDtype`/`null` columns to `object`** at the read boundary — without this cast, `pd.NA` propagates into S3 prompt construction and crashes with `TypeError: boolean value of NA is ambiguous`. `run_gold_pipeline` instantiates a default `CacheClient` (Redis with SQLite fallback) and threads it into block configs so LLM/embedding/dedup caches work across re-runs.
+
+**Quarantine output.** When `quarantined_df` is populated, `save_output_node` writes it to `gs://mip-silver-2024/<source>_quarantine/<date>/` (silver mode) or `output/<source>_quarantined.csv` (full mode), and exposes the destination as `PipelineState["quarantine_output_uri"]`.
 
 ### Column mapping happens before blocks run
 
@@ -106,22 +113,36 @@ A `yaml` cache hit sets `cache_yaml_hit` in state, which causes `route_after_ana
 [src/blocks/llm_enrich.py](src/blocks/llm_enrich.py) orchestrates three tiers:
 
 1. **S1 deterministic** ([src/enrichment/deterministic.py](src/enrichment/deterministic.py)) — regex/keyword extraction
-2. **S2 KNN corpus** ([src/enrichment/embedding.py](src/enrichment/embedding.py)) — FAISS product-to-product similarity
+2. **S2 KNN corpus** ([src/enrichment/embedding.py](src/enrichment/embedding.py)) — ChromaDB product-to-product similarity (FAISS fallback)
 3. **S3 RAG-LLM** ([src/enrichment/llm_tier.py](src/enrichment/llm_tier.py)) — LLM with top-3 S2 neighbors as RAG context
 
 **Hard safety rule: S2 and S3 touch only `primary_category`.** The safety fields `allergens`, `is_organic`, `dietary_tags` are **extraction-only** (S1 from the product's own text) or null. They are never inferred by KNN similarity or the LLM, because dangerous false positives (e.g., tagging a barley-containing product "gluten-free") are worse than nulls. `LLMEnrichBlock` has a post-run assertion that warns if any S3-resolved row has a safety field that differs from its post-S1 state — **if that fires, something upstream broke the invariant; fix it rather than silencing the warning**.
 
 S2's `_knn_neighbors` column is a pipeline-internal JSON string consumed only by S3. `LLMEnrichBlock` drops it from the DataFrame before returning — don't write output code that expects it to be present.
 
+**`_safe_text` in `llm_tier.py` is mandatory at every cache-hash and prompt-construction site.** It returns `""` for `pd.NA`, `None`, and `float NaN`; replacing it with `str(row.get(...) or "")` reintroduces the `pd.NA.__bool__()` crash that took down the OFF Gold run. The Gold-side `StringDtype → object` cast (above) is the first line of defense; `_safe_text` is the second.
+
 ### Corpus persists across runs (feedback loop)
 
-[src/enrichment/corpus.py](src/enrichment/corpus.py) manages a persistent FAISS `IndexFlatIP` (inner product on L2-normalized vectors = cosine similarity) at `corpus/faiss_index.bin` + `corpus/corpus_metadata.json`. Seeded by `scripts/build_corpus.py` (USDA FoodData Central) or bootstrapped in-run from S1-resolved rows if the persistent corpus has fewer than `MIN_CORPUS_SIZE` (10) vectors. **Both S2 and S3 add resolved rows back into the corpus**, so later runs get better. `.bin` is gitignored; `corpus_metadata.json` / `corpus_summary.json` are committed. If `faiss-cpu` is not installed, S2 is skipped with a warning and everything falls through to S3 — **do not treat missing FAISS as a hard error**.
+[src/enrichment/corpus.py](src/enrichment/corpus.py) is **ChromaDB-backed** in production (collection `product_corpus` at `localhost:8000`). The legacy FAISS `IndexFlatIP` artifact (`corpus/faiss_index.bin` + `corpus/corpus_metadata.json`) remains for offline/dev fallback. Seeded by `scripts/build_corpus.py` (USDA FoodData Central) or bootstrapped in-run from S1-resolved rows. **Both S2 and S3 add resolved rows back into the corpus**, so later runs get better. `.bin` is gitignored; `corpus_metadata.json` / `corpus_summary.json` are committed. If neither ChromaDB nor `faiss-cpu` is reachable, S2 is skipped with a warning and everything falls through to S3 — **do not treat a missing vector store as a hard error**.
 
-Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THRESHOLD_CATEGORY=0.60`, `K_NEIGHBORS=5`.
+Key thresholds (all overridable via env var):
+- `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THRESHOLD_CATEGORY=0.60`, `K_NEIGHBORS=5`
+- `MIN_CORPUS_SIZE=10` (single-row `knn_search` bootstrap), `MIN_ENRICHMENT_CORPUS=1000` (batch-S2 short-circuit, in `embedding.py`)
+- `CORPUS_TTL_DAYS=90`, `MAX_CORPUS_SIZE=500_000`, `CHROMA_QUERY_CHUNK_SIZE=500`
 
-### Unified schema is auto-generated once, then reused
+**Eviction + augmentation invariants (spec 014).** At the start of every batch S2 pass, `embedding_enrich` invokes:
+1. `evict_corpus(collection)` — TTL-first (vectors with `last_seen < now - CORPUS_TTL_DAYS`), then size cap (oldest `last_seen` until `count <= MAX_CORPUS_SIZE`). Best-effort; logs WARNING on any ChromaDB failure.
+2. `augment_from_df(df, collection, unresolved_count, force_ratio_threshold=0.25)` — if `corpus_size / unresolved_count < 0.25`, upserts S1-resolved rows in 500-row chunks. Upsert semantics — existing IDs are not re-encoded, only their `last_seen` is refreshed.
+3. Short-circuit gate — if `index.count() < MIN_ENRICHMENT_CORPUS` after augmentation, S2 is skipped entirely.
 
-[config/unified_schema.json](config/unified_schema.json) is the canonical target schema. On the **first run** (file absent), Agent 1 uses `FIRST_RUN_SCHEMA_PROMPT` and [src/schema/analyzer.py](src/schema/analyzer.py) `derive_unified_schema_from_source()` writes the JSON — including auto-added enrichment columns (`allergens`, `primary_category`, `dietary_tags`, `is_organic`) and computed DQ columns (`dq_score_pre`, `dq_score_post`, `dq_delta`). On **subsequent runs**, Agent 1 uses `SCHEMA_ANALYSIS_PROMPT` which explicitly **excludes enrichment and computed columns from the mappable set** — those aren't sourceable. If you add a computed or enrichment column, extend both `derive_unified_schema_from_source()` **and** the exclusion filter in `analyze_schema_node`, otherwise the LLM will be asked to map columns that don't come from the source.
+`knn_search_batch` chunks ChromaDB queries by `CHROMA_QUERY_CHUNK_SIZE` (default 500); a per-chunk failure fills those positions with `(None, 0.0, [])` rather than aborting the batch. **Every upsert path must write a `last_seen` ISO-8601 timestamp** in metadata, or eviction has nothing to filter on.
+
+### Unified schema is domain-specific and authored up-front
+
+The unified schema is **per-domain**, not global. Each domain (`nutrition`/`safety`/`pricing`/…) gets its own `config/unified_schema_<domain>.json` defined **before** any pipeline runs against that domain. Today only one is shipped: [config/unified_schema.json](config/unified_schema.json), the food-product schema shared by USDA, OFF, and openFDA. Amazon ESCI (query/relevance dataset) cannot be forced through it — onboarding ESCI requires authoring `unified_schema_pricing.json` first; the `pricing` domain is wired in the registry but the schema file does not yet exist.
+
+On the **first run** for a domain (file absent), Agent 1 uses `FIRST_RUN_SCHEMA_PROMPT` and [src/schema/analyzer.py](src/schema/analyzer.py) `derive_unified_schema_from_source()` writes the JSON — including auto-added enrichment columns (`allergens`, `primary_category`, `dietary_tags`, `is_organic`) and computed DQ columns (`dq_score_pre`, `dq_score_post`, `dq_delta`). The canonical path, however, is to commit the schema file up-front; first-run derivation is a bootstrap, not the supported workflow. On **subsequent runs**, Agent 1 uses `SCHEMA_ANALYSIS_PROMPT` which explicitly **excludes enrichment and computed columns from the mappable set** — those aren't sourceable. If you add a computed or enrichment column, extend both `derive_unified_schema_from_source()` **and** the exclusion filter in `analyze_schema_node`, otherwise the LLM will be asked to map columns that don't come from the source.
 
 ### LLM routing is centralized and multi-provider
 
@@ -172,10 +193,14 @@ UC2 event emission from the graph (`run_started`, `run_completed`, `block_start`
 - **YAML cache writer coherence** — `plan_sequence_node` is where the full cacheable blob is written. If you add fields that Agent 1/2/3 produce, extend the `cacheable` dict there, or replayed runs will silently drop them.
 - **UC2 emits are best-effort** — wrap new emits in `try/except` and log warnings; don't raise. Observability must not block the pipeline.
 - **Safety boundary in enrichment** — `allergens`, `dietary_tags`, `is_organic` are S1-only. Never add them to S2/S3 output paths.
+- **Dedup blocking key is composite** — `fuzzy_deduplicate.py` uses `name[:4] + "_" + brand[:2]` as the block key (not name-only). Reverting to name-only collapses 12K-row "cho" mega-blocks back into 72M-comparison OOM territory. Null `brand_name` produces an empty brand prefix, not a null-key collision.
+- **Gold `enrichment_stats` schema** — `_build_gold_run_log` includes `corpus_augmented` and `corpus_size_after`. If you add stats fields to `LLMEnrichBlock.last_enrichment_stats`, also surface them in the run log and `MetricsExporter` or downstream Grafana panels go blank.
+- **`last_seen` on every corpus upsert** — `add_to_corpus`, `build_seed_corpus`, and `augment_from_df` all write `"last_seen": datetime.utcnow().isoformat()`. New upsert paths must do the same or `evict_corpus` cannot age them out.
 
 ## Active Technologies
 
-- Python 3.11 (Poetry). pandas 2.2, LangGraph 0.4, LiteLLM 1.55, FAISS-CPU, sentence-transformers, rapidfuzz, pyarrow, redis-py, streamlit, structlog, prometheus_client, chromadb, networkx, mlxtend, rank-bm25.
+- Python 3.11 (Poetry). pandas 2.2, LangGraph 0.4, LiteLLM 1.55, FAISS-CPU, sentence-transformers, rapidfuzz, pyarrow, redis-py, streamlit, structlog, prometheus_client, chromadb, kafka-python, networkx, mlxtend, rank-bm25.
 - Redis at `localhost:6379` (SQLite fallback at `output/cache.db`).
+- ChromaDB at `localhost:8000`, collection `product_corpus` (primary KNN store).
 - GCS buckets: `mip-bronze-2024` (JSONL), `mip-silver-2024` (Parquet), BigQuery `mip_gold.products`.
 - Prometheus Pushgateway at `localhost:9091`; Grafana at `localhost:3000`.
