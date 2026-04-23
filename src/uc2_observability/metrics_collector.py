@@ -138,6 +138,36 @@ class MetricsCollector:
                          self.pushgateway_url, exc)
             raise
 
+    def push_block_dq(
+        self,
+        run_id: str,
+        source: str,
+        block_name: str,
+        block_seq: int,
+        dq_score: float,
+        rows: int,
+    ) -> None:
+        """Push per-block DQ score to Pushgateway for real-time trend chart in Grafana."""
+        try:
+            registry = CollectorRegistry()
+            labels = ["source", "run_id", "block_name", "block_seq"]
+            label_vals = [source, run_id, block_name, str(block_seq)]
+
+            g1 = Gauge("etl_block_dq_score", "DQ score after block", labels, registry=registry)
+            g1.labels(*label_vals).set(dq_score)
+
+            g2 = Gauge("etl_block_rows", "Row count after block", labels, registry=registry)
+            g2.labels(*label_vals).set(float(rows))
+
+            push_to_gateway(
+                self.pushgateway_url,
+                job=f"etl_block_{source}",
+                grouping_key={"run_id": run_id, "block_name": block_name},
+                registry=registry,
+            )
+        except Exception as exc:
+            logger.warning("push_block_dq failed (block=%s): %s", block_name, exc)
+
     def push_anomaly_flag(self, run_id: str, source: str, signal: str, value: float = 1.0) -> None:
         """
         Push etl_anomaly_flag gauge to Pushgateway.
