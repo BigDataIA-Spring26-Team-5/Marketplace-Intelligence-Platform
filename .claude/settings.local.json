@@ -149,7 +149,8 @@
       "Bash(poetry run python3 -c ' *)",
       "Bash(grep -v \"^$\\\\|UserWarning\\\\|WARNING\\\\|FutureWarning\")",
       "Bash(grep -v \"^$\\\\|UserWarning\\\\|WARNING\\\\|FutureWarning\\\\|DeprecationWarning\")",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(/usr/local/bin/docker-compose -p mip up -d zookeeper)"
     ]
   }
 }

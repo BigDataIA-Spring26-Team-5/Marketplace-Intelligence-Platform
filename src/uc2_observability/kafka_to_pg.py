@@ -250,7 +250,9 @@ def _get_producer():
             value_serializer=lambda v: json.dumps(v).encode("utf-8"),
             api_version=(2, 5, 0),
             acks=0,           # fire-and-forget — pipeline must never block on UC2
-            request_timeout_ms=2000,
+            request_timeout_ms=30000,
+            linger_ms=100,
+            batch_size=16384,
             retries=0,
         )
     return _producer
