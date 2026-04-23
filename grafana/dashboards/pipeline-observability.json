@@ -1,197 +1,837 @@
 {
   "uid": "etl-pipeline-observability",
-  "title": "Pipeline Observability",
+  "title": "ETL Pipeline Observability",
+  "description": "Live data-quality view of the food-product ETL pipeline.",
   "schemaVersion": 38,
   "version": 1,
   "refresh": "30s",
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "tags": [
+    "etl",
+    "pipeline",
+    "observability"
+  ],
   "templating": {
     "list": [
       {
-        "name": "source_name",
+        "name": "source",
         "type": "query",
         "label": "Source",
         "datasource": {
           "type": "prometheus",
-          "uid": "prometheus"
+          "uid": "PBFA97CFB590B2093"
         },
-        "query": "label_values(etl_dq_score_pre, source_name)",
+        "query": "label_values(etl_dq_score_post{source!~\"20|21\"}, source)",
         "includeAll": true,
-        "allValue": ".*",
-        "multi": false,
-        "refresh": 2
+        "allValue": ".+",
+        "multi": true,
+        "refresh": 2,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
       }
     ]
   },
   "panels": [
     {
+      "id": 100,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "## Food-Product ETL Pipeline\n\nRaw CSVs from **USDA**, **openFDA**, **OpenFoodFacts**, and **ESCI** are cleaned block-by-block, then enriched in a three-tier cascade (**S1 rules \u2192 S2 KNN \u2192 S3 LLM**). The **DQ score** (0\u2013100) measures completeness and validity \u2014 watch it rise from 'Before' to 'After'."
+      }
+    },
+    {
       "id": 1,
-      "type": "timeseries",
-      "title": "DQ Scores Over Time",
+      "type": "bargauge",
+      "title": "Final DQ Score per Source (Post-Pipeline)",
+      "description": "Data-quality score after the full pipeline. Each bar is one source. Green \u2265 80 = production-ready, yellow 60\u201380 = usable, red < 60 = needs attention.",
       "gridPos": {
         "x": 0,
-        "y": 0,
-        "w": 12,
-        "h": 8
+        "y": 3,
+        "w": 24,
+        "h": 6
       },
-      "targets": [
-        {
-          "expr": "etl_dq_score_pre{source_name=~\"$source_name\"}",
-          "legendFormat": "DQ Pre ({{run_id}})"
-        },
-        {
-          "expr": "etl_dq_score_post{source_name=~\"$source_name\"}",
-          "legendFormat": "DQ Post ({{run_id}})"
-        },
-        {
-          "expr": "etl_dq_delta{source_name=~\"$source_name\"}",
-          "legendFormat": "DQ Delta ({{run_id}})"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "type": "barchart",
-      "title": "Enrichment Tier Breakdown",
-      "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 12,
-        "h": 8
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
       },
       "options": {
-        "stacking": "normal"
-      },
-      "targets": [
-        {
-          "expr": "etl_enrichment_s1_resolved{source_name=~\"$source_name\"}",
-          "legendFormat": "S1 Deterministic ({{run_id}})"
-        },
-        {
-          "expr": "etl_enrichment_s2_resolved{source_name=~\"$source_name\"}",
-          "legendFormat": "S2 KNN ({{run_id}})"
-        },
-        {
-          "expr": "etl_enrichment_s3_resolved{source_name=~\"$source_name\"}",
-          "legendFormat": "S3 LLM ({{run_id}})"
-        },
-        {
-          "expr": "etl_enrichment_unresolved{source_name=~\"$source_name\"}",
-          "legendFormat": "Unresolved ({{run_id}})"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "type": "stat",
-      "title": "Run Status",
-      "gridPos": {
-        "x": 0,
-        "y": 8,
-        "w": 6,
-        "h": 4
-      },
-      "options": {
-        "colorMode": "background",
-        "thresholds": {
-          "steps": [
-            {
-              "value": 0,
-              "color": "red"
-            },
-            {
-              "value": 0.5,
-              "color": "yellow"
-            },
-            {
-              "value": 1,
-              "color": "green"
-            }
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
           ]
         }
       },
-      "targets": [
-        {
-          "expr": "etl_run_status{source_name=~\"$source_name\"}",
-          "legendFormat": "{{run_id}}"
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "type": "timeseries",
-      "title": "Row Counts",
-      "gridPos": {
-        "x": 6,
-        "y": 8,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "expr": "etl_rows_in{source_name=~\"$source_name\"}",
-          "legendFormat": "Rows In ({{run_id}})"
-        },
-        {
-          "expr": "etl_rows_out{source_name=~\"$source_name\"}",
-          "legendFormat": "Rows Out ({{run_id}})"
-        },
-        {
-          "expr": "etl_rows_quarantined{source_name=~\"$source_name\"}",
-          "legendFormat": "Quarantined ({{run_id}})"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "type": "timeseries",
-      "title": "Run Duration",
-      "gridPos": {
-        "x": 0,
-        "y": 16,
-        "w": 12,
-        "h": 8
-      },
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
-        }
-      },
-      "targets": [
-        {
-          "expr": "etl_duration_seconds{source_name=~\"$source_name\"}",
-          "legendFormat": "Duration ({{run_id}})"
-        }
-      ]
-    },
-    {
-      "id": 6,
-      "type": "barchart",
-      "title": "Block-by-Block DQ Progress",
-      "description": "DQ score after each pipeline block \u2014 shows enrichment improving data quality step by step",
-      "gridPos": {
-        "x": 0,
-        "y": 16,
-        "w": 24,
-        "h": 9
-      },
-      "options": {
-        "stacking": "none",
-        "xTickLabelRotation": -30
-      },
-      "fieldConfig": {
-        "defaults": {
+          "unit": "short",
           "min": 0,
-          "max": 1,
-          "unit": "percentunit",
+          "max": 100,
+          "decimals": 1,
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 60,
+                "color": "yellow"
+              },
+              {
+                "value": 80,
+                "color": "green"
+              }
+            ]
           }
         }
       },
       "targets": [
         {
-          "expr": "etl_block_dq_score{source=~\"$source_name\"}",
-          "legendFormat": "{{source}} \u2014 {{block_name}} (seq {{block_seq}})"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_dq_score_post{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_dq_score_post{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "legendFormat": "{{src}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "bargauge",
+      "title": "LLM Cost per Source (USD)",
+      "description": "Cumulative spend on LLM enrichment calls (tier S3) per source. The pipeline prefers cheaper tiers (S1 rules, S2 KNN) first, so this should stay small \u2014 watch for spikes that indicate S1/S2 are failing.",
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "min": 0,
+          "noValue": "No LLM calls yet \u2014 S1/S2 resolved every row (this is the healthy case \u2714)",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              },
+              {
+                "value": 0.1,
+                "color": "yellow"
+              },
+              {
+                "value": 1,
+                "color": "red"
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_llm_cost_usd_total{source=~\"$source\",source!~\"20|21\"} > 0), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_llm_cost_usd_total{source_name=~\"$source\"} > 0), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "legendFormat": "{{src}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "bargauge",
+      "title": "DQ Score: Before vs After Pipeline",
+      "description": "Per source: raw input quality (orange, Before) vs final quality (green, After). The gap is the lift the pipeline delivers.",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 100,
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^Before/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^After/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_dq_score_pre{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_dq_score_pre{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "legendFormat": "Before \u00b7 {{src}}",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_dq_score_post{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_dq_score_post{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "legendFormat": "After \u00b7 {{src}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Enrichment Tier Breakdown",
+      "description": "How each row's missing fields were filled. S1 (rules) is cheap, S2 (KNN) is medium, S3 (LLM) is expensive, Unresolved means no strategy worked. A healthy pipeline resolves most rows at S1.",
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "showValue": "always",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "xField": "src"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "decimals": 0,
+          "unit": "short",
+          "noValue": "No enrichment data yet \u2014 these runs didn't include the enrich_stage (no enrichment_columns in the schema)"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "S1 rules"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "S2 KNN"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "S3 LLM"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unresolved"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "S1",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_enrichment_s1_resolved{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_s1_resolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "S2",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_enrichment_s2_resolved{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_s2_resolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "S3",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_enrichment_s3_resolved{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_s3_resolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "UN",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_enrichment_unresolved{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_unresolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "run_id": true,
+              "status": true,
+              "source": true,
+              "source_name": true
+            },
+            "renameByName": {}
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "src",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regexp": "^Value #S1$",
+            "renamePattern": "S1 rules"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regexp": "^Value #S2$",
+            "renamePattern": "S2 KNN"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regexp": "^Value #S3$",
+            "renamePattern": "S3 LLM"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regexp": "^Value #UN$",
+            "renamePattern": "Unresolved"
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "barchart",
+      "title": "Block-by-Block DQ Progress",
+      "description": "DQ after each cleaning block in execution order. Each bar group is one source; each bar is one block. The staircase shows quality rising as whitespace, noise, and schema issues get fixed.",
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 24,
+        "h": 11
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": -35,
+        "xTickLabelSpacing": 0,
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.85,
+        "barWidth": 0.9,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "xField": "label"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "decimals": 2,
+          "unit": "percentunit",
+          "color": {
+            "mode": "continuous-GrYlRd"
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "max by (source, block_name, block_seq) (etl_block_dq_score{source=~\"$source\",source!~\"20|21\"})",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "run_id": true,
+              "status": true
+            },
+            "renameByName": {
+              "Value": "DQ"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "reduceRow",
+            "alias": "label",
+            "reduce": {
+              "reducer": "allValues"
+            }
+          }
+        },
+        {
+          "id": "merge",
+          "options": {}
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "bargauge",
+      "title": "Rows In (raw)",
+      "description": "Total input rows ingested per source on the latest run.",
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_rows_in{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_rows_in{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "legendFormat": "{{src}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "bargauge",
+      "title": "Rows Out (clean)",
+      "description": "Rows emitted to the unified catalog after cleaning and quarantine.",
+      "gridPos": {
+        "x": 6,
+        "y": 30,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_rows_out{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_rows_out{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "legendFormat": "{{src}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "bargauge",
+      "title": "Rows Quarantined",
+      "description": "Rows rejected for quality issues. Lower is better.",
+      "gridPos": {
+        "x": 12,
+        "y": 30,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              },
+              {
+                "value": 100,
+                "color": "yellow"
+              },
+              {
+                "value": 1000,
+                "color": "red"
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_rows_quarantined{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_rows_quarantined{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "legendFormat": "{{src}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "bargauge",
+      "title": "Run Duration",
+      "description": "End-to-end wall-clock time per source (seconds).",
+      "gridPos": {
+        "x": 18,
+        "y": 30,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_duration_seconds{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_duration_seconds{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "legendFormat": "{{src}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "bargauge",
+      "title": "LLM Calls per Source (count)",
+      "description": "Total LLM API calls made during the run. The cost cascade aims to keep this at zero \u2014 calls only happen when S1 rules and S2 KNN can't resolve a row.",
+      "gridPos": {
+        "x": 12,
+        "y": 37,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "No LLM calls yet \u2014 cheaper tiers (S1/S2) resolved every row \u2714",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              },
+              {
+                "value": 100,
+                "color": "yellow"
+              },
+              {
+                "value": 1000,
+                "color": "red"
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "label_replace(max by (source) (etl_llm_calls_total{source=~\"$source\",source!~\"20|21\"} > 0), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_llm_calls_total{source_name=~\"$source\"} > 0), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "legendFormat": "{{src}}",
+          "instant": true
         }
       ]
     }

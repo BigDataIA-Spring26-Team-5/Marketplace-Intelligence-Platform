@@ -14,7 +14,7 @@ import pandas as pd
 
 from src.agents.state import PipelineState
 from src.agents.prompts import SCHEMA_ANALYSIS_PROMPT
-from src.models.llm import call_llm_json, get_orchestrator_llm
+from src.models.llm import call_llm_json, get_orchestrator_llm, reset_llm_counter
 from src.schema.analyzer import (
     profile_dataframe,
     get_domain_schema,
@@ -69,6 +69,7 @@ def load_source_node(state: PipelineState) -> dict:
     """
     if state.get("source_df") is not None:
         return {}
+    reset_llm_counter()
     source_path = state["source_path"]
     logger.info(f"Loading source: {source_path}")
 
