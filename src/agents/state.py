@@ -87,7 +87,8 @@ class PipelineState(TypedDict, total=False):
 
     # Pipeline execution
     block_sequence: list[str]
-    sequence_reasoning: str  # Agent 3's rationale for the chosen sequence
+    sequence_reasoning: str
+    skipped_blocks: dict  # Agent 3: {block_name: reason_skipped}
     working_df: Any  # pd.DataFrame
     dq_score_pre: float
     dq_score_post: float
