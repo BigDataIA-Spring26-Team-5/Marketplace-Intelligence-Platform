@@ -49,6 +49,18 @@ def _gcs_client():
     return storage.Client()
 
 
+def _sanitize_nan(obj):
+    """Replace NaN/Inf floats with None for valid JSON serialization."""
+    import math
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
+
+
 def _enrich_with_safety_signals(gold_df: pd.DataFrame, date: str) -> pd.DataFrame:
     """
     LEFT JOIN nutrition Gold with safety Silver on (product_name, brand_name).
@@ -392,7 +404,7 @@ def _push_gold_audit(run_log: dict) -> None:
                     """INSERT INTO audit_events (run_id, source, event_type, status, ts, payload)
                        VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
                     (run_log["run_id"], run_log["source_name"], event_type,
-                     run_log["status"], ts, json.dumps(run_log)),
+                     run_log["status"], ts, json.dumps(_sanitize_nan(run_log))),
                 )
         conn.commit()
         conn.close()
