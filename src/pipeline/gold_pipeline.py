@@ -79,9 +79,10 @@ def _enrich_with_safety_signals(gold_df: pd.DataFrame, date: str) -> pd.DataFram
         ]
         if not blobs:
             logger.warning("No safety Silver Parquet found at gs://%s/%s — skipping safety join", SILVER_BUCKET, prefix)
-            gold_df["is_recalled"]  = False
-            gold_df["recall_class"] = None
-            gold_df["recall_reason"] = None
+            gold_df["is_recalled"]    = False
+            gold_df["recall_class"]   = None
+            gold_df["recall_reason"]  = None
+            gold_df["published_date"] = None
             return gold_df
 
         frames = []
@@ -233,19 +234,41 @@ def _write_gold_bq(df: pd.DataFrame, source_name: str) -> int:
         if col in df.columns:
             df[col] = [_safe_str(v) for v in df[col]]
 
-    # Normalize published_date to ISO date string; BQ autodetect otherwise
-    # chokes when mixed datetime/list/str cells survive upstream merges.
+    # Normalize published_date to pandas datetime64 (tz-naive) so BQ maps it to
+    # DATETIME (matching existing table schema). Scalar-extract first to unwrap
+    # any list/array cells produced by upstream column-wise merges.
     if "published_date" in df.columns:
+        def _extract_date_scalar(v):
+            if isinstance(v, (list, tuple, np.ndarray)):
+                return v[0] if len(v) > 0 else None
+            return v
+
+        df["published_date"] = df["published_date"].map(_extract_date_scalar)
         parsed = pd.to_datetime(df["published_date"], errors="coerce", utc=True)
-        iso = parsed.dt.strftime("%Y-%m-%d")
-        df["published_date"] = iso.where(parsed.notna(), None).astype(object)
+        # Drop tz so pyarrow writes DATETIME, not TIMESTAMP.
+        df["published_date"] = parsed.dt.tz_convert(None)
 
     client = bigquery.Client(project=BQ_PROJECT)
     table_ref = f"{BQ_PROJECT}.{BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}"
 
+    # Pin string-typed columns explicitly so BQ autodetect does not infer
+    # INTEGER/FLOAT for all-null columns (sparse sources collide with the
+    # existing STRING schema in mip_gold.products).
+    explicit_schema = [
+        bigquery.SchemaField(col, "STRING")
+        for col in _STRING_COLS
+        if col in df.columns and col != "published_date"
+    ]
+    if "published_date" in df.columns:
+        explicit_schema.append(bigquery.SchemaField("published_date", "DATETIME"))
+
     job_config = bigquery.LoadJobConfig(
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
         autodetect=True,
+        schema=explicit_schema,
+        schema_update_options=[
+            bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION,
+        ],
     )
 
     job = client.load_table_from_dataframe(df, table_ref, job_config=job_config)
@@ -286,6 +309,14 @@ def run_gold_pipeline(
 
     df = _read_silver_parquet(source_name, date)
     rows_in = len(df)
+
+    if "published_date" in df.columns:
+        logger.info(
+            "published_date dtype=%s type_counts=%s",
+            df["published_date"].dtype,
+            df["published_date"].apply(type).value_counts().to_dict(),
+        )
+        logger.info("published_date head: %s", df["published_date"].head(5).tolist())
 
     # Fix: restore dq_reference_columns so dq_score_post uses the same column set
     # as dq_score_pre did during the silver run (df.attrs is not preserved in Parquet)
