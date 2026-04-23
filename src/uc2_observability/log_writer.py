@@ -30,7 +30,13 @@ class RunLogWriter:
         start_time: float | None = None,
     ) -> dict:
         source_path = state.get("source_path", "unknown")
-        source_name = Path(source_path).stem if source_path != "unknown" else "unknown"
+        source_name = (
+            state.get("resolved_source_name")
+            or (Path(source_path).stem if source_path != "unknown" else "unknown")
+        )
+        # GCS glob paths produce stem="*"; fall back to parent dir name
+        if source_name == "*":
+            source_name = Path(source_path.replace("*", "")).parent.name or "unknown"
 
         run_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
