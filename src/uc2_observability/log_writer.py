@@ -80,6 +80,8 @@ class RunLogWriter:
             "dq_delta": dq_delta,
             "enrichment_stats": state.get("enrichment_stats", {}),
             "block_sequence": state.get("block_sequence", []),
+            "sequence_reasoning": state.get("sequence_reasoning", ""),
+            "skipped_blocks": state.get("skipped_blocks", {}),
             "audit_log": state.get("audit_log", []),
             "column_mapping": state.get("column_mapping", {}),
             "operations": list(operations) if operations else [],

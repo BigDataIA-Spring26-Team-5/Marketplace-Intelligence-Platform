@@ -55,11 +55,10 @@ def route_after_analyze_schema(state: PipelineState) -> str:
 
 def plan_sequence_node(state: PipelineState) -> dict:
     """
-    Agent 3: LLM call to determine optimal block execution order.
+    Agent 3: LLM selects which optional blocks to run and orders them.
 
-    Receives the block pool (determined by domain/enrichment settings) plus
-    domain, source schema, and gap/registry context. Returns an ordered sequence.
-    Agent 3 can only reorder — it cannot add or remove blocks from the pool.
+    Mandatory blocks always run. Optional blocks are included only if
+    beneficial for this specific source based on its schema characteristics.
     """
     if state.get("block_sequence"):
         return {}
@@ -71,24 +70,25 @@ def plan_sequence_node(state: PipelineState) -> dict:
     enable_enrichment = state.get("enable_enrichment", True)
 
     block_reg = BlockRegistry.instance()
-
     pipeline_mode = state.get("pipeline_mode") or "full"
+
+    # Mandatory blocks per mode — always forced into the sequence
     if pipeline_mode == "silver":
-        pool = block_reg.get_silver_sequence(domain=domain)
-        logger.info(f"Silver mode: using silver sequence ({len(pool)} blocks)")
-        return {
-            "block_sequence": pool,
-            "sequence_reasoning": "silver mode — schema transform only, no dedup/enrichment",
-        }
+        mandatory = ["dq_score_pre", "__generated__", "schema_enforce"]
+        optional_names = [
+            "strip_whitespace", "lowercase_brand", "remove_noise_words",
+            "strip_punctuation", "extract_quantity_column",
+        ]
+    else:
+        mandatory = ["dq_score_pre", "__generated__", "dedup_stage", "dq_score_post"]
+        optional_names = [
+            "strip_whitespace", "lowercase_brand", "remove_noise_words",
+            "strip_punctuation", "extract_quantity_column", "enrich_stage",
+        ]
 
-    pool = block_reg.get_default_sequence(
-        domain=domain,
-        unified_schema=get_unified_schema(),
-        enable_enrichment=enable_enrichment,
-    )
-    blocks_metadata = block_reg.get_blocks_with_metadata(pool)
-
-    generated_block_prefixes = ("DYNAMIC_MAPPING_",)
+    # Build metadata for mandatory and optional blocks separately
+    mandatory_metadata = block_reg.get_blocks_with_metadata(mandatory)
+    optional_metadata = block_reg.get_blocks_with_metadata(optional_names)
 
     gap_summary = {
         "gaps_detected": len(gaps),
@@ -96,7 +96,6 @@ def plan_sequence_node(state: PipelineState) -> dict:
         "misses_requiring_generated_blocks": [
             g["target_column"] for g in registry_misses
         ],
-        "generated_block_prefixes": generated_block_prefixes,
     }
 
     compact_schema = {
@@ -114,35 +113,35 @@ def plan_sequence_node(state: PipelineState) -> dict:
                     domain=domain,
                     source_schema=json.dumps(compact_schema, indent=2),
                     gap_summary=json.dumps(gap_summary, indent=2),
-                    blocks_metadata=json.dumps(blocks_metadata, indent=2),
+                    mandatory_blocks=json.dumps(mandatory_metadata, indent=2),
+                    optional_blocks=json.dumps(optional_metadata, indent=2),
                 ),
             }
         ],
     )
 
-    sequence = result.get("block_sequence", pool)
+    sequence = result.get("block_sequence", [])
     reasoning = result.get("reasoning", "")
+    skipped = result.get("skipped_blocks", {})
 
-    # Expand stages in pool so the missing-check uses individual block names,
-    # matching what Agent 3 received and returned (get_blocks_with_metadata expands stages).
-    expanded_pool = []
-    for item in pool:
-        if block_reg.is_stage(item):
-            expanded_pool.extend(block_reg.expand_stage(item))
-        else:
-            expanded_pool.append(item)
+    # Force-insert any missing mandatory blocks in their correct positions
+    if "dq_score_pre" not in sequence:
+        sequence.insert(0, "dq_score_pre")
+    if "__generated__" not in sequence:
+        idx = sequence.index("dq_score_pre") + 1 if "dq_score_pre" in sequence else 0
+        sequence.insert(idx, "__generated__")
+    if pipeline_mode == "silver" and "schema_enforce" not in sequence:
+        sequence.append("schema_enforce")
+    if pipeline_mode != "silver":
+        if "dedup_stage" not in sequence:
+            insert_at = len(sequence) - 1 if "dq_score_post" in sequence else len(sequence)
+            sequence.insert(insert_at, "dedup_stage")
+        if "dq_score_post" not in sequence:
+            sequence.append("dq_score_post")
 
-    missing = [b for b in expanded_pool if b not in sequence]
-    if missing:
-        logger.warning(
-            f"Agent 3 omitted blocks {missing} — appending at end before dq_score_post"
-        )
-        if "dq_score_post" in sequence:
-            idx = sequence.index("dq_score_post")
-            for b in missing:
-                sequence.insert(idx, b)
-        else:
-            sequence.extend(missing)
+    if skipped:
+        for block, reason in skipped.items():
+            logger.info(f"Agent 3 skipped '{block}': {reason}")
 
     logger.info(f"Agent 3 planned sequence ({len(sequence)} blocks): {sequence}")
     if reasoning:
@@ -151,6 +150,7 @@ def plan_sequence_node(state: PipelineState) -> dict:
     result: dict = {
         "block_sequence": sequence,
         "sequence_reasoning": reasoning,
+        "skipped_blocks": skipped,
     }
 
     # Write complete YAML cache entry now that all three agents have run.
@@ -176,6 +176,7 @@ def plan_sequence_node(state: PipelineState) -> dict:
                 "block_registry_hits": state.get("block_registry_hits", {}),
                 "block_sequence": sequence,
                 "sequence_reasoning": reasoning,
+                "skipped_blocks": skipped,
                 "enrichment_columns_to_generate": state.get("enrichment_columns_to_generate", []),
                 "enrich_alias_ops": state.get("enrich_alias_ops", []),
                 "gaps": state.get("gaps", []),
