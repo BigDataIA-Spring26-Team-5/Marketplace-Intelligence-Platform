@@ -40,15 +40,14 @@ SOURCE_DOMAIN = {
 }
 
 # Logical source names to never process (leave in Bronze).
-SKIP_SOURCES = {"usda/sr_legacy", "usda/survey"}
+# usda/usda/incremental: superseded by branded+foundation sub-type partitions.
+SKIP_SOURCES = {"usda/sr_legacy", "usda/survey", "usda", "usda/incremental"}
 
 # Remap logical source names to canonical Silver source names.
 # Use when a DAG sub-directory is an infra artifact, not a semantic sub-type.
-# e.g. usda/bulk/2026/04/23/incremental/ is still plain USDA API data.
 # off/delta is a DAG-generated delta dir on top of the full 04/21 snapshot.
 SOURCE_ALIAS: dict[str, str] = {
-    "usda/incremental": "usda",
-    "off/delta":        "off",
+    "off/delta": "off",
 }
 
 # For these sources, only the latest date partition is processed.
