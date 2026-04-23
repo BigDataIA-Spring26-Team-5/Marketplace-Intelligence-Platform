@@ -10,7 +10,10 @@
         "name": "source_name",
         "type": "query",
         "label": "Source",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
         "query": "label_values(etl_dq_score_pre, source_name)",
         "includeAll": true,
         "allValue": ".*",
@@ -24,7 +27,12 @@
       "id": 1,
       "type": "timeseries",
       "title": "DQ Scores Over Time",
-      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "etl_dq_score_pre{source_name=~\"$source_name\"}",
@@ -44,8 +52,15 @@
       "id": 2,
       "type": "barchart",
       "title": "Enrichment Tier Breakdown",
-      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
-      "options": { "stacking": "normal" },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "stacking": "normal"
+      },
       "targets": [
         {
           "expr": "etl_enrichment_s1_resolved{source_name=~\"$source_name\"}",
@@ -69,14 +84,28 @@
       "id": 3,
       "type": "stat",
       "title": "Run Status",
-      "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 6,
+        "h": 4
+      },
       "options": {
         "colorMode": "background",
         "thresholds": {
           "steps": [
-            { "value": 0, "color": "red" },
-            { "value": 0.5, "color": "yellow" },
-            { "value": 1, "color": "green" }
+            {
+              "value": 0,
+              "color": "red"
+            },
+            {
+              "value": 0.5,
+              "color": "yellow"
+            },
+            {
+              "value": 1,
+              "color": "green"
+            }
           ]
         }
       },
@@ -91,7 +120,12 @@
       "id": 4,
       "type": "timeseries",
       "title": "Row Counts",
-      "gridPos": { "x": 6, "y": 8, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 6,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "etl_rows_in{source_name=~\"$source_name\"}",
@@ -111,14 +145,53 @@
       "id": 5,
       "type": "timeseries",
       "title": "Run Duration",
-      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
       "fieldConfig": {
-        "defaults": { "unit": "s" }
+        "defaults": {
+          "unit": "s"
+        }
       },
       "targets": [
         {
           "expr": "etl_duration_seconds{source_name=~\"$source_name\"}",
           "legendFormat": "Duration ({{run_id}})"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "barchart",
+      "title": "Block-by-Block DQ Progress",
+      "description": "DQ score after each pipeline block \u2014 shows enrichment improving data quality step by step",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 9
+      },
+      "options": {
+        "stacking": "none",
+        "xTickLabelRotation": -30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit",
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "etl_block_dq_score{source=~\"$source_name\"}",
+          "legendFormat": "{{source}} \u2014 {{block_name}} (seq {{block_seq}})"
         }
       ]
     }
