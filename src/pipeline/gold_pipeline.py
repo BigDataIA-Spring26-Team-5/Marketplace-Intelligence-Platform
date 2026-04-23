@@ -326,9 +326,10 @@ def run_gold_pipeline(
         )
         logger.info("published_date head: %s", df["published_date"].head(5).tolist())
 
-    # Fix: restore dq_reference_columns so dq_score_post uses the same column set
-    # as dq_score_pre did during the silver run (df.attrs is not preserved in Parquet)
-    df.attrs["dq_reference_columns"] = [c for c in df.columns if c not in _SKIP_ALWAYS]
+    # Gold now runs its own dq_score_pre block at the top of the sequence
+    # (see block_registry.get_gold_sequence), so pre and post share the same
+    # reference column set — the full Silver column set including empty enrichment
+    # cols. The delta then measures the true enrichment lift.
 
     block_reg = BlockRegistry.instance()
     gold_sequence = block_reg.get_gold_sequence(domain=domain)
