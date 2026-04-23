@@ -23,6 +23,15 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_DQ_COLS = ["product_name", "brand_name", "primary_category", "ingredients"]
+
+
+def _compute_block_dq(df: pd.DataFrame) -> float:
+    cols = [c for c in _DQ_COLS if c in df.columns]
+    if not cols or len(df) == 0:
+        return 0.0
+    return round(float(df[cols].notna().mean().mean()), 4)
+
 
 class PipelineRunner:
     """
@@ -144,6 +153,21 @@ class PipelineRunner:
                     })
                 except Exception as e:
                     logger.warning(f"UC2 block_end emit failed ({block_name}): {e}")
+
+            # UC2: push per-block DQ score to Pushgateway for real-time Grafana trend
+            if _UC2_AVAILABLE and run_id and source_name:
+                try:
+                    from src.uc2_observability.metrics_collector import MetricsCollector
+                    MetricsCollector().push_block_dq(
+                        run_id=run_id,
+                        source=source_name,
+                        block_name=block_name,
+                        block_seq=len(audit_log),
+                        dq_score=_compute_block_dq(df),
+                        rows=len(df),
+                    )
+                except Exception as e:
+                    logger.warning(f"UC2 block DQ push failed ({block_name}): {e}")
 
         return df, audit_log
 
