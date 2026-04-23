@@ -100,7 +100,7 @@ class LLMEnrichBlock(Block):
                     f"for {len(changed)} rows. These rows: {changed.tolist()[:10]}"
                 )
 
-        # Store stats for access by the UI/graph
-        self.last_enrichment_stats = stats
+        # Store stats at class level so gold_pipeline can read LLMEnrichBlock.last_enrichment_stats
+        LLMEnrichBlock.last_enrichment_stats = stats
 
         return df
