@@ -12,7 +12,7 @@ SIZE_PATTERN = re.compile(
 
 
 class ExtractQuantityColumnBlock(Block):
-    name = "extract_quantity_column"
+    name = "nutrition__extract_quantity_column"
     domain = "nutrition"
     description = "Extract size/quantity from product_name into a separate sizes column"
     inputs = ["product_name"]

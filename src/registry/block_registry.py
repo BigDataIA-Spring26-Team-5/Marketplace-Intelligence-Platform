@@ -1,9 +1,17 @@
-"""Block registry — discovers and loads pre-built transformation blocks."""
+"""Block registry — discovers and loads pre-built transformation blocks.
+
+Block sequences are driven by domain_packs/<domain>/block_sequence.yaml.
+Adding a new domain requires only a new domain_packs/<domain>/ directory — zero
+edits to this file.
+"""
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 from pathlib import Path
+
+import yaml
 
 from src.blocks.base import Block
 from src.schema.models import UnifiedSchema
@@ -11,9 +19,7 @@ from src.blocks.strip_whitespace import StripWhitespaceBlock
 from src.blocks.lowercase_brand import LowercaseBrandBlock
 from src.blocks.remove_noise_words import RemoveNoiseWordsBlock
 from src.blocks.strip_punctuation import StripPunctuationBlock
-from src.blocks.extract_quantity_column import ExtractQuantityColumnBlock
 from src.blocks.keep_quantity_in_name import KeepQuantityInNameBlock
-from src.blocks.extract_allergens import ExtractAllergensBlock
 from src.blocks.fuzzy_deduplicate import FuzzyDeduplicateBlock
 from src.blocks.column_wise_merge import ColumnWiseMergeBlock
 from src.blocks.golden_record_select import GoldenRecordSelectBlock
@@ -25,16 +31,15 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 GENERATED_BLOCKS_DIR = PROJECT_ROOT / "src" / "blocks" / "generated"
+DOMAIN_PACKS_DIR = PROJECT_ROOT / "domain_packs"
 
-# All registered block instances
+# Kernel blocks only — no food-specific blocks
 _BLOCKS: dict[str, Block] = {
     "strip_whitespace": StripWhitespaceBlock(),
     "lowercase_brand": LowercaseBrandBlock(),
     "remove_noise_words": RemoveNoiseWordsBlock(),
     "strip_punctuation": StripPunctuationBlock(),
-    "extract_quantity_column": ExtractQuantityColumnBlock(),
     "keep_quantity_in_name": KeepQuantityInNameBlock(),
-    "extract_allergens": ExtractAllergensBlock(),
     "fuzzy_deduplicate": FuzzyDeduplicateBlock(),
     "column_wise_merge": ColumnWiseMergeBlock(),
     "golden_record_select": GoldenRecordSelectBlock(),
@@ -44,11 +49,51 @@ _BLOCKS: dict[str, Block] = {
     "schema_enforce": SchemaEnforceBlock(),
 }
 
-# Stage definitions: stage_name -> list of constituent blocks
+# Stage definitions — dedup_stage only; enrich_stage removed (domain packs list blocks individually)
 _STAGES: dict[str, list[str]] = {
     "dedup_stage": ["fuzzy_deduplicate", "column_wise_merge", "golden_record_select"],
-    "enrich_stage": ["extract_allergens", "llm_enrich"],
 }
+
+FALLBACK_SEQUENCE: list[str] = [
+    "dq_score_pre",
+    "__generated__",
+    "strip_whitespace",
+    "remove_noise_words",
+    "dq_score_post",
+]
+
+
+class BlockNotFoundError(KeyError):
+    """Raised at registry init when a block_sequence.yaml references an unknown block."""
+
+
+def _load_domain_sequence(domain: str, sequence_key: str = "sequence") -> list[str]:
+    """Read block sequence from domain_packs/<domain>/block_sequence.yaml.
+
+    Returns FALLBACK_SEQUENCE with a warning if the file is absent.
+    Raises BlockNotFoundError at call time if any listed name is unresolvable
+    (checked by BlockRegistry.__init__ after custom blocks are discovered).
+    """
+    pack_file = DOMAIN_PACKS_DIR / domain / "block_sequence.yaml"
+    if not pack_file.exists():
+        logger.warning(
+            "No block_sequence.yaml for domain '%s' — using FALLBACK_SEQUENCE", domain
+        )
+        return list(FALLBACK_SEQUENCE)
+
+    with open(pack_file) as f:
+        data = yaml.safe_load(f)
+
+    seq = data.get(sequence_key) or data.get("sequence")
+    if not seq:
+        logger.warning(
+            "block_sequence.yaml for domain '%s' missing '%s' key — using FALLBACK_SEQUENCE",
+            domain,
+            sequence_key,
+        )
+        return list(FALLBACK_SEQUENCE)
+
+    return list(seq)
 
 
 def _discover_generated_blocks() -> dict[str, Block]:
@@ -103,6 +148,7 @@ class BlockRegistry:
     def __init__(self) -> None:
         self.blocks = dict(_BLOCKS)
         self._load_generated_blocks()
+        self._discover_domain_custom_blocks()
 
     def _load_generated_blocks(self) -> None:
         """Load dynamically generated blocks from disk."""
@@ -112,6 +158,47 @@ class BlockRegistry:
             f"BlockRegistry initialized with {len(self.blocks)} blocks "
             f"({len(generated)} generated)"
         )
+
+    def _discover_domain_custom_blocks(self) -> None:
+        """Scan domain_packs/*/custom_blocks/*.py and register Block subclasses.
+
+        Blocks are registered under key '<domain>__<block.name>' to prevent
+        cross-domain collisions.
+        """
+        if not DOMAIN_PACKS_DIR.exists():
+            return
+
+        for domain_dir in sorted(DOMAIN_PACKS_DIR.iterdir()):
+            if not domain_dir.is_dir():
+                continue
+            custom_dir = domain_dir / "custom_blocks"
+            if not custom_dir.is_dir():
+                continue
+            domain = domain_dir.name
+
+            for py_file in sorted(custom_dir.glob("*.py")):
+                if py_file.name.startswith("_"):
+                    continue
+                module_name = f"domain_packs.{domain}.custom_blocks.{py_file.stem}"
+                try:
+                    spec = importlib.util.spec_from_file_location(module_name, py_file)
+                    if spec is None or spec.loader is None:
+                        continue
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+                    for attr_name in dir(mod):
+                        attr = getattr(mod, attr_name)
+                        if (
+                            isinstance(attr, type)
+                            and issubclass(attr, Block)
+                            and attr is not Block
+                        ):
+                            instance = attr()
+                            key = f"{domain}__{instance.name}" if not instance.name.startswith(f"{domain}__") else instance.name
+                            self.blocks[key] = instance
+                            logger.info("Discovered custom block: %s (domain: %s)", key, domain)
+                except Exception as exc:
+                    logger.error("Failed to load custom block from %s: %s", py_file, exc)
 
     def refresh(self) -> None:
         """Re-discover generated blocks (call after register_blocks_node writes new files)."""
@@ -148,80 +235,54 @@ class BlockRegistry:
             if block.domain in ("all", domain)
         ]
 
+    def validate_sequence(self, sequence: list[str], domain: str) -> None:
+        """Raise BlockNotFoundError if any name in sequence is unresolvable.
+
+        Valid entries: kernel block names, stage names, '__generated__', or
+        namespaced custom block keys (already registered by this point).
+        """
+        valid_names = set(self.blocks.keys()) | set(_STAGES.keys()) | {"__generated__"}
+        unknown = [
+            name for name in sequence
+            if name not in valid_names
+        ]
+        if unknown:
+            raise BlockNotFoundError(
+                f"Domain '{domain}' block_sequence references unknown blocks: {unknown}. "
+                f"Available: {sorted(valid_names)}"
+            )
+
     def get_default_sequence(
         self,
         domain: str = "nutrition",
         unified_schema: UnifiedSchema | None = None,
         enable_enrichment: bool = True,
     ) -> list[str]:
-        """
-        Return the default block execution sequence for a domain.
+        """Return the block execution sequence for a domain.
 
-        Uses stages for dedup and enrichment to make sequence more readable.
+        Reads domain_packs/<domain>/block_sequence.yaml. Falls back to
+        FALLBACK_SEQUENCE when no domain pack exists.
         The __generated__ sentinel marks where agent-generated transforms are injected.
         """
-        base = [
-            "dq_score_pre",
-            "__generated__",
-            "strip_whitespace",
-            "lowercase_brand",
-            "remove_noise_words",
-            "strip_punctuation",
-        ]
-
-        if domain == "pricing":
-            base.append("keep_quantity_in_name")
-        else:
-            base.append("extract_quantity_column")
-
-        has_enrichment = (
-            bool(unified_schema.enrichment_columns)
-            if unified_schema is not None
-            else domain in ("nutrition", "safety")
-        )
-
-        base.append("dedup_stage")
-
-        if has_enrichment and enable_enrichment:
-            base.append("enrich_stage")
-
-        base.append("dq_score_post")
-        return base
+        seq = _load_domain_sequence(domain, sequence_key="sequence")
+        self.validate_sequence(seq, domain)
+        return seq
 
     def get_silver_sequence(self, domain: str = "nutrition") -> list[str]:
+        """Block sequence for Bronze→Silver: schema transform only.
+
+        Reads the silver_sequence key from domain_packs/<domain>/block_sequence.yaml.
+        Falls back to FALLBACK_SEQUENCE when absent.
         """
-        Block sequence for Bronze→Silver: schema transform only.
-        Stops before dedup and enrichment — Silver contains all rows.
-        """
-        base = [
-            "dq_score_pre",
-            "__generated__",
-            "strip_whitespace",
-            "lowercase_brand",
-            "remove_noise_words",
-            "strip_punctuation",
-        ]
-        if domain == "pricing":
-            base.append("keep_quantity_in_name")
-        else:
-            base.append("extract_quantity_column")
-        base.append("schema_enforce")
-        return base
+        return _load_domain_sequence(domain, sequence_key="silver_sequence")
 
     def get_gold_sequence(self, domain: str = "nutrition") -> list[str]:
-        """
-        Block sequence for Silver→Gold: re-score pre, dedup + enrichment, final DQ score.
-        Reads Silver Parquet (already schema-transformed).
+        """Block sequence for Silver→Gold: dedup + enrichment + DQ.
 
-        dq_score_pre runs first so pre and post share the exact same reference column
-        set (all Silver columns incl. empty enrichment cols). The delta then measures
-        the enrichment lift honestly: how many previously-null cells got filled.
+        Reads the gold_sequence key from domain_packs/<domain>/block_sequence.yaml.
+        Falls back to FALLBACK_SEQUENCE when absent.
         """
-        base = ["dq_score_pre", "dedup_stage"]
-        if domain in ("nutrition", "safety", "retail"):
-            base.append("enrich_stage")
-        base.append("dq_score_post")
-        return base
+        return _load_domain_sequence(domain, sequence_key="gold_sequence")
 
     def get_blocks_with_metadata(self, block_names: list[str]) -> list[dict]:
         """Return metadata dicts for the given block names (preserving order).

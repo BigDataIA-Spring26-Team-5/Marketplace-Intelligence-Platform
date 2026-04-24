@@ -33,28 +33,34 @@ from src.enrichment.corpus import add_to_corpus, load_corpus, save_corpus
 
 logger = logging.getLogger(__name__)
 
-CATEGORIES = (
+_CATEGORIES_FALLBACK = (
     "Breakfast Cereals, Dairy, Meat & Poultry, Seafood, Bakery, "
     "Confectionery, Snacks, Beverages, Condiments, Frozen Foods, Fruits, "
     "Vegetables, Pasta & Grains, Soups, Baby Food, Supplements, "
     "Canned Foods, Deli, Pet Food, Other"
 )
 
-SYSTEM_PROMPT = (
-    "You are a product categorization assistant. Assign exactly one category "
-    "from the list below. Return ONLY a JSON object with one key: "
-    '{{"primary_category": "<category>"}}. If you cannot determine the category '
-    'with confidence, return {{"primary_category": null}}.\n\n'
-    f"CATEGORIES: {CATEGORIES}"
-)
 
-BATCH_SYSTEM_PROMPT = (
-    "You are a product categorization assistant. Categorize each product below. "
-    "Return ONLY a JSON object: "
-    '{"results": [{"idx": 0, "primary_category": "<category>"}, ...]}. '
-    "Use null for primary_category if unsure. Include ALL indices in results.\n\n"
-    f"CATEGORIES: {CATEGORIES}"
-)
+def _build_prompts(domain: str) -> tuple[str, str, str]:
+    """Return (categories_str, system_prompt, batch_system_prompt) for the given domain."""
+    from src.enrichment.rules_loader import EnrichmentRulesLoader
+    loader = EnrichmentRulesLoader(domain)
+    categories_str = loader.llm_categories_string or _CATEGORIES_FALLBACK
+    system_prompt = (
+        "You are a product categorization assistant. Assign exactly one category "
+        "from the list below. Return ONLY a JSON object with one key: "
+        '{{"primary_category": "<category>"}}. If you cannot determine the category '
+        'with confidence, return {{"primary_category": null}}.\n\n'
+        f"CATEGORIES: {categories_str}"
+    )
+    batch_system_prompt = (
+        "You are a product categorization assistant. Categorize each product below. "
+        "Return ONLY a JSON object: "
+        '{"results": [{"idx": 0, "primary_category": "<category>"}, ...]}. '
+        "Use null for primary_category if unsure. Include ALL indices in results.\n\n"
+        f"CATEGORIES: {categories_str}"
+    )
+    return categories_str, system_prompt, batch_system_prompt
 
 _LLM_BATCH_SIZE = int(__import__("os").environ.get("LLM_ENRICH_BATCH_SIZE", "50"))
 
@@ -119,13 +125,42 @@ def _build_batch_rag_prompt(rows: list[pd.Series], neighbors_list: list[list[dic
     return "\n".join(lines)
 
 
+def _provider_from_model(model: str) -> str:
+    m = model.lower()
+    if m.startswith("groq"):
+        return "groq"
+    if m.startswith("deepseek"):
+        return "deepseek"
+    return "anthropic"
+
+
+def _get_api_keys(provider: str) -> list[str]:
+    """Return list of API keys for provider from env. GROQ_API_KEYS (comma-sep) takes precedence."""
+    import os
+    prefix = {"groq": "GROQ", "anthropic": "ANTHROPIC", "deepseek": "DEEPSEEK"}.get(provider, provider.upper())
+    multi = os.environ.get(f"{prefix}_API_KEYS", "").strip()
+    if multi:
+        return [k.strip() for k in multi.split(",") if k.strip()]
+    keys = []
+    primary = os.environ.get(f"{prefix}_API_KEY", "")
+    if primary:
+        keys.append(primary)
+    for i in range(2, 10):
+        k = os.environ.get(f"{prefix}_API_KEY_{i}", "")
+        if k:
+            keys.append(k)
+    return keys or [""]
+
+
 async def _call_one_batch(
     miss_rows: list,
     batch_neighbors: list,
     model: str,
     rate_limiter,
     batch_label: str,
+    batch_system_prompt: str,
     max_retries: int = 4,
+    api_key: str | None = None,
 ) -> dict | Exception:
     """Fire one LLM batch call, paced by rate_limiter. Returns result dict or Exception."""
     prompt = _build_batch_rag_prompt(miss_rows, batch_neighbors)
@@ -136,10 +171,11 @@ async def _call_one_batch(
             return await async_call_llm_json(
                 model=model,
                 messages=[
-                    {"role": "system", "content": BATCH_SYSTEM_PROMPT},
+                    {"role": "system", "content": batch_system_prompt},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
+                api_key=api_key,
             )
         except Exception as e:
             last_exc = e
@@ -161,6 +197,7 @@ def llm_enrich(
     enrich_cols: list[str],
     needs_enrichment: pd.Series,
     cache_client=None,
+    domain: str = "nutrition",
 ) -> tuple[pd.DataFrame, pd.Series, dict]:
     """
     Call LLM with RAG context for rows where primary_category is still null.
@@ -181,13 +218,17 @@ def llm_enrich(
         return df, needs_enrichment, {"resolved": 0}
 
     from src.enrichment.rate_limiter import RateLimiter
-    rate_limiter = RateLimiter("anthropic")
 
+    _, _system_prompt, batch_system_prompt = _build_prompts(domain)
     model = get_enrichment_llm()
+    provider = _provider_from_model(model)
+    api_keys = _get_api_keys(provider)
+    _probe_limiter = RateLimiter(provider)
+
     rows_to_enrich = df.index[mask].tolist()
     logger.info(
-        "S3 LLM: %d rows need primary_category (batch_size=%d, dispatch_interval=%.2fs)",
-        len(rows_to_enrich), _LLM_BATCH_SIZE, rate_limiter.min_interval,
+        "S3 LLM: %d rows need primary_category (batch_size=%d, dispatch_interval=%.2fs, workers=%d)",
+        len(rows_to_enrich), _LLM_BATCH_SIZE, _probe_limiter.min_interval, len(api_keys),
     )
 
     index, metadata = load_corpus()
@@ -250,20 +291,36 @@ def llm_enrich(
         needs_enrichment = df[enrich_cols].isna().any(axis=1)
         return df, needs_enrichment, {"resolved": resolved}
 
-    # ── Phase 2: Fire LLM batches sequentially, paced by rate_limiter ──
-    # Sequential loop avoids concurrent burst — rate_limiter.acquire() enforces
-    # the sliding-window RPM/TPM budget before each dispatch.
-    async def _gather_all():
-        results = []
-        for i, (_, miss_rows, neighbors) in enumerate(pending_batches):
-            result = await _call_one_batch(
-                miss_rows=miss_rows,
-                batch_neighbors=neighbors,
-                model=model,
-                rate_limiter=rate_limiter,
-                batch_label=f"batch[{i * _LLM_BATCH_SIZE}:{(i + 1) * _LLM_BATCH_SIZE}]",
-            )
-            results.append(result)
+    # ── Phase 2: Dispatch batches across N workers (one per API key) ────
+    # Each worker has its own RateLimiter so keys don't share budget.
+    # With N keys effective TPM = N × per-key TPM.
+    from src.enrichment.rate_limiter import RateLimiter
+
+    async def _run_workers() -> list:
+        queue: asyncio.Queue = asyncio.Queue()
+        for i in range(len(pending_batches)):
+            await queue.put(i)
+        results: list = [Exception("not processed")] * len(pending_batches)
+
+        async def worker(api_key: str) -> None:
+            limiter = RateLimiter(provider)
+            while True:
+                try:
+                    i = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                _, miss_rows, neighbors = pending_batches[i]
+                results[i] = await _call_one_batch(
+                    miss_rows=miss_rows,
+                    batch_neighbors=neighbors,
+                    model=model,
+                    rate_limiter=limiter,
+                    batch_label=f"batch[{i * _LLM_BATCH_SIZE}:{(i + 1) * _LLM_BATCH_SIZE}]",
+                    batch_system_prompt=batch_system_prompt,
+                    api_key=api_key or None,
+                )
+
+        await asyncio.gather(*[worker(k) for k in api_keys])
         return results
 
     import concurrent.futures
@@ -272,7 +329,7 @@ def llm_enrich(
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(_gather_all())
+            return loop.run_until_complete(_run_workers())
         finally:
             loop.close()
 

@@ -542,6 +542,256 @@ def _format_logs_as_text(
     return "\n".join(lines) if lines else "(no log entries)"
 
 
+# ── UC3 Search ────────────────────────────────────────────────────────────
+
+
+def _render_search_page() -> None:
+    from src.uc3_search.hybrid_search import HybridSearch
+    from src.uc3_search.indexer import ProductIndexer
+
+    st.header("Product Search (UC3)")
+    st.caption("Hybrid BM25 + Semantic search with Reciprocal Rank Fusion over the unified gold catalog.")
+
+    # Build index button
+    col_info, col_btn = st.columns([4, 1])
+    with col_btn:
+        if st.button("Build / Refresh Index", key="uc3_build"):
+            with st.spinner("Loading gold catalog from BigQuery and building indexes…"):
+                try:
+                    from google.cloud import bigquery
+                    client = bigquery.Client(project="mip-platform-2024")
+                    df = client.query(
+                        "SELECT product_name, brand_name, primary_category, ingredients, "
+                        "allergens, dietary_tags, is_organic, dq_score_post, data_source, "
+                        "is_recalled, recall_class "
+                        "FROM `mip-platform-2024.mip_gold.products` WHERE product_name IS NOT NULL"
+                    ).to_dataframe()
+                    indexer = ProductIndexer()
+                    n = indexer.build(df)
+                    st.session_state.uc3_search = HybridSearch()
+                    st.success(f"Indexed {n} products. Search ready!")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Index build failed: {exc}")
+
+    if "uc3_search" not in st.session_state:
+        st.session_state.uc3_search = HybridSearch()
+
+    hs: HybridSearch = st.session_state.uc3_search
+
+    with col_info:
+        if hs.is_ready():
+            st.success("Search indexes loaded and ready.")
+        else:
+            st.warning("Indexes not built yet — click **Build / Refresh Index** to load the gold catalog.")
+            return
+
+    st.markdown("---")
+
+    _EXAMPLE_QUERIES = [
+        ("Semantic", "organic gluten-free oat cereal"),
+        ("Keyword",  "peanut butter"),
+        ("Recall",   "romaine lettuce"),
+        ("Brand",    "Kraft cheddar cheese"),
+        ("Safety",   "nut-free snack for kids"),
+    ]
+    st.caption("**Example queries** — click to load:")
+    ex_cols = st.columns(len(_EXAMPLE_QUERIES))
+    for col, (label, q) in zip(ex_cols, _EXAMPLE_QUERIES):
+        with col:
+            if st.button(f"{label}", key=f"uc3_ex_{label}"):
+                st.session_state["uc3_query_val"] = q
+
+    default_query = st.session_state.get("uc3_query_val", "")
+    query = st.text_input("Search products", value=default_query,
+                          placeholder="e.g., organic gluten-free cereal", key="uc3_query")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        search_mode = st.selectbox("Search mode", ["hybrid", "bm25", "semantic"], key="uc3_mode")
+    with col2:
+        top_k = st.slider("Results", 1, 20, 10, key="uc3_topk")
+    with col3:
+        suppress = st.checkbox("Hide Class I recalled products", value=True, key="uc3_suppress")
+
+    if query:
+        with st.spinner("Searching…"):
+            results = hs.search(query, top_k=top_k, mode=search_mode, suppress_recalled=suppress)
+
+        if not results:
+            st.info("No results found.")
+            return
+
+        st.caption(f"{len(results)} result(s) — mode: **{search_mode}**")
+        import pandas as pd
+        cols_show = ["rank", "product_name", "brand_name", "primary_category",
+                     "dietary_tags", "allergens", "is_organic", "dq_score_post",
+                     "data_source", "score"]
+        df_results = pd.DataFrame(results)
+        show_cols = [c for c in cols_show if c in df_results.columns]
+        st.dataframe(df_results[show_cols], use_container_width=True)
+
+
+# ── UC4 Recommendations ───────────────────────────────────────────────────
+
+
+def _render_recommendations_page() -> None:
+    from src.uc4_recommendations.recommender import ProductRecommender
+
+    st.header("Product Recommendations (UC4)")
+    st.caption("Association rules (also-bought) + graph traversal (cross-category) from Instacart + UC1 enriched catalog.")
+
+    if "uc4_rec" not in st.session_state:
+        if ProductRecommender.is_saved():
+            try:
+                st.session_state.uc4_rec = ProductRecommender.load()
+            except Exception:
+                st.session_state.uc4_rec = ProductRecommender()
+        else:
+            st.session_state.uc4_rec = ProductRecommender()
+
+    rec: ProductRecommender = st.session_state.uc4_rec
+
+    if not rec.is_ready():
+        st.info("Recommender not built. Load Instacart transaction data from BigQuery to start.")
+        col_s, col_b = st.columns([3, 1])
+        with col_s:
+            sample_orders = st.number_input("Sample orders to load", min_value=1000,
+                                             max_value=500000, value=50000, step=10000,
+                                             key="uc4_sample")
+        with col_b:
+            st.write("")
+            if st.button("Load from BigQuery", key="uc4_load"):
+                with st.spinner("Loading Instacart data from BigQuery — this may take a few minutes…"):
+                    try:
+                        tx_df, prod_df = ProductRecommender.load_from_bigquery(
+                            sample_orders=int(sample_orders)
+                        )
+                        stats = rec.build(prod_df, tx_df)
+                        rec.save()
+                        st.session_state.uc4_rec = rec
+                        st.session_state.uc4_tx_df = tx_df
+                        st.success("Recommender ready! (saved to disk)")
+                        st.json(stats)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Build failed: {exc}")
+        return
+
+    stats = rec.stats()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Products", f"{stats['products']:,}")
+    c2.metric("Association Rules", f"{stats['rules']:,}")
+    c3.metric("Graph Edges", f"{stats['graph'].get('copurchase_edges', 0):,}")
+
+    # Pull example products from rules for UI hints
+    examples = rec.top_antecedents(n=8)
+    example_names = [e["product_name"] for e in examples]
+
+    st.markdown("---")
+    tab1, tab2, tab3 = st.tabs(["Also Bought", "You Might Like", "Before vs After (Demo)"])
+
+    with tab1:
+        st.caption("Co-purchase association rules (FP-Growth). Type a product name or pick an example.")
+        if example_names:
+            ex1 = st.selectbox("Quick examples", ["— type below or pick —"] + example_names, key="uc4_ex1")
+        else:
+            ex1 = None
+        default1 = ex1 if ex1 and ex1 != "— type below or pick —" else ""
+        pid = st.text_input("Product name or ID", value=default1, key="uc4_pid_also",
+                            placeholder="e.g., Organic Yellow Onion")
+        if pid:
+            recs = rec.also_bought(pid, top_k=10)
+            if recs:
+                found_pid = rec.find_product(pid)
+                found_name = rec._get_product_name(found_pid) if found_pid else pid
+                st.write(f"**Showing rules for:** {found_name}")
+                st.dataframe(pd.DataFrame(recs), use_container_width=True)
+            else:
+                st.info("No co-purchase rules found. Try one of the example products above.")
+
+    with tab2:
+        st.caption("Cross-category affinity via graph traversal. Finds products in different departments.")
+        if example_names:
+            ex2 = st.selectbox("Quick examples", ["— type below or pick —"] + example_names, key="uc4_ex2")
+        else:
+            ex2 = None
+        default2 = ex2 if ex2 and ex2 != "— type below or pick —" else ""
+        pid2 = st.text_input("Product name or ID", value=default2, key="uc4_pid_like",
+                             placeholder="e.g., Limes")
+        if pid2:
+            recs2 = rec.you_might_like(pid2, top_k=10)
+            if recs2:
+                found_pid2 = rec.find_product(pid2)
+                found_name2 = rec._get_product_name(found_pid2) if found_pid2 else pid2
+                st.write(f"**Showing cross-category for:** {found_name2}")
+                st.dataframe(pd.DataFrame(recs2), use_container_width=True)
+            else:
+                st.info("No cross-category recommendations found. Products may share the same department.")
+
+    with tab3:
+        st.caption(
+            "Shows lift improvement from UC1 deduplication. "
+            "**Raw** uses product names as IDs (text fragmentation). "
+            "**Enriched** uses canonical product IDs (consolidated signal)."
+        )
+        if example_names:
+            ex3 = st.selectbox("Quick examples (pick a product with high lift)",
+                               ["— type below or pick —"] + example_names, key="uc4_ex3")
+        else:
+            ex3 = None
+        default3 = ex3 if ex3 and ex3 != "— type below or pick —" else ""
+        pid3 = st.text_input("Product name or ID", value=default3, key="uc4_pid_demo",
+                             placeholder="e.g., Organic Yellow Onion")
+
+        if pid3 and st.button("Run Comparison", key="uc4_demo_btn"):
+            # Use stored tx_df if available; otherwise fetch a small sample
+            if "uc4_tx_df" not in st.session_state:
+                with st.spinner("Fetching transaction sample from BigQuery for demo…"):
+                    try:
+                        tx_df_demo, _ = ProductRecommender.load_from_bigquery(sample_orders=50000)
+                        st.session_state.uc4_tx_df = tx_df_demo
+                    except Exception as exc:
+                        st.error(f"Failed to load transactions: {exc}")
+                        st.stop()
+            tx_df = st.session_state.uc4_tx_df
+
+            with st.spinner("Mining rules on raw (names) vs enriched (IDs) — ~30 sec…"):
+                try:
+                    result = rec.demo_comparison(tx_df, pid3, top_k=5)
+
+                    st.markdown(f"### Results for: **{result['product_name']}**")
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.subheader("Raw (before UC1)")
+                        st.caption("product_name as ID — text variants fragment signal")
+                        st.metric("Max Lift", result["max_lift_raw"])
+                        st.metric("Unique Product IDs", f"{result['raw_unique_ids']:,}")
+                        if result["raw_recommendations"]:
+                            st.dataframe(pd.DataFrame(result["raw_recommendations"]),
+                                         use_container_width=True)
+                        else:
+                            st.info("No rules found in raw data.")
+                    with col_b:
+                        st.subheader("Enriched (after UC1)")
+                        st.caption("canonical product_id — consolidated signal")
+                        delta = result["lift_improvement"]
+                        st.metric("Max Lift", result["max_lift_enriched"],
+                                  delta=f"+{delta:.4f}" if delta >= 0 else f"{delta:.4f}")
+                        st.metric("Unique Product IDs", f"{result['enriched_unique_ids']:,}")
+                        if result["enriched_recommendations"]:
+                            st.dataframe(pd.DataFrame(result["enriched_recommendations"]),
+                                         use_container_width=True)
+                        else:
+                            st.info("No rules found in enriched data.")
+
+                    st.metric("Signal Consolidation Ratio",
+                              result["signal_consolidation_ratio"],
+                              help="raw_unique_ids / enriched_unique_ids — higher = more fragmentation in raw")
+                except Exception as exc:
+                    st.error(f"Comparison failed: {exc}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────
 
 
@@ -610,9 +860,19 @@ def main() -> None:
     _init_state()
     _setup_logging()
 
+    # Consume _mode_override written by "Run Pipeline" button in domain_kits.py (FR-8)
+    _mode_override = st.session_state.pop("_mode_override", None)
+    _domain_override = st.session_state.pop("_domain_override", None)
+    if _mode_override in ("Pipeline", "Observability", "Domain Packs"):
+        st.session_state["app_mode"] = _mode_override
+    if _domain_override:
+        st.session_state["domain_select"] = _domain_override
+
     # Sidebar: mode selector + cache controls + live log feed
     with st.sidebar:
-        mode = st.radio("Mode", ["Pipeline", "Observability"], key="app_mode")
+        _modes = ["Pipeline", "Observability", "Domain Packs"]
+        _current_mode_idx = _modes.index(st.session_state.get("app_mode", "Pipeline"))
+        mode = st.radio("Mode", _modes, index=_current_mode_idx, key="app_mode")
         st.markdown("---")
         st.markdown("### Cache Controls")
         no_cache = st.checkbox(
@@ -677,8 +937,15 @@ def main() -> None:
             _step_3_pipeline_execution()
         elif step == 4:
             _step_4_results()
+    elif mode == "Search":
+        _render_search_page()
+    elif mode == "Recommendations":
+        _render_recommendations_page()
     elif mode == "Observability":
         _render_observability_page()
+    elif mode == "Domain Packs":
+        from src.ui.domain_kits import render_domain_kits_page
+        render_domain_kits_page()
 
 
 if __name__ == "__main__":

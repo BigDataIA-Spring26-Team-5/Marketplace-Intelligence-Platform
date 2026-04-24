@@ -37,6 +37,10 @@ poetry run streamlit run app.py
 # MCP observability server (FastAPI, Redis-cached, port 8001)
 uvicorn src.uc2_observability.mcp_server:app --host 0.0.0.0 --port 8001
 
+# REST API (UC1 pipeline + UC2 observability + UC3 search + UC4 recommendations, port 8002)
+# Swagger UI: http://localhost:8002/docs — all endpoints versioned under /v1/
+uvicorn src.api.main:app --host 0.0.0.0 --port 8002
+
 # (One-time) Build the KNN enrichment corpus from USDA FoodData Central
 poetry run python scripts/build_corpus.py
 poetry run python scripts/build_corpus.py --limit 10000
@@ -46,7 +50,7 @@ poetry run pytest
 poetry run pytest tests/uc2_observability/test_log_writer.py::test_name
 poetry run pytest tests/unit/test_cache_client.py
 poetry run pytest tests/integration/test_cache_pipeline.py
-# (One-time) build FAISS KNN corpus from USDA FoodData Central
+# (One-time) build ChromaDB KNN corpus from USDA FoodData Central
 poetry run python scripts/build_corpus.py
 poetry run python scripts/build_corpus.py --limit 10000
 
@@ -100,13 +104,24 @@ A `yaml` cache hit sets `cache_yaml_hit` in state, which causes `route_after_ana
 
 ### Block sequence has a `"__generated__"` sentinel
 
-[src/registry/block_registry.py](src/registry/block_registry.py) `get_default_sequence(domain, unified_schema, enable_enrichment)` returns an ordered list containing the sentinel `"__generated__"`. [src/pipeline/runner.py](src/pipeline/runner.py) `PipelineRunner` replaces the sentinel with the `DynamicMappingBlock` for the current source at execution time. Two other composite names expand at runtime: `dedup_stage` → `fuzzy_deduplicate, column_wise_merge, golden_record_select`; `enrich_stage` → `extract_allergens, llm_enrich`. Don't remove the sentinel or reorder around it without understanding what is being injected where.
+[src/registry/block_registry.py](src/registry/block_registry.py) reads `domain_packs/<domain>/block_sequence.yaml` and returns the ordered list for that domain, containing the sentinel `"__generated__"`. [src/pipeline/runner.py](src/pipeline/runner.py) `PipelineRunner` replaces the sentinel with the `DynamicMappingBlock` for the current source at execution time. One composite name expands at runtime: `dedup_stage` → `fuzzy_deduplicate, column_wise_merge, golden_record_select`. `enrich_stage` is removed — domain packs list enrichment blocks individually. Don't remove the sentinel or reorder around it without understanding what is being injected where.
+
+### Domain Packs
+
+`domain_packs/<domain>/` is the canonical location for all domain-specific configuration. Adding a new domain requires **zero edits to `src/`**:
+
+- `block_sequence.yaml` — ordered block names (supports `sequence`, `silver_sequence`, `gold_sequence` keys)
+- `enrichment_rules.yaml` — S1 deterministic patterns and S3 LLM rules per field
+- `prompt_examples.yaml` — few-shot column mapping examples injected into Agent 1's prompt
+- `custom_blocks/*.py` — domain-specific `Block` subclasses; auto-discovered at registry init and registered as `<domain>__<block.name>`
+
+`EnrichmentRulesLoader(domain)` in `src/enrichment/rules_loader.py` reads `enrichment_rules.yaml` and exposes `s1_fields` / `llm_fields` / `safety_field_names()` consumed by `LLMEnrichBlock`.
 
 ### Pipeline modes change the block sequence
 
 `--mode` / `state["pipeline_mode"]` selects one of three shapes:
 
-- **`full`** (default): `dq_score_pre → __generated__ → cleaning → dedup_stage → enrich_stage → dq_score_post`. Output: CSV to `output/`.
+- **`full`** (default): sequence from `domain_packs/<domain>/block_sequence.yaml` (e.g. nutrition: `dq_score_pre → __generated__ → cleaning → dedup_stage → nutrition__extract_allergens → llm_enrich → dq_score_post`). Output: CSV to `output/`.
 - **`silver`**: schema transform only via `get_silver_sequence()` — **no dedup, no enrichment**. Output: Parquet to `gs://mip-silver-2024/<source>/<YYYY/MM/DD>/`. `save_output_node` also updates the watermark.
 - **`gold`**: invoked via `src/pipeline/gold_pipeline.py` (separate entry point, not the graph). Reads all Silver Parquet for a `source+date`, runs dedup + enrichment + DQ scoring, appends to BigQuery `mip_gold.products`.
 
@@ -123,7 +138,7 @@ A `yaml` cache hit sets `cache_yaml_hit` in state, which causes `route_after_ana
 [src/blocks/llm_enrich.py](src/blocks/llm_enrich.py) orchestrates three tiers:
 
 1. **S1 deterministic** ([src/enrichment/deterministic.py](src/enrichment/deterministic.py)) — regex/keyword extraction
-2. **S2 KNN corpus** ([src/enrichment/embedding.py](src/enrichment/embedding.py)) — FAISS product-to-product similarity
+2. **S2 KNN corpus** ([src/enrichment/embedding.py](src/enrichment/embedding.py)) — ChromaDB product-to-product similarity
 3. **S3 RAG-LLM** ([src/enrichment/llm_tier.py](src/enrichment/llm_tier.py)) — LLM with top-3 S2 neighbors as RAG context
 
 **Hard safety rule: S2 and S3 touch only `primary_category`.** The safety fields `allergens`, `is_organic`, `dietary_tags` are **extraction-only** (S1 from the product's own text) or null. They are never inferred by KNN similarity or the LLM, because dangerous false positives (e.g., tagging a barley-containing product "gluten-free") are worse than nulls. `LLMEnrichBlock` has a post-run assertion that warns if any S3-resolved row has a safety field that differs from its post-S1 state — **if that fires, something upstream broke the invariant; fix it rather than silencing the warning**.
@@ -132,7 +147,7 @@ S2's `_knn_neighbors` column is a pipeline-internal JSON string consumed only by
 
 ### Corpus persists across runs (feedback loop)
 
-[src/enrichment/corpus.py](src/enrichment/corpus.py) manages a persistent FAISS `IndexFlatIP` (inner product on L2-normalized vectors = cosine similarity) at `corpus/faiss_index.bin` + `corpus/corpus_metadata.json`. Seeded by `scripts/build_corpus.py` (USDA FoodData Central) or bootstrapped in-run from S1-resolved rows if the persistent corpus has fewer than `MIN_CORPUS_SIZE` (10) vectors. **Both S2 and S3 add resolved rows back into the corpus**, so later runs get better. `.bin` is gitignored; `corpus_metadata.json` / `corpus_summary.json` are committed. If `faiss-cpu` is not installed, S2 is skipped with a warning and everything falls through to S3 — **do not treat missing FAISS as a hard error**.
+[src/enrichment/corpus.py](src/enrichment/corpus.py) manages a persistent ChromaDB `product_corpus` collection (HTTP client at `localhost:8000`). Auto-persists — no file-based index management. Seeded by `scripts/build_corpus.py` (USDA FoodData Central) or bootstrapped in-run from S1-resolved rows if the persistent corpus has fewer than `MIN_CORPUS_SIZE` (10) vectors. **Both S2 and S3 add resolved rows back into the corpus**, so later runs get better. If ChromaDB is unreachable, S2 is skipped with a WARNING and everything falls through to S3 — **do not treat missing ChromaDB as a hard error**.
 
 Key thresholds in `corpus.py`: `VOTE_SIMILARITY_THRESHOLD=0.45`, `CONFIDENCE_THRESHOLD_CATEGORY=0.60`, `K_NEIGHBORS=5`.
 
@@ -228,9 +243,13 @@ UC2 event emission from the graph (`run_started`, `run_completed`, `block_start`
 
 `app.py` has a sidebar Mode radio (Pipeline / Observability). `grafana/docker-compose.yml` runs a local Prometheus + Pushgateway + Grafana stack; the full platform `docker-compose.yml` at the repo root adds Kafka, Airflow, Postgres, ChromaDB, Redis, and MLflow. Service endpoints live in [ENDPOINTS.md](ENDPOINTS.md).
 
-### UC3 / UC4 are scaffolding only
+### UC3 / UC4 are fully implemented
 
-[src/uc3_search/](src/uc3_search/) and [src/uc4_recommendations/](src/uc4_recommendations/) contain **placeholder classes that all raise `NotImplementedError`**. They are not wired into `demo.py`, `app.py`, the graph, or the CLI. Don't assume they work.
+[src/uc3_search/](src/uc3_search/) — BM25 + ChromaDB semantic search with Reciprocal Rank Fusion (RRF k=60). Files: `indexer.py` (builds BM25 + ChromaDB product collection), `hybrid_search.py` (query → BM25 top-50 + semantic top-50 → RRF → unified ranking), `evaluator.py` (precision/recall metrics). Wired into REST API under `/v1/search`.
+
+[src/uc4_recommendations/](src/uc4_recommendations/) — association rules + graph traversal recommender. Files: `association_rules.py` (mlxtend Apriori, loads transactions from BigQuery `instacart.transactions_with_names`), `graph_store.py` (networkx cross-category graph), `recommender.py` (unified interface: also-bought via rules + cross-category via graph; before/after lift demo using UC1 canonical IDs). Wired into REST API under `/v1/recommendations`.
+
+Both are registered in `src/api/main.py` and health-checked at `/v1/health`.
 
 ### Airflow orchestration
 
@@ -250,8 +269,24 @@ UC2 event emission from the graph (`run_started`, `run_completed`, `block_start`
 - **Safety boundary in enrichment** — `allergens`, `dietary_tags`, `is_organic` are S1-only. Never add them to S2/S3 output paths.
 
 ## Active Technologies
+- Python 3.11 (Poetry) + LangGraph 0.4, pandas 2.2, PyYAML, pathlib (stdlib), importlib (stdlib) (016-kernel-domain-separation)
+- `domain_packs/<domain>/` filesystem directory; `config/schemas/<domain>_schema.json` for domain schema; `src/blocks/generated/<domain>/` for YAML mapping files (016-kernel-domain-separation)
+- Python 3.11 (Poetry) + FastAPI (already in stack via mcp_server.py), Uvicorn, Pydantic v2 (016-kernel-domain-separation)
+- SQLite via CheckpointManager (run state); Postgres (observability queries); Redis + SQLite fallback (cache) (016-kernel-domain-separation)
+- Python 3.11 + Streamlit (UI), LangGraph 0.4, LiteLLM 1.55, pandas 2.2, PyYAML, pathlib (stdlib), ast (stdlib), subprocess (stdlib) (018-domain-kit-ui-builder)
+- Local VM filesystem (`domain_packs/`), `domain_packs/<domain>/.audit.jsonl` per-domain audit log (018-domain-kit-ui-builder)
+- `src/ui/domain_kits.py` — Domain Packs Streamlit panel (4 tabs: Generate Pack, Block Scaffold, Preview/Validate, Manage Packs) (018-domain-kit-ui-builder)
+- `src/ui/kit_generator.py` — `generate_domain_kit(domain_name, description, csv_content)` → 3 YAML files via LLM (018-domain-kit-ui-builder)
+- `src/ui/block_scaffolder.py` — `generate_block_scaffold(domain_name, description)` → Python Block scaffold via LLM + ast.parse() (018-domain-kit-ui-builder)
+- app.py sidebar radio now has three modes: "Pipeline", "Observability", "Domain Packs" (018-domain-kit-ui-builder)
+- `src/agents/domain_kit_graph.py` — two LangGraph agents: `DomainKitGraph` (8 nodes, YAML generation + HITL + retry) and `ScaffoldGraph` (5 nodes, Block scaffold + syntax retry); `validate_enrichment_rules_yaml()` pure validator; `run_kit_step()` / `run_scaffold_step()` step runners (019-agentic-domain-kit)
+- `src/agents/domain_kit_prompts.py` — all domain-agnostic prompt builder functions for kit and scaffold agents; no hardcoded field names from any specific domain (019-agentic-domain-kit)
+- `src/ui/kit_generator.py` and `src/ui/block_scaffolder.py` are now thin re-export adapters — single-shot LLM replaced by multi-step graph runners (019-agentic-domain-kit)
 
-- Python 3.11 (Poetry). pandas 2.2, LangGraph 0.4, LiteLLM 1.55, FAISS-CPU, sentence-transformers, rapidfuzz, pyarrow, redis-py, streamlit, structlog, prometheus_client, chromadb, networkx, mlxtend, rank-bm25.
+- Python 3.11 (Poetry). pandas 2.2, LangGraph 0.4, LiteLLM 1.55, sentence-transformers, rapidfuzz, pyarrow, redis-py, streamlit, structlog, prometheus_client, chromadb, networkx, mlxtend, rank-bm25.
 - Redis at `localhost:6379` (SQLite fallback at `output/cache.db`).
 - GCS buckets: `mip-bronze-2024` (JSONL), `mip-silver-2024` (Parquet), BigQuery `mip_gold.products`.
 - Prometheus Pushgateway at `localhost:9091`; Grafana at `localhost:3000`.
+
+## Recent Changes
+- 016-kernel-domain-separation: Added Python 3.11 (Poetry) + LangGraph 0.4, pandas 2.2, PyYAML, pathlib (stdlib), importlib (stdlib)

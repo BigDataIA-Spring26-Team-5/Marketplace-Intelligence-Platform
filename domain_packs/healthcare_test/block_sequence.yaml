@@ -1,0 +1,11 @@
+domain: healthcare_test
+
+sequence:
+  - dq_score_pre
+  - __generated__
+  - strip_whitespace
+  - lowercase_brand
+  - remove_noise_words
+  - strip_punctuation
+  - llm_enrich
+  - dq_score_post

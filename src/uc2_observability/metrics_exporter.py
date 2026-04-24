@@ -62,6 +62,8 @@ class MetricsExporter:
             _gauge("etl_corpus_augmented", float(enrichment.get("corpus_augmented") or 0), short_labels, short_vals)
             _gauge("etl_corpus_size_after", float(enrichment.get("corpus_size_after") or 0), short_labels, short_vals)
             _gauge("etl_run_status", _STATUS_VALUES.get(status, 0.0), short_labels, short_vals)
+            _gauge("etl_llm_calls_total", float(run_log.get("llm_calls") or 0), short_labels, short_vals)
+            _gauge("etl_llm_cost_usd_total", float(run_log.get("cost_usd") or 0.0), short_labels, short_vals)
 
             push_to_gateway(
                 self.pushgateway_url,

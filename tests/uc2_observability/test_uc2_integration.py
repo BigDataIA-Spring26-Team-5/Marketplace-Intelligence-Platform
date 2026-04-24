@@ -10,7 +10,7 @@ import pytest
 
 from src.blocks.fuzzy_deduplicate import FuzzyDeduplicateBlock
 from src.models.llm import reset_llm_counter, get_llm_call_count
-from src.pipeline.runner import NULL_RATE_COLUMNS, PipelineRunner
+from src.pipeline.runner import PipelineRunner
 from src.registry.block_registry import BlockRegistry
 
 

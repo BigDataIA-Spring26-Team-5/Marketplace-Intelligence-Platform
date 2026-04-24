@@ -9,13 +9,9 @@ from src.blocks.base import Block
 from src.enrichment.deterministic import deterministic_enrich
 from src.enrichment.embedding import embedding_enrich
 from src.enrichment.llm_tier import llm_enrich
+from src.enrichment.rules_loader import EnrichmentRulesLoader
 
 logger = logging.getLogger(__name__)
-
-ENRICHMENT_COLUMNS = ["primary_category", "dietary_tags", "is_organic", "allergens"]
-
-# Safety fields that must never be modified by S2 or S3
-_SAFETY_FIELDS = ["allergens", "is_organic", "dietary_tags"]
 
 
 class LLMEnrichBlock(Block):
@@ -30,9 +26,14 @@ class LLMEnrichBlock(Block):
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         config = config or {}
-        enrich_cols = config.get("enrichment_columns", ENRICHMENT_COLUMNS)
+        domain = config.get("domain", "nutrition")
 
         df = df.copy()
+
+        # Load enrichment rules for this domain
+        rules_loader = EnrichmentRulesLoader(domain)
+        enrich_cols = config.get("enrichment_columns") or rules_loader.enrichment_column_names
+        safety_fields = rules_loader.safety_field_names()
 
         # Ensure enrichment columns exist
         for col in enrich_cols:
@@ -46,20 +47,22 @@ class LLMEnrichBlock(Block):
         initial_missing = int(needs_enrichment.sum())
         logger.info(f"Enrichment: {initial_missing}/{len(df)} rows need enrichment")
 
-        # Strategy 1: Deterministic extraction (all safety fields + primary_category)
-        df, needs_enrichment, s1_stats = deterministic_enrich(df, enrich_cols, needs_enrichment)
+        # Strategy 1: Deterministic extraction using domain rules
+        df, needs_enrichment, s1_stats = deterministic_enrich(
+            df, enrich_cols, needs_enrichment, rules=rules_loader.s1_fields, domain=domain
+        )
         stats["deterministic"] = s1_stats["resolved"]
         logger.info(f"  S1 (deterministic extraction): resolved {stats['deterministic']} rows")
 
         # Capture safety field values after S1 to verify S2/S3 do not modify them
         safety_snapshot = {
             col: df[col].copy()
-            for col in _SAFETY_FIELDS
+            for col in safety_fields
             if col in df.columns
         }
 
         # Strategy 2: KNN corpus search (primary_category only)
-        df, needs_enrichment, s2_stats = embedding_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"))
+        df, needs_enrichment, s2_stats = embedding_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"), collection_name=config.get("corpus_collection"))
         stats["embedding"] = s2_stats["resolved"]
         stats["corpus_augmented"] = s2_stats.get("corpus_augmented", 0)
         stats["corpus_size_after"] = s2_stats.get("corpus_size_after", 0)
@@ -69,7 +72,7 @@ class LLMEnrichBlock(Block):
         unresolved_before_s3 = needs_enrichment.copy()
 
         # Strategy 3: RAG-augmented LLM (primary_category only)
-        df, needs_enrichment, s3_stats = llm_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"))
+        df, needs_enrichment, s3_stats = llm_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"), domain=domain)
         stats["llm"] = s3_stats["resolved"]
         stats["unresolved"] = int(df["primary_category"].isna().sum()) if "primary_category" in df.columns else 0
         logger.info(f"  S3 (LLM): resolved {stats['llm']} rows")
@@ -100,7 +103,7 @@ class LLMEnrichBlock(Block):
                     f"for {len(changed)} rows. These rows: {changed.tolist()[:10]}"
                 )
 
-        # Store stats at class level so gold_pipeline can read LLMEnrichBlock.last_enrichment_stats
+        # Store stats for access by the UI/graph
         LLMEnrichBlock.last_enrichment_stats = stats
 
         return df
