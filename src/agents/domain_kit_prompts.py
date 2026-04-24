@@ -56,15 +56,35 @@ sequence:
 """
 
 _PROMPT_EXAMPLES_FORMAT = """\
-domain: <domain_name>
+# Domain: clinical_records (EXAMPLE — replace with actual domain)
+# Source CSV headers: PatientID, DischargeDate, DiagnosisText, MedicationList, FacilityCode
+# Derived unified names (snake_case of the same concepts): patient_id, discharge_date, diagnosis_text, medications, facility_code
+
+domain: clinical_records
 
 column_mapping_examples:
-  - source_col: <raw_column_name>
-    target_col: <unified_column_name>
+  # PatientID -> canonical snake_case name for the same column
+  - source_col: PatientID
+    target_col: patient_id
     operation: RENAME
-  - source_col: <other_raw_name>
-    target_col: <same_unified_name>
+  # alternate name variant that means the same thing
+  - source_col: MRN
+    target_col: patient_id
     operation: RENAME
+
+  # DischargeDate -> snake_case canonical name
+  - source_col: DischargeDate
+    target_col: discharge_date
+    operation: RENAME
+  # date format normalisation variant
+  - source_col: discharge_date_raw
+    target_col: discharge_date
+    operation: FORMAT
+
+  # Columns with no unified equivalent -> DELETE
+  - source_col: internal_row_id
+    target_col: null
+    operation: DELETE
 """
 
 # ---------------------------------------------------------------------------
@@ -176,6 +196,12 @@ def build_prompt_examples_prompt(
     enrichment_fields: list[str],
     sample_table: str,
 ) -> str:
+    # Derive canonical target names: snake_case versions of the actual CSV headers
+    canonical_targets = [h.lower().replace(" ", "_").replace("-", "_") for h in csv_headers]
+    header_to_canonical = dict(zip(csv_headers, canonical_targets))
+    canonical_list = "\n".join(
+        f"  {src} -> {tgt}" for src, tgt in header_to_canonical.items()
+    )
     return f"""\
 You are generating a prompt_examples.yaml file for an ETL pipeline domain pack.
 
@@ -183,40 +209,55 @@ You are generating a prompt_examples.yaml file for an ETL pipeline domain pack.
 Name: {domain_name}
 Description: {description}
 
-## Source CSV Headers
+## Source CSV Headers (THESE ARE THE ACTUAL COLUMNS IN THIS DOMAIN'S DATA)
 {csv_headers}
 
 ## Sample Data
 {sample_table}
 
-## Enrichment Fields (handled automatically — DO NOT map these as RENAME targets from CSV)
-These field names are produced by the enrichment layer, not sourced from the CSV:
+## CRITICAL — Target Column Name Rules
+
+The target column names MUST be derived from the actual CSV headers above — NOT from any
+other domain's schema. The unified column names for this domain are the snake_case versions
+of the CSV headers:
+
+{canonical_list}
+
+DO NOT use target column names like `ingredients`, `brand_name`, `data_source`, `product_name`,
+`allergens`, or any other name that does not correspond to a column in THIS domain's CSV.
+Those names belong to other domains. Using them here would corrupt the schema mapping.
+
+## Enrichment Fields (produced by enrichment layer — NOT sourced from CSV)
+Do NOT use these as target_col values in RENAME mappings:
 {enrichment_fields}
 
 ## Your Task
-Generate column_mapping_examples for this domain. These examples teach Agent 1 how to map
-raw CSV column names to the unified schema column names.
+Generate column_mapping_examples that teach Agent 1 how to map raw source column name variants
+to the canonical unified names defined above.
 
 ## Rules
 
-1. For each CSV header, provide 1-3 mapping examples showing realistic source name variants
-   and the correct unified target name + operation.
+1. For each CSV header, the canonical target_col is its snake_case version (shown in the
+   mapping table above). Use that exact name as target_col.
 
-2. Operations:
-   - RENAME: column exists in CSV and maps directly to a unified column name
-   - FORMAT: column exists but needs reformatting (dates, units, etc.)
-   - CAST: type conversion needed (string → numeric, etc.)
-   - DELETE: column should be dropped (no unified equivalent)
+2. Provide 1-3 example source name variants per target — covering realistic alternate spellings,
+   PascalCase versions, abbreviations, or legacy column names a source system might use.
+   Example: if the CSV has `discharge_date`, realistic variants are `DischargeDate`,
+   `date_of_discharge`, `discharge_dt`.
 
-3. CRITICAL — DO NOT create RENAME mappings that target any of the enrichment_fields listed
-   above. Those are produced by the enrichment layer, not by column mapping.
+3. DO NOT include identity mappings where source_col == target_col. Only include non-trivial
+   variants (alternate names that differ from the canonical target).
 
-4. Structured CSV columns (codes, identifiers, flags) should appear as RENAME entries here —
-   NOT as extraction targets in enrichment_rules.yaml.
+4. Operations:
+   - RENAME: source column maps directly to a unified column name
+   - FORMAT: column exists but needs reformatting (dates, units)
+   - CAST: type conversion needed
+   - DELETE: column should be dropped entirely (no unified equivalent)
 
-5. Provide 8–15 realistic examples that cover the likely naming variations for this domain.
+5. Add 2-3 DELETE examples for columns commonly seen in this domain that should be dropped
+   (e.g. internal IDs, row timestamps, audit columns).
 
-## Format Reference
+## Format Reference (read the comments — the pattern is variant→canonical, not identity)
 ```yaml
 {_PROMPT_EXAMPLES_FORMAT}
 ```

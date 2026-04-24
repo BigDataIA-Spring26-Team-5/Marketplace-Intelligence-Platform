@@ -1,22 +1,82 @@
 domain: healthcare_test
 
 column_mapping_examples:
-  - source_col: patient_id
-    target_col: data_source
-    operation: CAST
-    cast_to: string
-  - source_col: discharge_date
-    target_col: published_date
-    operation: FORMAT
-  - source_col: diagnosis_text
-    target_col: description
+  # patient_id variants
+  - source_col: PatientID
+    target_col: patient_id
     operation: RENAME
-  - source_col: facility_code
-    target_col: brand_owner
+  - source_col: MRN
+    target_col: patient_id
     operation: RENAME
-  - source_col: medications
-    target_col: ingredients
+  - source_col: medical_record_number
+    target_col: patient_id
     operation: RENAME
-  - source_col: procedures
-    target_col: category
+
+  # discharge_date variants
+  - source_col: DischargeDate
+    target_col: discharge_date
     operation: RENAME
+  - source_col: date_of_discharge
+    target_col: discharge_date
+    operation: RENAME
+  - source_col: discharge_dt
+    target_col: discharge_date
+    operation: RENAME
+
+  # diagnosis_text variants
+  - source_col: DiagnosisText
+    target_col: diagnosis_text
+    operation: RENAME
+  - source_col: diagnosis_description
+    target_col: diagnosis_text
+    operation: RENAME
+  - source_col: dx_text
+    target_col: diagnosis_text
+    operation: RENAME
+
+  # medications variants
+  - source_col: Medications
+    target_col: medications
+    operation: RENAME
+  - source_col: medication_list
+    target_col: medications
+    operation: RENAME
+  - source_col: rx_list
+    target_col: medications
+    operation: RENAME
+
+  # procedures variants
+  - source_col: Procedures
+    target_col: procedures
+    operation: RENAME
+  - source_col: procedure_list
+    target_col: procedures
+    operation: RENAME
+  - source_col: clinical_procedures
+    target_col: procedures
+    operation: RENAME
+
+  # facility_code variants
+  - source_col: FacilityCode
+    target_col: facility_code
+    operation: RENAME
+  - source_col: hospital_code
+    target_col: facility_code
+    operation: RENAME
+  - source_col: facility_id
+    target_col: facility_code
+    operation: RENAME
+
+  # DELETE examples - columns commonly seen but with no unified equivalent
+  - source_col: internal_row_id
+    target_col: null
+    operation: DELETE
+  - source_col: created_timestamp
+    target_col: null
+    operation: DELETE
+  - source_col: audit_user_id
+    target_col: null
+    operation: DELETE
+  - source_col: record_version
+    target_col: null
+    operation: DELETE
