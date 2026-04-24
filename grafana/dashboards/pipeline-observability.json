@@ -475,93 +475,6 @@
       ]
     },
     {
-      "id": 4,
-      "type": "barchart",
-      "title": "Block-by-Block DQ Progress",
-      "description": "DQ after each cleaning block in execution order. Each bar group is one source; each bar is one block. The staircase shows quality rising as whitespace, noise, and schema issues get fixed.",
-      "gridPos": {
-        "x": 0,
-        "y": 19,
-        "w": 24,
-        "h": 11
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "options": {
-        "orientation": "vertical",
-        "xTickLabelRotation": -35,
-        "xTickLabelSpacing": 0,
-        "showValue": "auto",
-        "stacking": "none",
-        "groupWidth": 0.85,
-        "barWidth": 0.9,
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi"
-        },
-        "xField": "label"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "max": 1,
-          "decimals": 2,
-          "unit": "percentunit",
-          "color": {
-            "mode": "continuous-GrYlRd"
-          }
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "expr": "max by (source, block_name, block_seq) (etl_block_dq_score{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"})",
-          "format": "table",
-          "instant": true
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "job": true,
-              "run_id": true,
-              "status": true
-            },
-            "renameByName": {
-              "Value": "DQ"
-            }
-          }
-        },
-        {
-          "id": "calculateField",
-          "options": {
-            "mode": "reduceRow",
-            "alias": "label",
-            "reduce": {
-              "reducer": "allValues"
-            }
-          }
-        },
-        {
-          "id": "merge",
-          "options": {}
-        }
-      ]
-    },
-    {
       "id": 5,
       "type": "bargauge",
       "title": "Rows In (raw)",
@@ -832,6 +745,142 @@
           "expr": "label_replace(max by (source) (etl_llm_calls_total{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"} > 0), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_llm_calls_total{source_name=~\"$source\"} > 0), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "legendFormat": "{{src}}",
           "instant": true
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "bargauge",
+      "title": "Corpus Size per Source (current)",
+      "description": "FAISS KNN corpus size after the latest run per source. Every run adds S1/S2/S3-resolved rows back to the corpus, so future runs match more categories deterministically — the cost cascade gets cheaper as these bars grow.",
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "noValue": "No corpus data yet"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "max by (source) (etl_corpus_size_after{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"} > 0)",
+          "legendFormat": "{{source}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "barchart",
+      "title": "Block Duration (ms)",
+      "description": "Wall-clock duration per block in execution order. Pairs with the Block DQ panel: DQ says 'did it help?', duration says 'at what cost?'. Long bars are candidates for optimisation.",
+      "gridPos": {
+        "x": 12,
+        "y": 44,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": -35,
+        "xTickLabelSpacing": 0,
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.85,
+        "barWidth": 0.9,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "xField": "label"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 0,
+          "min": 0,
+          "color": {
+            "mode": "continuous-YlRd"
+          },
+          "noValue": "No block-duration data yet"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "max by (source, block_name, block_seq) (etl_block_duration_ms{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"})",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "run_id": true,
+              "status": true
+            },
+            "renameByName": {
+              "Value": "ms"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "reduceRow",
+            "alias": "label",
+            "reduce": {
+              "reducer": "allValues"
+            }
+          }
+        },
+        {
+          "id": "merge",
+          "options": {}
         }
       ]
     }
