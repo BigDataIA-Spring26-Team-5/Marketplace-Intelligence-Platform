@@ -106,6 +106,17 @@ class ObservabilityChatbot:
     def query(self, question: str) -> ChatResponse:
         """Answer question grounded in run log data. Never raises."""
         try:
+            from src.agents.safety_guardrails import get_safety_guardrails
+            guardrails = get_safety_guardrails()
+
+            input_check = guardrails.validate_input(question)
+            if not input_check.is_safe:
+                return ChatResponse(
+                    answer=f"Request blocked by input guardrail: {input_check.reason}",
+                    cited_run_ids=[],
+                    context_run_count=0,
+                )
+
             if not self._logs:
                 self._logs = self._store.load_all()
 
@@ -134,11 +145,14 @@ class ObservabilityChatbot:
                 ],
             )
 
-            cited = [rid for rid in _UUID_PATTERN.findall(raw_answer) if rid in context_ids]
+            output_check = guardrails.validate_output(raw_answer)
+            final_answer = output_check.sanitized_text
+
+            cited = [rid for rid in _UUID_PATTERN.findall(final_answer) if rid in context_ids]
             cited = list(dict.fromkeys(cited))  # deduplicate preserving order
 
             return ChatResponse(
-                answer=raw_answer,
+                answer=final_answer,
                 cited_run_ids=cited,
                 context_run_count=len(context),
             )
