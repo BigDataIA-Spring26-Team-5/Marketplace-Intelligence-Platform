@@ -45,29 +45,39 @@ class ProductGraph:
         Load product nodes. Each product gets attributes from UC1 output.
         Returns number of nodes added.
         """
-        import networkx as nx
+        id_col = "product_id" if "product_id" in df.columns else "product_name"
+        df = df.copy()
+        df["_pid"] = df[id_col].fillna("").astype(str)
+        df = df[df["_pid"] != ""]
 
-        count = 0
-        for _, row in df.iterrows():
-            pid = str(row.get("product_id") or row.get("product_name", ""))
-            if not pid:
-                continue
-            self._G.add_node(pid, **{
+        for col in ("product_name", "brand_name", "primary_category", "dietary_tags", "allergens"):
+            if col not in df.columns:
+                df[col] = ""
+        if "dq_score_post" not in df.columns:
+            df["dq_score_post"] = 0.0
+
+        nodes = [
+            (row["_pid"], {
                 "type":             "product",
-                "product_name":     str(row.get("product_name") or ""),
-                "brand_name":       str(row.get("brand_name") or ""),
-                "primary_category": str(row.get("primary_category") or ""),
-                "dietary_tags":     str(row.get("dietary_tags") or ""),
-                "allergens":        str(row.get("allergens") or ""),
-                "dq_score_post":    float(row.get("dq_score_post") or 0.0),
+                "product_name":     str(row["product_name"] or ""),
+                "brand_name":       str(row["brand_name"] or ""),
+                "primary_category": str(row["primary_category"] or ""),
+                "dietary_tags":     str(row["dietary_tags"] or ""),
+                "allergens":        str(row["allergens"] or ""),
+                "dq_score_post":    float(row["dq_score_post"] or 0.0),
             })
+            for row in df.to_dict("records")
+        ]
+        self._G.add_nodes_from(nodes)
 
-            # Also add category node + product→category edge
-            cat = str(row.get("primary_category") or "Unknown")
-            self._G.add_node(cat, type="category")
-            self._G.add_edge(pid, cat, weight=1.0, edge_type="belongs_to")
-            count += 1
+        # Category nodes + belongs_to edges
+        df["_cat"] = df["primary_category"].fillna("").astype(str).replace("", "Unknown")
+        cat_nodes = [(c, {"type": "category"}) for c in df["_cat"].unique()]
+        self._G.add_nodes_from(cat_nodes)
+        edges = list(zip(df["_pid"], df["_cat"], [{"weight": 1.0, "edge_type": "belongs_to"}] * len(df)))
+        self._G.add_edges_from(edges)
 
+        count = len(nodes)
         logger.info("Loaded %d product nodes, %d total nodes", count, self._G.number_of_nodes())
         return count
 
@@ -77,19 +87,22 @@ class ProductGraph:
         rules_df must have: antecedent_id, consequent_id, lift, confidence
         Returns number of edges added.
         """
-        count = 0
-        for _, row in rules_df.iterrows():
-            src = str(row["antecedent_id"])
-            dst = str(row["consequent_id"])
-            if not self._G.has_node(src) or not self._G.has_node(dst):
-                continue
-            self._G.add_edge(src, dst,
-                weight=float(row.get("lift", 1.0)),
-                confidence=float(row.get("confidence", 0.0)),
-                edge_type="co_purchase",
-            )
-            count += 1
-
+        existing = set(self._G.nodes())
+        mask = (
+            rules_df["antecedent_id"].astype(str).isin(existing)
+            & rules_df["consequent_id"].astype(str).isin(existing)
+        )
+        valid = rules_df[mask]
+        edges = [
+            (str(r["antecedent_id"]), str(r["consequent_id"]), {
+                "weight":     float(r.get("lift", 1.0)),
+                "confidence": float(r.get("confidence", 0.0)),
+                "edge_type":  "co_purchase",
+            })
+            for r in valid.to_dict("records")
+        ]
+        self._G.add_edges_from(edges)
+        count = len(edges)
         logger.info("Loaded %d co-purchase edges", count)
         return count
 
