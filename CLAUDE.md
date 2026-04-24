@@ -279,6 +279,9 @@ Both are registered in `src/api/main.py` and health-checked at `/v1/health`.
 - `src/ui/kit_generator.py` — `generate_domain_kit(domain_name, description, csv_content)` → 3 YAML files via LLM (018-domain-kit-ui-builder)
 - `src/ui/block_scaffolder.py` — `generate_block_scaffold(domain_name, description)` → Python Block scaffold via LLM + ast.parse() (018-domain-kit-ui-builder)
 - app.py sidebar radio now has three modes: "Pipeline", "Observability", "Domain Packs" (018-domain-kit-ui-builder)
+- `src/agents/domain_kit_graph.py` — two LangGraph agents: `DomainKitGraph` (8 nodes, YAML generation + HITL + retry) and `ScaffoldGraph` (5 nodes, Block scaffold + syntax retry); `validate_enrichment_rules_yaml()` pure validator; `run_kit_step()` / `run_scaffold_step()` step runners (019-agentic-domain-kit)
+- `src/agents/domain_kit_prompts.py` — all domain-agnostic prompt builder functions for kit and scaffold agents; no hardcoded field names from any specific domain (019-agentic-domain-kit)
+- `src/ui/kit_generator.py` and `src/ui/block_scaffolder.py` are now thin re-export adapters — single-shot LLM replaced by multi-step graph runners (019-agentic-domain-kit)
 
 - Python 3.11 (Poetry). pandas 2.2, LangGraph 0.4, LiteLLM 1.55, sentence-transformers, rapidfuzz, pyarrow, redis-py, streamlit, structlog, prometheus_client, chromadb, networkx, mlxtend, rank-bm25.
 - Redis at `localhost:6379` (SQLite fallback at `output/cache.db`).
