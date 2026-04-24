@@ -274,7 +274,7 @@ def test_metrics_push_called(tmp_path: pytest.FixtureRequest) -> None:
 
     mock_collector_instance.push.assert_called_once()
     call_kwargs = mock_collector_instance.push.call_args
-    metrics_arg = call_kwargs.args[0] if call_kwargs.args else call_kwargs.kwargs.get("metrics", {})
+    metrics_arg = call_kwargs.args[0] if call_kwargs.args else call_kwargs.kwargs.get("metrics_dict", call_kwargs.kwargs.get("metrics", {}))
     assert required_keys <= set(metrics_arg.keys()), f"Missing keys: {required_keys - set(metrics_arg.keys())}"
 
 
