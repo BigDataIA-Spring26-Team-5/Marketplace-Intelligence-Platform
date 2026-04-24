@@ -82,7 +82,7 @@ def render_pipeline():
     step = st.session_state.get("step", 0)
 
     # ── Step 0: Configure source ──────────────────────────────────────────────
-    if step == 0 and not ps.get("source"):
+    if step == 0 and not ps.get("source_path"):
         st.markdown(_stepper_html(0), unsafe_allow_html=True)
 
         st.markdown('<div class="card"><div class="card-title">Source Configuration</div>', unsafe_allow_html=True)
@@ -107,7 +107,7 @@ def render_pipeline():
                 st.error("Source path required.")
             else:
                 st.session_state.pipeline_state = {
-                    "source": source_path,
+                    "source_path": source_path,
                     "domain": domain,
                     "pipeline_mode": pipeline_mode,
                     "with_critic": with_critic,
@@ -124,7 +124,7 @@ def render_pipeline():
     current_step_idx = min(step - 1, len(STEPS) - 1)
     st.markdown(_stepper_html(current_step_idx), unsafe_allow_html=True)
 
-    source = ps.get("source", "")
+    source = ps.get("source_path", "")
     domain = ps.get("domain", "nutrition")
 
     info_c, ctrl_c = st.columns([3, 1])

@@ -248,7 +248,7 @@ def render_dashboard():
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
     # ── Prometheus source bar chart ───────────────────────────────────────────
-    _SKIP_SOURCES = {"part_0000", "*", "usda"}
+    _SKIP_SOURCES = {"part_0000", "*", "usda", "src"}
     try:
         from src.ui.utils.api_client import prom_series
         series = prom_series('sum by (source) (etl_rows_in)')
@@ -259,10 +259,12 @@ def render_dashboard():
                 max_val = max(v for _, v in series_sorted) or 1
                 bars_html = ""
                 for labels, val in series_sorted:
+                    src = labels.get("source", "unknown")
                     pct = val / max_val * 100
                     bars_html += f"""
-                    <div class="bar-row" style="gap:12px;">
-                      <div class="bar-track" style="flex:1;max-width:180px;"><div class="bar-fill bar-accent" style="width:{pct:.1f}%"></div></div>
+                    <div class="bar-row" style="gap:10px;">
+                      <div style="width:100px;flex-shrink:0;text-align:right;font-family:var(--mono);font-size:12px;color:var(--text-muted);">{src[:13]}</div>
+                      <div class="bar-track" style="flex:1;max-width:200px;"><div class="bar-fill bar-accent" style="width:{pct:.1f}%"></div></div>
                       <div style="font-family:var(--mono);font-size:15px;font-weight:700;color:var(--text);min-width:80px;">{int(val):,}</div>
                     </div>"""
                 st.markdown(f"""
