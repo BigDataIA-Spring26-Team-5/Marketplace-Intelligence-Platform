@@ -25,7 +25,7 @@
           "type": "prometheus",
           "uid": "PBFA97CFB590B2093"
         },
-        "query": "label_values({__name__=~\"etl_dq_score_post|etl_block_dq_score\",source!~\"20|21|branded|foundation\"}, source)",
+        "query": "label_values({__name__=~\"etl_dq_score_post|etl_block_dq_score\",source=~\"usda/.*|off|openfda|esci\"}, source)",
         "includeAll": true,
         "allValue": ".+",
         "multi": true,
@@ -115,7 +115,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_dq_score_post{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_dq_score_post{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_dq_score_post{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_dq_score_post{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "legendFormat": "{{src}}",
           "instant": true
         }
@@ -181,7 +181,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_llm_cost_usd_total{source=~\"$source\",source!~\"20|21\"} > 0), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_llm_cost_usd_total{source_name=~\"$source\"} > 0), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_llm_cost_usd_total{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"} > 0), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_llm_cost_usd_total{source_name=~\"$source\"} > 0), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "legendFormat": "{{src}}",
           "instant": true
         }
@@ -262,7 +262,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_dq_score_pre{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_dq_score_pre{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_dq_score_pre{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_dq_score_pre{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "legendFormat": "Before \u00b7 {{src}}",
           "instant": true
         },
@@ -271,7 +271,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_dq_score_post{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_dq_score_post{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_dq_score_post{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_dq_score_post{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "legendFormat": "After \u00b7 {{src}}",
           "instant": true
         }
@@ -386,7 +386,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_enrichment_s1_resolved{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_s1_resolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_enrichment_s1_resolved{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_s1_resolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "format": "table",
           "instant": true
         },
@@ -396,7 +396,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_enrichment_s2_resolved{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_s2_resolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_enrichment_s2_resolved{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_s2_resolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "format": "table",
           "instant": true
         },
@@ -406,7 +406,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_enrichment_s3_resolved{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_s3_resolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_enrichment_s3_resolved{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_s3_resolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "format": "table",
           "instant": true
         },
@@ -416,7 +416,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_enrichment_unresolved{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_unresolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_enrichment_unresolved{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_enrichment_unresolved{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "format": "table",
           "instant": true
         }
@@ -524,7 +524,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "max by (source, block_name, block_seq) (etl_block_dq_score{source=~\"$source\",source!~\"20|21\"})",
+          "expr": "max by (source, block_name, block_seq) (etl_block_dq_score{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"})",
           "format": "table",
           "instant": true
         }
@@ -603,7 +603,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_rows_in{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_rows_in{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_rows_in{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_rows_in{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "legendFormat": "{{src}}",
           "instant": true
         }
@@ -651,7 +651,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_rows_out{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_rows_out{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_rows_out{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_rows_out{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "legendFormat": "{{src}}",
           "instant": true
         }
@@ -715,7 +715,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_rows_quarantined{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_rows_quarantined{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_rows_quarantined{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_rows_quarantined{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "legendFormat": "{{src}}",
           "instant": true
         }
@@ -763,7 +763,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_duration_seconds{source=~\"$source\",source!~\"20|21\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_duration_seconds{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_duration_seconds{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"}), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_duration_seconds{source_name=~\"$source\"}), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "legendFormat": "{{src}}",
           "instant": true
         }
@@ -829,7 +829,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_replace(max by (source) (etl_llm_calls_total{source=~\"$source\",source!~\"20|21\"} > 0), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_llm_calls_total{source_name=~\"$source\"} > 0), \"src\", \"$1\", \"source_name\", \"(.*)\")",
+          "expr": "label_replace(max by (source) (etl_llm_calls_total{source=~\"$source\",source=~\"usda/.*|off|openfda|esci\"} > 0), \"src\", \"$1\", \"source\", \"(.*)\") or label_replace(max by (source_name) (etl_llm_calls_total{source_name=~\"$source\"} > 0), \"src\", \"$1\", \"source_name\", \"(.*)\")",
           "legendFormat": "{{src}}",
           "instant": true
         }

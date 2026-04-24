@@ -795,6 +795,25 @@ def _render_recommendations_page() -> None:
 # ── Main ──────────────────────────────────────────────────────────────────
 
 
+_GRAFANA_BASE    = "http://35.239.47.242:3000"
+_GRAFANA_DASH_UID = "etl-pipeline-observability"
+_GRAFANA_DASH_URL = (
+    f"{_GRAFANA_BASE}/d/{_GRAFANA_DASH_UID}/etl-pipeline-observability"
+    "?orgId=1&kiosk=tv&theme=dark&refresh=30s"
+)
+
+_OBS_SAMPLE_QUESTIONS = [
+    "What was the average DQ score across all runs?",
+    "Which source had the most quarantined rows?",
+    "Show me the last 5 pipeline runs and their status.",
+    "Which run had the highest LLM enrichment cost?",
+    "What enrichment tier breakdown do we see across sources?",
+    "Were any anomalies detected recently?",
+    "Compare DQ score before vs after pipeline for USDA runs.",
+    "What is the average run duration per source?",
+]
+
+
 def _render_observability_page() -> None:
     from src.uc2_observability.log_store import RunLogStore
     from src.uc2_observability.rag_chatbot import ObservabilityChatbot
@@ -810,8 +829,8 @@ def _render_observability_page() -> None:
 
     bot: ObservabilityChatbot = st.session_state.obs_chatbot
 
-    st.header("Pipeline Observability")
-    col1, col2 = st.columns([3, 1])
+    st.header("Pipeline Observability (UC2)")
+    col1, col2, col3 = st.columns([3, 1, 1])
     with col1:
         st.caption(
             f"Loaded **{st.session_state.obs_run_count}** run log(s). "
@@ -823,30 +842,58 @@ def _render_observability_page() -> None:
             st.session_state.obs_run_count = count
             st.session_state.obs_last_refresh = datetime.now()
             st.rerun()
+    with col3:
+        st.link_button("Open Grafana ↗", _GRAFANA_BASE)
 
-    for msg in st.session_state.obs_messages:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
-            if msg.get("cited_run_ids"):
-                with st.expander(f"Cited run IDs ({len(msg['cited_run_ids'])})"):
-                    for rid in msg["cited_run_ids"]:
-                        st.code(rid)
+    tab_dash, tab_chat = st.tabs(["Metrics Dashboard", "RAG Chatbot"])
 
-    if question := st.chat_input("Ask about pipeline runs…", key="obs_input"):
-        st.session_state.obs_messages.append({"role": "user", "content": question})
-        with st.spinner("Thinking…"):
-            response = bot.query(question)
-        st.session_state.obs_messages.append({
-            "role": "assistant",
-            "content": response.answer,
-            "cited_run_ids": response.cited_run_ids,
-        })
-        st.rerun()
+    with tab_dash:
+        st.caption(
+            "Live Grafana dashboard — DQ scores, enrichment tiers, quarantine rates, run durations. "
+            f"[Open full screen ↗]({_GRAFANA_DASH_URL})"
+        )
+        st.components.v1.iframe(_GRAFANA_DASH_URL, height=720, scrolling=True)
 
-    if st.session_state.obs_messages:
-        if st.button("Clear chat", key="obs_clear"):
-            st.session_state.obs_messages = []
+    with tab_chat:
+        st.caption("Ask natural-language questions about pipeline run history.")
+
+        # Sample question chips
+        st.markdown("**Sample questions:**")
+        cols = st.columns(2)
+        for i, q in enumerate(_OBS_SAMPLE_QUESTIONS):
+            if cols[i % 2].button(q, key=f"obs_sq_{i}", use_container_width=True):
+                st.session_state.obs_pending_question = q
+
+        st.markdown("---")
+
+        # Render chat history
+        for msg in st.session_state.obs_messages:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+                if msg.get("cited_run_ids"):
+                    with st.expander(f"Cited run IDs ({len(msg['cited_run_ids'])})"):
+                        for rid in msg["cited_run_ids"]:
+                            st.code(rid)
+
+        # Handle pending question from sample button click
+        pending = st.session_state.pop("obs_pending_question", None)
+
+        question = st.chat_input("Ask about pipeline runs…", key="obs_input") or pending
+        if question:
+            st.session_state.obs_messages.append({"role": "user", "content": question})
+            with st.spinner("Thinking…"):
+                response = bot.query(question)
+            st.session_state.obs_messages.append({
+                "role": "assistant",
+                "content": response.answer,
+                "cited_run_ids": response.cited_run_ids,
+            })
             st.rerun()
+
+        if st.session_state.obs_messages:
+            if st.button("Clear chat", key="obs_clear"):
+                st.session_state.obs_messages = []
+                st.rerun()
 
 
 def main() -> None:
