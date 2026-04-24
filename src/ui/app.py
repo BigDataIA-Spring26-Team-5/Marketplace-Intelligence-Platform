@@ -1,888 +1,1472 @@
-"""Market Intelligence Platform Streamlit UI - Main App Entry Point."""
-
-from pathlib import Path
+"""Market Intelligence Platform Streamlit UI."""
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 VALID_PAGES = {
-    "dashboard",
-    "domain",
-    "pipeline",
-    "observability",
-    "search",
-    "recs",
-    "airflow",
-    "tests",
+    "dashboard", "domain", "enrichment", "pipeline",
+    "observability", "search", "recs", "airflow", "tests",
 }
 
-STYLES = """
-<style>
-    /* ── Global Reset & Variables ─────────────────────── */
-    .stApp { background-color: #ffffff; }
-    
-    /* ── Hide Streamlit elements ────────────────── */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stDeployButton {visibility: hidden;}
-    header {visibility: hidden;}
+# Full CSS from dataforge_components.html (Option B — injection mode)
+STYLES = """<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    /* ── App Shell Layout ───────────────────────────── */
-    .app-shell {
-        display: grid;
-        grid-template-columns: 220px 1fr;
-        grid-template-rows: 52px 1fr;
-        height: 100vh;
-    }
+  :root {
+    --bg:           #ffffff;
+    --surface:      #f8f9fa;
+    --surface2:     #f1f3f5;
+    --surface3:     #e9ecef;
+    --border:       #dee2e6;
+    --border-hi:    #ced4da;
+    --text:         #212529;
+    --text-muted:   #6c757d;
+    --text-dim:     #adb5bd;
+    --accent:       #1971c2;
+    --accent-dim:   #e7f0fb;
+    --green:        #2f9e44;
+    --green-dim:    #ebf9ee;
+    --amber:        #e67700;
+    --amber-dim:    #fff3bf;
+    --red:          #c92a2a;
+    --red-dim:      #fff5f5;
+    --purple:       #6741d9;
+    --purple-dim:   #f3f0ff;
+    --cyan:         #0c8599;
+    --cyan-dim:     #e3fafc;
+    --mono:         'SF Mono', 'Fira Code', Consolas, monospace;
+    --radius:       6px;
+    --radius-lg:    10px;
+    --gap:          16px;
+    --card-pad:     18px 20px;
+    --shadow:       0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md:    0 4px 12px rgba(0,0,0,0.08);
+  }
 
-    /* ── Topbar ─────────────────────────────────────── */
-    .topbar-section {
-        background: #ffffff;
-        border-bottom: 1px solid #dee2e6;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 12px 20px;
-    }
-    .topbar-brand { display: flex; align-items: center; gap: 10px; }
-    .logo {
-        width: 28px; height: 28px;
-        background: #1971c2;
-        border-radius: 5px;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 12px; font-weight: 700; color: #fff;
-    }
-    .brand-name { font-size: 15px; font-weight: 700; color: #212529; }
-    .brand-name span { color: #1971c2; }
+  /* ── Hide Streamlit chrome ── */
+  #MainMenu {visibility: hidden;}
+  footer {visibility: hidden;}
+  .stDeployButton {visibility: hidden;}
+  header {visibility: hidden;}
+  .stApp { background-color: var(--bg); }
 
-    .health-rail { display: flex; align-items: center; gap: 6px; }
-    .health-label {
-        font-size: 10px; font-weight: 700; color: #adb5bd;
-        text-transform: uppercase; letter-spacing: 0.07em;
-    }
-    .health-pill {
-        display: flex; align-items: center; gap: 5px;
-        padding: 3px 10px; border-radius: 20px;
-        border: 1px solid #dee2e6; background: #f8f9fa;
-        font-size: 11px; font-weight: 500; color: #6c757d;
-    }
-    .health-dot { width: 6px; height: 6px; border-radius: 50%; }
-    .dot-ok { background: #2f9e44; }
-    .dot-warn { background: #e67700; }
-    .dot-error { background: #c92a2a; }
+  /* ── TOPBAR ── */
+  .topbar {
+    background: var(--bg); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 20px; margin-bottom: 20px;
+  }
+  .topbar-brand { display: flex; align-items: center; gap: 10px; }
+  .topbar-brand .logo {
+    width: 28px; height: 28px; background: var(--accent); border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; color: #fff;
+  }
+  .topbar-brand .name { font-size: 15px; font-weight: 700; color: var(--text); }
+  .topbar-brand .name span { color: var(--accent); }
+  .health-rail { display: flex; align-items: center; gap: 6px; }
+  .health-label { font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.07em; margin-right: 4px; }
+  .health-pill { display: flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface); font-size: 11px; font-weight: 500; color: var(--text-muted); }
+  .health-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .health-dot.ok    { background: var(--green); }
+  .health-dot.warn  { background: var(--amber); }
+  .health-dot.error { background: var(--red); }
+  .topbar-right { display: flex; align-items: center; gap: 10px; }
+  .run-badge { display: flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 20px; background: var(--green-dim); border: 1px solid rgba(47,158,68,0.2); font-size: 11px; font-weight: 600; color: var(--green); }
+  .run-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
 
-    .run-badge {
-        display: flex; align-items: center; gap: 6px;
-        padding: 4px 12px; border-radius: 20px;
-        background: #ebf9ee; border: 1px solid rgba(47,158,68,0.2);
-        font-size: 11px; font-weight: 600; color: #2f9e44;
-    }
-    .run-badge::before {
-        content: ''; width: 6px; height: 6px; border-radius: 50%;
-        background: #2f9e44;
-        animation: pulse 2s ease-in-out infinite;
-    }
-    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
+  /* ── SIDEBAR NAV ── */
+  .nav-label { font-size: 10px; font-weight: 700; color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; padding: 10px 14px 4px; display: block; }
+  .nav-item { display: flex; align-items: center; gap: 9px; padding: 7px 14px; border-left: 2px solid transparent; font-size: 13px; font-weight: 500; color: var(--text-muted); text-decoration: none !important; }
+  .nav-item:hover  { color: var(--text); background: var(--surface2); }
+  .nav-item.active { color: var(--accent); background: var(--accent-dim); border-left-color: var(--accent); }
+  .nav-icon { font-family: var(--mono); font-size: 10px; font-weight: 700; width: 20px; text-align: center; flex-shrink: 0; opacity: 0.6; }
+  .nav-badge { margin-left: auto; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px; background: var(--surface3); color: var(--text-muted); }
 
-    /* ── Main Content Area ───────────────────────────── */
-    .main-content { padding: 28px 32px; }
+  /* ── PAGE HEADER ── */
+  .page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; }
+  .page-header-left { display: flex; flex-direction: column; gap: 4px; }
+  .page-title { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; color: var(--text); }
+  .page-subtitle { font-size: 12px; color: var(--text-muted); }
+  .page-controls { display: flex; align-items: center; gap: 12px; }
 
-    /* ── Page Header ────────────────────────────────────── */
-    .page-header {
-        display: flex; align-items: flex-start;
-        justify-content: space-between; margin-bottom: 24px;
-    }
-    .page-title { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; color: #212529; }
-    .page-subtitle { font-size: 12px; color: #6c757d; }
-    .page-controls { display: flex; align-items: center; gap: 12px; }
+  /* ── CARD ── */
+  .card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--card-pad); box-shadow: var(--shadow); }
+  .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .card > .card-title { margin-bottom: 14px; }
+  .card-title { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .card-title::before { content: ''; width: 3px; height: 12px; background: var(--accent); border-radius: 2px; flex-shrink: 0; }
+  .card-meta { font-size: 11px; font-weight: 600; }
+  .card-meta.streaming { color: var(--green); }
+  .card-meta.dim { font-family: var(--mono); color: var(--text-dim); }
 
-    /* ── Cards ───────────────────────────────────────── */
-    .card {
-        background: #ffffff; border: 1px solid #dee2e6;
-        border-radius: 10px; padding: 18px 20px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.07);
-    }
-    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-    .card-title {
-        display: flex; align-items: center; gap: 7px;
-        font-size: 11px; font-weight: 700; color: #6c757d;
-        text-transform: uppercase; letter-spacing: 0.06em;
-    }
-    .card-title::before {
-        content: ''; width: 3px; height: 12px;
-        background: #1971c2; border-radius: 2px;
-    }
+  /* ── LAYOUT ── */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--gap); }
+  .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: var(--gap); }
+  .stack  { display: flex; flex-direction: column; gap: var(--gap); }
+  .stack.gap-8  { gap: 8px; }
+  .stack.gap-10 { gap: 10px; }
+  .grid-2.gap-10 { gap: 10px; }
+  .grid-3.gap-8  { gap: 8px; }
+  .grid-3.gap-10 { gap: 10px; }
+  .mb    { margin-bottom: var(--gap); }
+  .mb-6  { margin-bottom: 6px; }  .mb-8  { margin-bottom: 8px; }
+  .mb-10 { margin-bottom: 10px; } .mb-12 { margin-bottom: 12px; }
+  .mb-14 { margin-bottom: 14px; } .mb-16 { margin-bottom: 16px; }
+  .mt-6  { margin-top: 6px; }     .mt-10 { margin-top: 10px; }
+  .mt-12 { margin-top: 12px; }    .mt-14 { margin-top: 14px; }
+  .row    { display: flex; align-items: center; gap: var(--gap); }
+  .row-sm { display: flex; align-items: center; gap: 8px; }
+  .row-sb { display: flex; align-items: center; justify-content: space-between; }
+  .flex-1 { flex: 1; }  .ml-auto { margin-left: auto; }
+  .w-full { width: 100%; } .wrap { flex-wrap: wrap; }
+  .gap-8 { gap: 8px; }   .gap-10 { gap: 10px; }
+  .opacity-40 { opacity: 0.4; }
 
-    /* ── Stat Cards ──────────────────────────────── */
-    .stat-card {
-        background: #f8f9fa; border: 1px solid #dee2e6;
-        border-radius: 6px; padding: 14px 16px;
-    }
-    .stat-label {
-        font-size: 10px; font-weight: 700; color: #adb5bd;
-        text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;
-    }
-    .stat-value { font-size: 26px; font-weight: 700; letter-spacing: -0.8px; color: #212529; }
-    .stat-unit { font-size: 14px; font-weight: 500; color: #6c757d; }
-    .stat-delta { font-size: 11px; font-weight: 500; margin-top: 6px; }
-    .delta-up { color: #2f9e44; }
-    .delta-down { color: #c92a2a; }
+  /* ── STAT CARD ── */
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .stat-label { font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .stat-value { font-size: 26px; font-weight: 700; letter-spacing: -0.8px; color: var(--text); line-height: 1; }
+  .stat-value.sv-xl { font-size: 26px; } .stat-value.sv-lg { font-size: 24px; }
+  .stat-value.sv-md { font-size: 22px; } .stat-value.sv-sm { font-size: 20px; }
+  .stat-value.sv-xs { font-size: 13px; font-family: var(--mono); letter-spacing: 0; margin-top: 4px; }
+  .stat-unit { font-size: 14px; font-weight: 500; color: var(--text-muted); letter-spacing: 0; }
+  .stat-delta { font-size: 11px; font-weight: 500; margin-top: 6px; }
+  .stat-delta.up   { color: var(--green); }
+  .stat-delta.down { color: var(--red); }
 
-    /* ── Grid Helpers ───────────────────────────── */
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 16px; }
+  /* ── BADGE ── */
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .badge.success { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(47,158,68,0.15); }
+  .badge.error   { background: var(--red-dim);    color: var(--red);    border: 1px solid rgba(201,42,42,0.15); }
+  .badge.warning { background: var(--amber-dim);  color: var(--amber);  border: 1px solid rgba(230,119,0,0.15); }
+  .badge.info    { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(25,113,194,0.15); }
+  .badge.running { background: var(--cyan-dim);   color: var(--cyan);   border: 1px solid rgba(12,133,153,0.15); }
+  .badge.purple  { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(103,65,217,0.15); }
 
-    /* ── Badges ───────────────────────────────────── */
-    .badge {
-        display: inline-flex; align-items: center; gap: 4px;
-        padding: 2px 7px; border-radius: 4px;
-        font-size: 11px; font-weight: 600; white-space: nowrap;
-    }
-    .badge-success { background: #ebf9ee; color: #2f9e44; border: 1px solid rgba(47,158,68,0.15); }
-    .badge-error { background: #fff5f5; color: #c92a2a; border: 1px solid rgba(201,42,42,0.15); }
-    .badge-warning { background: #fff3bf; color: #e67700; border: 1px solid rgba(230,119,0,0.15); }
-    .badge-info { background: #e7f0fb; color: #1971c2; border: 1px solid rgba(25,113,194,0.15); }
-    .badge-running { background: #e3fafc; color: #0c8599; border: 1px solid rgba(12,133,153,0.15); }
-    .badge-purple { background: #f3f0ff; color: #6741d9; border: 1px solid rgba(103,65,217,0.15); }
+  /* ── TABLE ── */
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .data-table th { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface); text-align: left; }
+  .data-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); vertical-align: middle; }
+  .data-table td:first-child { color: var(--text); font-weight: 500; }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tbody tr:hover { background: var(--surface); }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .tc-green  { color: var(--green);  font-weight: 600; }
+  .tc-red    { color: var(--red); }
+  .tc-amber  { color: var(--amber); }
+  .tc-cyan   { color: var(--cyan); }
+  .tc-accent { color: var(--accent); font-weight: 600; }
+  .tc-dim    { color: var(--text-dim); font-size: 11px; }
 
-    /* ── Data Table ───────────────────────────── */
-    .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .data-table th {
-        font-size: 10px; font-weight: 700; text-transform: uppercase;
-        letter-spacing: 0.06em; color: #adb5bd; padding: 8px 12px;
-        border-bottom: 1px solid #dee2e6; background: #f8f9fa; text-align: left;
-    }
-    .data-table td {
-        padding: 10px 12px; border-bottom: 1px solid #dee2e6;
-        color: #6c757d; vertical-align: middle;
-    }
-    .data-table td:first-child { color: #212529; font-weight: 500; }
-    .data-table tbody tr:hover { background: #f8f9fa; }
+  /* ── DQ ARROW ── */
+  .dq-arrow { display: flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 12px; }
+  .dq-arrow .before { color: var(--text-muted); }
+  .dq-arrow .arrow  { color: var(--text-dim); }
+  .dq-arrow .after  { color: var(--green); font-weight: 600; }
+  .dq-arrow .delta  { color: var(--green); font-size: 11px; }
 
-    /* ── DQ Arrow ──────────────────────────────── */
-    .dq-arrow {
-        display: flex; align-items: center; gap: 4px;
-        font-family: monospace; font-size: 12px;
-    }
-    .dq-before { color: #6c757d; }
-    .dq-arrow { color: #adb5bd; }
-    .dq-after { color: #2f9e44; font-weight: 600; }
-    .dq-delta { color: #2f9e44; font-size: 11px; }
+  /* ── TERMINAL ── */
+  .terminal { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border-hi); border-radius: var(--radius); padding: 14px 16px; font-family: var(--mono); font-size: 12px; line-height: 1.7; color: var(--text-muted); overflow-y: auto; }
+  .terminal .t-green { color: var(--green); }  .terminal .t-amber { color: var(--amber); }
+  .terminal .t-blue  { color: var(--accent); }  .terminal .t-red   { color: var(--red); }
+  .terminal .t-dim   { color: var(--text-dim); } .terminal .t-text  { color: var(--text); }
+  .terminal.h-160 { height: 160px; } .terminal.h-380 { height: 380px; overflow-y: auto; }
+  .terminal.h-508 { height: 508px; }
+  .stream-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s ease-in-out infinite; vertical-align: middle; margin-right: 4px; }
 
-    /* ── Terminal ──────────────────────────────── */
-    .terminal {
-        background: #f8f9fa; border: 1px solid #dee2e6;
-        border-left: 3px solid #ced4da; border-radius: 6px;
-        padding: 14px 16px;
-        font-family: monospace; font-size: 12px; line-height: 1.7;
-        color: #6c757d; overflow-y: auto;
-    }
-    .t-green { color: #2f9e44; }
-    .t-blue { color: #1971c2; }
-    .t-dim { color: #adb5bd; }
-    .t-text { color: #212529; }
+  /* ── STEPPER ── */
+  .stepper { display: flex; align-items: flex-start; margin-bottom: 28px; }
+  .step { display: flex; align-items: center; flex: 1; }
+  .step-node { display: flex; flex-direction: column; align-items: center; gap: 5px; flex-shrink: 0; }
+  .step-circle { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; font-family: var(--mono); border: 2px solid var(--border); background: var(--surface); color: var(--text-dim); }
+  .step-circle.done   { background: var(--green-dim);  border-color: var(--green);  color: var(--green); }
+  .step-circle.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 3px rgba(25,113,194,0.1); }
+  .step-label { font-size: 11px; font-weight: 500; color: var(--text-dim); white-space: nowrap; }
+  .step-label.done   { color: var(--green); }
+  .step-label.active { color: var(--accent); }
+  .step-line { flex: 1; height: 1px; background: var(--border); margin: 0 4px; transform: translateY(-12px); }
+  .step-line.done { background: var(--green); }
 
-    .stream-dot {
-        display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-        background: #2f9e44; animation: pulse 2s ease-in-out infinite;
-        vertical-align: middle; margin-right: 4px;
-    }
+  /* ── BLOCK CHIPS ── */
+  .block-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .block-chip { display: flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 4px; font-family: var(--mono); font-size: 11px; font-weight: 500; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); }
+  .block-chip.done    { background: var(--green-dim);  border-color: rgba(47,158,68,0.25);  color: var(--green); }
+  .block-chip.running { background: var(--accent-dim); border-color: rgba(25,113,194,0.25); color: var(--accent); animation: blink 1.5s ease-in-out infinite; }
+  .block-chip.error   { background: var(--red-dim);    border-color: rgba(201,42,42,0.25);  color: var(--red); }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.55} }
 
-    /* ── Stepper ───────────────────────────────────── */
-    .stepper { display: flex; align-items: flex-start; margin-bottom: 28px; }
-    .step { display: flex; align-items: center; flex: 1; }
-    .step-node { display: flex; flex-direction: column; align-items: center; gap: 5px; flex-shrink: 0; }
-    .step-circle {
-        width: 30px; height: 30px; border-radius: 50%;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 12px; font-weight: 700; font-family: monospace;
-        border: 2px solid #dee2e6; background: #f8f9fa; color: #adb5bd;
-    }
-    .step-circle.done { background: #ebf9ee; border-color: #2f9e44; color: #2f9e44; }
-    .step-circle.active { background: #e7f0fb; border-color: #1971c2; color: #1971c2; box-shadow: 0 0 0 3px rgba(25,113,194,0.1); }
-    .step-label { font-size: 11px; font-weight: 500; color: #adb5bd; white-space: nowrap; }
-    .step-label.done { color: #2f9e44; }
-    .step-label.active { color: #1971c2; }
-    .step-line { flex: 1; height: 1px; background: #dee2e6; margin: 0 4px; transform: translateY(-12px); }
-    .step-line.done { background: #2f9e44; }
+  /* ── BUTTONS ── */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: var(--radius); font-size: 13px; font-weight: 600; cursor: pointer; border: none; }
+  .btn.w-full { width: 100%; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
 
-    /* ── Block Chips ──────────────────────────────── */
-    .block-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-    .block-chip {
-        display: flex; align-items: center; gap: 5px; padding: 4px 10px;
-        border-radius: 4px; font-family: monospace; font-size: 11px;
-        font-weight: 500; border: 1px solid #dee2e6; background: #f8f9fa; color: #6c757d;
-    }
-    .block-chip.done { background: #ebf9ee; border-color: rgba(47,158,68,0.25); color: #2f9e44; }
-    .block-chip.running { background: #e7f0fb; border-color: rgba(25,113,194,0.25); color: #1971c2; animation: blink 1.5s ease-in-out infinite; }
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.55} }
+  /* ── MODE TOGGLE ── */
+  .mode-toggle { display: flex; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .mode-option { padding: 5px 12px; font-size: 12px; font-weight: 600; color: var(--text-muted); cursor: pointer; }
+  .mode-option.active { background: var(--bg); color: var(--accent); box-shadow: var(--shadow); }
 
-    /* ── Buttons ─────────────────────────────────── */
-    .btn {
-        display: inline-flex; align-items: center; gap: 6px;
-        padding: 7px 14px; border-radius: 6px;
-        font-size: 13px; font-weight: 600; cursor: pointer;
-        border: none;
-    }
-    .btn-primary { background: #1971c2; color: #fff; }
-    .btn-primary:hover { background: #1864ab; }
-    .btn-ghost { background: transparent; color: #6c757d; border: 1px solid #dee2e6; }
-    .btn-ghost:hover { background: #f1f3f5; color: #212529; }
-    .btn-sm { padding: 4px 10px; font-size: 12px; }
+  /* ── TOGGLE ── */
+  .toggle-inline { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--text-muted); }
+  .toggle { width: 34px; height: 18px; background: var(--surface3); border-radius: 9px; position: relative; border: 1px solid var(--border); flex-shrink: 0; display: inline-block; }
+  .toggle.on { background: var(--accent); border-color: var(--accent); }
+  .toggle::after { content: ''; position: absolute; width: 12px; height: 12px; background: #fff; border-radius: 50%; top: 2px; left: 2px; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+  .toggle.on::after { left: 18px; }
 
-    /* ── Mode Toggle ──────────────────────────────── */
-    .mode-toggle { display: flex; background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 6px; overflow: hidden; }
-    .mode-option { padding: 5px 12px; font-size: 12px; font-weight: 600; color: #6c757d; cursor: pointer; }
-    .mode-option.active { background: #ffffff; color: #1971c2; box-shadow: 0 1px 3px rgba(0,0,0,0.07); }
+  /* ── SLIDER ── */
+  .slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .slider-name { font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--text-muted); width: 170px; flex-shrink: 0; }
+  .slider { flex: 1; -webkit-appearance: none; height: 4px; border-radius: 2px; background: var(--surface3); outline: none; }
+  .slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; }
+  .slider-val { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--accent); width: 48px; text-align: right; }
 
-    /* ── Toggle ─────────────────────────────────────── */
-    .toggle-inline { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: #6c757d; }
-    .toggle { width: 34px; height: 18px; background: #e9ecef; border-radius: 9px; border: 1px solid #dee2e6; }
-    .toggle.on { background: #1971c2; border-color: #1971c2; }
-    .toggle::after {
-        content: ''; position: absolute; width: 12px; height: 12px; background: #fff; border-radius: 50%;
-        top: 2px; left: 2px;
-    }
-    .toggle.on::after { left: 18px; }
+  /* ── BAR CHART ── */
+  .bar-chart { display: flex; flex-direction: column; gap: 10px; }
+  .bar-row { display: flex; align-items: center; gap: 10px; }
+  .bar-label { width: 88px; flex-shrink: 0; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+  .bar-track { flex: 1; height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; }
+  .bar-fill.bar-accent { background: var(--accent); }
+  .bar-fill.bar-green  { background: var(--green); }
+  .bar-fill.bar-amber  { background: var(--amber); }
+  .bar-val { width: 40px; font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+  .tier-bar { display: flex; overflow: hidden; gap: 2px; border-radius: 4px; }
+  .bar-track .tier-bar { width: 100%; height: 100%; }
+  .tier-s1 { background: var(--green); }
+  .tier-s2 { background: var(--accent); }
+  .tier-s3 { background: var(--amber); }
+  .tier-legend { display: flex; gap: 14px; margin-top: 12px; }
+  .tier-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+  .tier-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .tier-dot.s1 { background: var(--green); }
+  .tier-dot.s2 { background: var(--accent); }
+  .tier-dot.s3 { background: var(--amber); }
 
-    /* ── Alert ─────────────────────────────────────── */
-    .alert { padding: 10px 12px; border-radius: 6px; font-size: 12px; font-weight: 500; }
-    .alert-purple { background: #f3f0ff; border: 1px solid rgba(103,65,217,0.12); color: #6741d9; }
-    .alert-green { background: #ebf9ee; border: 1px solid rgba(47,158,68,0.12); color: #2f9e44; }
+  /* ── YAML EDITOR ── */
+  .yaml-editor { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; font-family: var(--mono); font-size: 11.5px; line-height: 1.8; min-height: 100px; }
+  .yaml-key  { color: var(--accent); }
+  .yaml-val  { color: var(--green); }
+  .yaml-num  { color: var(--amber); }
+  .yaml-bool { color: var(--red); }
+  .yaml-editor.new { border-color: rgba(47,158,68,0.25); }
+  .section-label { font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
+  .section-label.generated { color: var(--green); }
+  .section-label.failed    { color: var(--red); }
 
-    /* ── Decision Card ──────────────────────────── */
-    .decision-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 6px; background: #f8f9fa; border: 1px solid #dee2e6; }
-    .decision-field { font-family: monospace; font-size: 12px; font-weight: 600; color: #1971c2; }
-    .decision-reason { font-family: monospace; font-size: 11px; color: #adb5bd; margin-top: 2px; }
-    .decision-body { flex: 1; }
-    .decision-actions { display: flex; gap: 5px; flex-shrink: 0; }
+  /* ── CHAT ── */
+  .chat-msg { display: flex; gap: 10px; margin-bottom: 14px; }
+  .chat-avatar { width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
+  .chat-avatar.user { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(25,113,194,0.15); }
+  .chat-avatar.ai   { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(103,65,217,0.15); }
+  .chat-bubble { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 13px; font-size: 13px; line-height: 1.6; max-width: 75%; color: var(--text-muted); }
+  .run-chip { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 4px; background: var(--accent-dim); color: var(--accent); font-family: var(--mono); font-size: 10px; font-weight: 600; margin: 0 2px; }
+  .chat-scroll { height: 200px; overflow-y: auto; margin-bottom: 12px; }
+  .chat-input-row { display: flex; gap: 8px; }
 
-    /* ── Quick Actions ──────────────────────────── */
-    .quick-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-    .quick-action {
-        display: flex; align-items: center; gap: 7px; padding: 9px 14px;
-        border-radius: 6px; background: #f8f9fa; border: 1px solid #dee2e6;
-        font-size: 13px; font-weight: 600; color: #6c757d; cursor: pointer;
-    }
-    .quick-action:hover { border-color: #1971c2; color: #1971c2; background: #e7f0fb; }
+  /* ── QUICK ACTIONS ── */
+  .quick-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .quick-action { display: flex; align-items: center; gap: 7px; padding: 9px 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--text-muted); cursor: pointer; text-decoration: none !important; }
+  .quick-action:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
 
-    /* ── DAG Strip ──────────────────────────────── */
-    .dag-strip { display: flex; gap: 10px; overflow-x: auto; }
-    .dag-strip-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(12,133,153,0.2); background: #e3fafc; white-space: nowrap; }
-    .dag-name { font-family: monospace; font-size: 12px; font-weight: 600; color: #0c8599; }
-    .dag-time { font-family: monospace; font-size: 10px; color: #adb5bd; }
-    .dag-spin {
-        width: 12px; height: 12px; border-radius: 50%;
-        border: 2px solid rgba(12,133,153,0.2); border-top-color: #0c8599;
-        animation: spin 0.8s linear infinite; flex-shrink: 0;
-    }
-    @keyframes spin { to{transform:rotate(360deg)} }
+  /* ── DAG STRIP ── */
+  .dag-strip { display: flex; gap: 10px; overflow-x: auto; }
+  .dag-strip-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius); border: 1px solid rgba(12,133,153,0.2); background: var(--cyan-dim); white-space: nowrap; }
+  .dag-strip-name { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--cyan); }
+  .dag-strip-time { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+  .dag-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(12,133,153,0.2); border-top-color: var(--cyan); animation: spin 0.8s linear infinite; flex-shrink: 0; }
+  @keyframes spin { to{transform:rotate(360deg)} }
 
-    /* ── Grafana ─────────────────────────────────── */
-    .grafana-toolbar {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 10px 16px; background: #f8f9fa; border: 1px solid #dee2e6;
-        border-radius: 10px 10px 0 0; border-bottom: none;
-    }
-    .grafana-logo { display: flex; align-items: center; gap: 7px; padding-right: 16px; margin-right: 8px; border-right: 1px solid #dee2e6; }
-    .grafana-logo-text { font-size: 13px; font-weight: 700; color: #f46800; }
-    .grafana-breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
-    .grafana-controls { display: flex; align-items: center; gap: 8px; }
-    .grafana-timerange { display: flex; background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 6px; overflow: hidden; }
-    .timerange-btn { padding: 4px 10px; font-size: 11px; font-weight: 600; color: #6c757d; cursor: pointer; font-family: monospace; }
-    .timerange-btn:hover { background: #e9ecef; }
-    .timerange-btn.active { background: #1971c2; color: #fff; }
-    .grafana-embed { background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 0 0 10px 10px; min-height: 480px; }
+  /* ── DAG CHAIN ── */
+  .dag-chain { display: flex; align-items: center; overflow-x: auto; padding: 12px 0; }
+  .dag-node { display: flex; flex-direction: column; align-items: center; gap: 5px; flex-shrink: 0; }
+  .dag-box { padding: 7px 14px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface); font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--text-muted); white-space: nowrap; }
+  .dag-box.ok      { border-color: rgba(47,158,68,0.25);  background: var(--green-dim); color: var(--green); }
+  .dag-box.running { border-color: rgba(12,133,153,0.25); background: var(--cyan-dim);  color: var(--cyan); animation: blink 1.5s infinite; }
+  .dag-schedule         { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+  .dag-schedule.running { color: var(--cyan); }
+  .dag-arrow { width: 28px; height: 1px; background: var(--border); flex-shrink: 0; position: relative; top: -10px; }
+  .dag-arrow::after { content: '>'; position: absolute; right: -5px; top: -6px; font-size: 9px; font-weight: 700; color: var(--text-dim); line-height: 1; }
 
-    /* ── Chat ─────────────────────────────────────── */
-    .chat-scroll { height: 300px; overflow-y: auto; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; padding: 14px; }
-    .chat-msg { display: flex; gap: 10px; margin-bottom: 14px; }
-    .chat-avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
-    .chat-avatar.user { background: #e7f0fb; color: #1971c2; }
-    .chat-avatar.ai { background: #f3f0ff; color: #6741d9; }
-    .chat-bubble { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; padding: 9px 13px; font-size: 13px; color: #6c757d; max-width: 75%; }
-    .chat-input { display: flex; gap: 8px; margin-top: 12px; }
+  /* ── INPUTS ── */
+  .field-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; }
+  .field-input { width: 100%; padding: 8px 11px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-size: 13px; outline: none; }
+  .field-input:focus { border-color: var(--accent); }
+  .search-bar { width: 100%; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-size: 14px; outline: none; }
+  .drop-zone { border: 1.5px dashed var(--border-hi); border-radius: var(--radius-lg); padding: 28px; text-align: center; cursor: pointer; color: var(--text-dim); font-size: 12px; font-weight: 500; }
+  .drop-zone:hover { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+  .drop-zone-icon { font-size: 18px; margin-bottom: 8px; }
+  .filter-row { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+  .filter-row .f-grow { flex: 2; }
+  .filter-row .f-sm   { flex: 1; max-width: 140px; }
+  .filter-row .f-xs   { flex: 1; max-width: 120px; }
+  .search-form { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+  .search-options { display: flex; gap: 12px; align-items: center; }
+  .search-check { display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: var(--text-muted); cursor: pointer; }
 
-    /* ── Field Inputs ─────────────────────────── */
-    .field-label { font-size: 11px; font-weight: 600; color: #6c757d; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; }
-    .field-input { width: 100%; padding: 8px 11px; background: #fff; border: 1px solid #dee2e6; border-radius: 6px; color: #212529; font-size: 13px; outline: none; }
-    .field-input:focus { border-color: #1971c2; box-shadow: 0 0 0 3px rgba(25,113,194,0.08); }
-    .drop-zone { border: 1.5px dashed #ced4da; border-radius: 10px; padding: 28px; text-align: center; cursor: pointer; color: #adb5bd; font-size: 12px; font-weight: 500; }
-    .drop-zone:hover { border-color: #1971c2; background: #e7f0fb; color: #1971c2; }
-    .drop-zone-icon { font-size: 18px; margin-bottom: 8px; }
+  /* ── ALERT ── */
+  .alert { padding: 10px 12px; border-radius: var(--radius); font-size: 12px; font-weight: 500; }
+  .alert.purple { background: var(--purple-dim); border: 1px solid rgba(103,65,217,0.12); color: var(--purple); }
+  .alert.red    { background: var(--red-dim);    border: 1px solid rgba(201,42,42,0.12);  color: var(--red); }
+  .alert.green  { background: var(--green-dim);  border: 1px solid rgba(47,158,68,0.12);  color: var(--green); }
 
-    /* ── Tabs ────────────────────────────────────── */
-    .tabs { display: flex; border-bottom: 1px solid #dee2e6; margin-bottom: 20px; }
-    .tab { padding: 9px 16px; font-size: 13px; font-weight: 600; color: #6c757d; cursor: pointer; border-bottom: 2px solid transparent; }
-    .tab:hover { color: #212529; }
-    .tab.active { color: #1971c2; border-bottom-color: #1971c2; }
+  /* ── DECISION CARD ── */
+  .decision-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
+  .decision-field  { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--accent); }
+  .decision-reason { font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .decision-body { flex: 1; }
+  .decision-actions { display: flex; gap: 5px; flex-shrink: 0; }
 
-    /* ── Utility ───────────────────────────────── */
-    .mb { margin-bottom: 16px; }
-    .mt-6 { margin-top: 6px; }
-    .mb-12 { margin-bottom: 12px; }
-    .mb-16 { margin-bottom: 16px; }
+  /* ── PRODUCT CARDS ── */
+  .product-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+  .product-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px; cursor: pointer; box-shadow: var(--shadow); }
+  .product-card:hover { border-color: var(--accent); box-shadow: var(--shadow-md); }
+  .product-card.recalled { border-color: rgba(201,42,42,0.2); }
+  .product-name  { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 3px; }
+  .product-brand { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px; }
+  .product-tags  { display: flex; flex-wrap: wrap; gap: 4px; }
+  .product-card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 6px; }
 
-    /* ── YAML Editor ────────────────────��─��──── */
-    .yaml-editor { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; padding: 12px 14px; font-family: monospace; font-size: 11.5px; line-height: 1.8; }
-    .yaml-key { color: #1971c2; }
-    .yaml-val { color: #2f9e44; }
-    .yaml-num { color: #e67700; }
-    .yaml-bool { color: #c92a2a; }
-    .yaml-editor.new { border-color: rgba(47,158,68,0.25); }
-    .section-label { font-size: 10px; font-weight: 700; color: #adb5bd; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
-    .section-label.generated { color: #2f9e44; }
+  /* ── GUARDRAIL ── */
+  .guardrail-badge { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--radius); background: var(--green-dim); border: 1px solid rgba(47,158,68,0.15); font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--green); }
+  .guardrail-ok { padding: 8px 12px; border-radius: var(--radius); background: var(--green-dim); border: 1px solid rgba(47,158,68,0.15); font-size: 12px; font-weight: 600; color: var(--green); margin-top: 12px; }
 
-    /* ── Scrollbar ──────────────────────────────── */
-    ::-webkit-scrollbar { width: 5px; height: 5px; }
-    ::-webkit-scrollbar-thumb { background: #dee2e6; border-radius: 3px; }
-</style>
-"""
+  /* ── AGENT ROW ── */
+  .agent-row { display: flex; align-items: center; gap: 10px; }
+  .agent-row .agent-label { font-family: var(--mono); font-size: 12px; color: var(--text-muted); }
+  .agent-row .agent-result { font-family: var(--mono); font-size: 11px; margin-left: auto; }
+
+  /* ── RESOLVE ROW ── */
+  .resolve-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
+
+  /* ── MISC ── */
+  .failed-list { font-family: var(--mono); font-size: 11px; line-height: 1.9; }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+  .c-green  { color: var(--green); }  .c-red   { color: var(--red); }
+  .c-amber  { color: var(--amber); }  .c-cyan  { color: var(--cyan); }
+  .c-accent { color: var(--accent); } .c-muted { color: var(--text-muted); }
+  .c-dim    { color: var(--text-dim); }
+  .fw-6 { font-weight: 600; }
+  .fs-11 { font-size: 11px; } .fs-12 { font-size: 12px; }
+
+  /* ── GRAFANA ── */
+  .grafana-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; margin-bottom: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg) var(--radius-lg) 0 0; border-bottom: none; }
+  .grafana-logo { display: flex; align-items: center; gap: 7px; padding-right: 16px; margin-right: 8px; border-right: 1px solid var(--border); }
+  .grafana-logo-text { font-size: 13px; font-weight: 700; color: #F46800; }
+  .grafana-breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--text); }
+  .grafana-controls { display: flex; align-items: center; gap: 8px; }
+  .grafana-timerange { display: flex; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .grafana-timerange-btn { padding: 4px 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); cursor: pointer; font-family: var(--mono); }
+  .grafana-timerange-btn.active { background: var(--accent); color: #fff; }
+  .grafana-embed-wrap { position: relative; background: var(--surface2); border: 1px solid var(--border); border-radius: 0 0 var(--radius-lg) var(--radius-lg); overflow: hidden; min-height: 480px; margin-bottom: 12px; }
+  .grafana-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--surface); text-align: center; padding: 80px 40px; }
+  .grafana-placeholder-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+  .grafana-placeholder-sub { font-size: 13px; color: var(--text-muted); line-height: 1.7; margin-bottom: 14px; }
+  .grafana-placeholder-url { padding: 8px 14px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); font-size: 11px; color: var(--text-dim); font-family: var(--mono); }
+
+  /* ── SCROLLBAR ── */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>"""
 
 
 def init_session_state():
-    """Initialize session state variables."""
     if "current_page" not in st.session_state:
         st.session_state.current_page = "dashboard"
 
 
 def get_current_page() -> str:
-    """Resolve the current page from query params across Streamlit versions."""
-    raw_page = st.query_params.get("page", st.session_state.current_page)
-
-    if isinstance(raw_page, list):
-        page = raw_page[0] if raw_page else st.session_state.current_page
-    else:
-        page = raw_page
-
+    raw = st.query_params.get("page", st.session_state.current_page)
+    page = raw[0] if isinstance(raw, list) else raw
     page = str(page or st.session_state.current_page).strip().lower()
     if page not in VALID_PAGES:
         page = "dashboard"
-
     st.session_state.current_page = page
     return page
 
 
-def load_ui_html() -> str:
-    """Load the canonical HTML UI file from the repo root."""
-    ui_path = Path(__file__).resolve().parents[2] / "dataforge_components.html"
-    return ui_path.read_text(encoding="utf-8")
-
-
-def render_html_shell() -> None:
-    """Render the exact UI defined in the canonical HTML file."""
-    try:
-        html = load_ui_html()
-    except FileNotFoundError:
-        st.error("Missing `dataforge_components.html`; cannot render the canonical UI.")
-        return
-
-    components.html(html, height=1200, scrolling=False)
-
-
-def render_dashboard():
-    """Render the Dashboard page."""
-    st.markdown("""
-    <div class="page-header">
-        <div>
-            <div class="page-title">Dashboard</div>
-            <div class="page-subtitle">System at a glance · Last refreshed 14s ago</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Stats cards
-    st.markdown('<div class="grid-4 mb">', unsafe_allow_html=True)
-    cols = st.columns(4)
-    stats = [
-        ("Runs Today", "47", "+12 vs yesterday", "delta-up"),
-        ("Success Rate", "96.3%", "+1.8 pp", "delta-up"),
-        ("Avg DQ Delta", "+8.4pp", "improving", "delta-up"),
-        ("Quarantine Rate", "2.1%", "-0.4 pp", "delta-down"),
-    ]
-    for i, (label, value, delta, delta_cls) in enumerate(stats):
-        with cols[i]:
-            st.markdown("""
-            <div class="stat-card">
-                <div class="stat-label">{}</div>
-                <div class="stat-value">{}</div>
-                <div class="stat-delta {}">{}</div>
-            </div>
-            """.format(label, value, delta_cls, delta), unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # Main content: Recent Runs + Quick Actions
-    col_left, col_right = st.columns([2, 1])
-
-    with col_left:
-        st.markdown("""
-        <div class="card">
-            <div class="card-title">Recent Runs</div>
-        </div>
-        """, unsafe_allow_html=True)
-        runs = [
-            ("usda_april.csv", "nutrition", "74.1", "83.8", "+9.7", "success"),
-            ("fda_recalls_q2.csv", "safety", "61.2", "78.5", "+17.3", "success"),
-            ("kroger_pricing.gcs", "pricing", "82.0", "—", "—", "running"),
-            ("whole_foods_sku.csv", "nutrition", "55.3", "69.0", "+13.7", "error"),
-            ("open_food_facts.csv", "nutrition", "70.8", "81.2", "+10.4", "success"),
-        ]
-        st.markdown("""
-        <table class="data-table">
-            <thead><tr><th>Source</th><th>Domain</th><th>DQ Score</th><th>Status</th></tr></thead>
-            <tbody>
-        """, unsafe_allow_html=True)
-        for source, domain, dq_pre, dq_post, delta, status in runs:
-            badge = '<span class="badge badge-{}">{}</span>'.format(status, status)
-            dq_arrow = '''
-            <div class="dq-arrow">
-                <span class="dq-before">{}</span>
-                <span class="dq-arrow"> → </span>
-                <span class="dq-after">{}</span>
-                <span class="dq-delta"> ({})</span>
-            </div>
-            '''.format(dq_pre, dq_post, delta)
-            domain_badge = '<span class="badge badge-info">{}</span>'.format(domain)
-            st.markdown("""
-            <tr>
-                <td>{}</td>
-                <td>{}</td>
-                <td>{}</td>
-                <td>{}</td>
-            </tr>
-            """.format(source, domain_badge, dq_arrow, badge), unsafe_allow_html=True)
-        st.markdown("</tbody></table>", unsafe_allow_html=True)
-
-    with col_right:
-        st.markdown("""
-        <div class="card">
-            <div class="card-title">Quick Actions</div>
-            <div class="quick-actions">
-                <div class="quick-action" onclick="window.location.href='?page=pipeline'">Start Pipeline Run</div>
-                <div class="quick-action" onclick="window.location.href='?page=airflow'">Trigger DAG</div>
-                <div class="quick-action" onclick="window.location.href='?page=tests'">Run Tests</div>
-            </div>
-        </div>
-        <div class="card">
-            <div class="card-title">Active DAGs</div>
-            <div class="dag-strip">
-                <div class="dag-strip-item">
-                    <div class="dag-spin"></div>
-                    <div>
-                        <div class="dag-name">bronze_to_silver_dag</div>
-                        <div class="dag-time">running · 4m 22s</div>
-                    </div>
-                </div>
-                <div class="dag-strip-item">
-                    <div class="dag-spin"></div>
-                    <div>
-                        <div class="dag-name">uc2_anomaly_detector</div>
-                        <div class="dag-time">running · 1m 08s</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def render_pipeline():
-    """Render the Pipeline Wizard page."""
-    st.markdown("""
-    <div class="page-header">
-        <div>
-            <div class="page-title">Pipeline Wizard</div>
-            <div class="page-subtitle">Bronze → Silver → Gold · Human-in-the-loop pipeline</div>
-        </div>
-        <div class="page-controls">
-            <div class="mode-toggle">
-                <div class="mode-option active">Full</div>
-                <div class="mode-option">Silver only</div>
-                <div class="mode-option">Gold only</div>
-            </div>
-            <div class="toggle-inline">
-                <div class="toggle on"></div>
-                <span>Critic</span>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Stepper
-    steps = [("Source", "done"), ("Schema", "done"), ("HITL", "active"), ("Execute", ""), ("Results", "")]
-    st.markdown('<div class="stepper">', unsafe_allow_html=True)
-    for i, (step, status) in enumerate(steps):
-        check = "✓" if status == "done" else str(i + 1)
-        st.markdown("""
-        <div class="step">
-            <div class="step-node">
-                <div class="step-circle {}">{}</div>
-                <div class="step-label {}">{}</div>
-            </div>
-            {}
-        </div>
-        """.format(status, check, status, step,
-                  '<div class="step-line {}"></div>'.format(status) if i < len(steps) - 1 else ''), unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # Main content
-    col_left, col_right = st.columns([1, 1])
-
-    with col_left:
-        st.markdown("""
-        <div class="card">
-            <div class="card-title">Step 3 — HITL Decisions</div>
-            <div class="alert alert-purple mb">Critic: "allergen_info field is sparse (38% null). Consider excluding or imputing from product description."</div>
-            <div class="section-label">Missing Columns</div>
-            <div style="display: flex; flex-direction: column; gap: 8px;">
-        """, unsafe_allow_html=True)
-
-        decisions = [
-            ("allergen_info", "38% null · LLM-derivable from description"),
-            ("serving_size_g", "92% null · No reliable source"),
-            ("is_organic", "Missing · Derivable from label_text"),
-        ]
-        for field, reason in decisions:
-            st.markdown("""
-            <div class="decision-card">
-                <div class="decision-body">
-                    <div class="decision-field">{}</div>
-                    <div class="decision-reason">{}</div>
-                </div>
-                <div class="decision-actions">
-                    <button class="btn btn-ghost btn-sm">Null</button>
-                    <button class="btn btn-primary btn-sm">Default</button>
-                    <button class="btn btn-ghost btn-sm">Exclude</button>
-                </div>
-            </div>
-            """.format(field, reason), unsafe_allow_html=True)
-
-        st.markdown("</div></div>", unsafe_allow_html=True)
-
-        st.markdown("""
-        <div class="card">
-            <div class="card-title">Block Sequence Preview</div>
-            <div class="block-chips">
-                <div class="block-chip done">Normalize</div>
-                <div class="block-chip done">Deduplicate</div>
-                <div class="block-chip done">SchemaAlign</div>
-                <div class="block-chip running">Enrich_S1</div>
-                <div class="block-chip">Enrich_S2</div>
-                <div class="block-chip">Enrich_S3</div>
-                <div class="block-chip">DQ_Score</div>
-                <div class="block-chip">Quarantine</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_right:
-        st.markdown("""
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">Live Log</div>
-                <span style="font-size: 11px; font-weight: 600; color: #2f9e44;"><span class="stream-dot"></span>streaming</span>
-            </div>
-            <div class="terminal" style="height: 380px; overflow-y: auto;">
-        """, unsafe_allow_html=True)
-
-        log_lines = [
-            ("[14:22:01]", "OK", "normalize_block", "completed", "12,840 rows"),
-            ("[14:22:04]", "OK", "deduplicate_block", "removed", "234 dupes → 12,606"),
-            ("[14:22:08]", "OK", "schema_align", "47 renames, 3 casts", ""),
-            ("[14:22:12]", "RUN", "enrich_s1_block", "starting...", ""),
-            ("[14:22:22]", "OK", "enrich_s1_block", "12,606 rows enriched", ""),
-            ("[14:22:23]", "RUN", "enrich_s2_block", "starting (LLM)...", ""),
-        ]
-        for time, level, event, detail, extra in log_lines:
-            color = "t-green" if level == "OK" else ("t-blue" if level == "RUN" else "t-dim")
-            st.markdown("""
-            <span class="t-dim">{}</span> <span class="{}">{}</span> <span class="t-text">{}</span> {} <span class="t-green">{}</span><br>
-            """.format(time, color, level, event, detail, extra), unsafe_allow_html=True)
-
-        st.markdown("</div></div></div>", unsafe_allow_html=True)
-
-
-def render_domain_packs():
-    """Render the Domain Packs page."""
-    st.markdown("""
-    <div class="page-header">
-        <div>
-            <div class="page-title">Domain Packs</div>
-            <div class="page-subtitle">Generate, validate, and manage domain enrichment configurations</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="tabs">
-        <div class="tab active">Generate Pack</div>
-        <div class="tab">Block Scaffold</div>
-        <div class="tab">Preview / Validate</div>
-        <div class="tab">Manage</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    col_left, col_right = st.columns([1, 1])
-
-    with col_left:
-        st.markdown("""
-        <div class="card">
-            <div class="card-title">Pack Configuration</div>
-            <div class="mb-12">
-                <div class="field-label">Domain Name</div>
-                <input class="field-input" type="text" value="cosmetics" placeholder="e.g. cosmetics, supplements">
-            </div>
-            <div class="mb-12">
-                <div class="field-label">Description</div>
-                <textarea class="field-input" rows="3" style="resize:none">Beauty and personal care products. Focus on ingredient safety, skin type suitability, and SPF values.</textarea>
-            </div>
-            <div class="mb-16">
-                <div class="field-label">Sample CSV (for field detection)</div>
-                <div class="drop-zone">
-                    <div class="drop-zone-icon">[ csv ]</div>
-                    <div>Drop CSV or click to browse</div>
-                    <div class="mt-6" style="color: #adb5bd; font-size: 11px;">cosmetics_sample.csv · 1,200 rows detected</div>
-                </div>
-            </div>
-            <button class="btn btn-primary" style="width: 100%;">Generate Pack</button>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("""
-        <div class="card">
-            <div class="card-title">Agent Progress</div>
-            <div style="display: flex; flex-direction: column; gap: 10px;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <span class="badge badge-success">done</span>
-                    <span style="font-family: monospace; font-size: 12px; color: #6c757d;">Analyze CSV</span>
-                    <span style="font-family: monospace; font-size: 11px; margin-left: auto; color: #2f9e44;">28 fields</span>
-                </div>
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <span class="badge badge-success">done</span>
-                    <span style="font-family: monospace; font-size: 12px; color: #6c757d;">Generate Rules</span>
-                    <span style="font-family: monospace; font-size: 11px; margin-left: auto; color: #2f9e44;">14 rules</span>
-                </div>
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <span class="badge badge-running">run</span>
-                    <span style="font-family: monospace; font-size: 12px; color: #1971c2;">Validate</span>
-                    <span style="font-family: monospace; font-size: 11px; margin-left: auto; color: #adb5bd;">running...</span>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_right:
-        st.markdown("""
-        <div class="card">
-            <div class="card-title">Generated YAML — Side-by-Side Review</div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                <div>
-                    <div class="section-label">Existing</div>
-                    <div class="yaml-editor">
-<span class="yaml-key">domain:</span> <span class="yaml-val">nutrition</span><br>
-<span class="yaml-key">version:</span> <span class="yaml-num">1.2</span><br>
-<span class="yaml-key">fields:</span><br>
-&nbsp;&nbsp;- name: <span class="yaml-val">product_name</span><br>
-&nbsp;&nbsp;&nbsp;&nbsp;type: <span class="yaml-val">string</span>
-                    </div>
-                </div>
-                <div>
-                    <div class="section-label generated">Generated</div>
-                    <div class="yaml-editor new">
-<span class="yaml-key">domain:</span> <span class="yaml-val">cosmetics</span><br>
-<span class="yaml-key">version:</span> <span class="yaml-num">1.0</span><br>
-<span class="yaml-key">fields:</span><br>
-&nbsp;&nbsp;- name: <span class="yaml-val">brand_name</span><br>
-&nbsp;&nbsp;&nbsp;&nbsp;type: <span class="yaml-val">string</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def render_observability():
-    """Render the Observability page."""
-    st.markdown("""
-    <div class="page-header">
-        <div>
-            <div class="page-title">Observability</div>
-            <div class="page-subtitle">Monitor runs, analytics, and chat</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="tabs">
-        <div class="tab active">Run History</div>
-        <div class="tab">Grafana</div>
-        <div class="tab">Chatbot</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Run history
-    st.markdown("""
-    <div class="card mb">
-        <div class="card-title">Run History</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    runs = [
-        (1, "usda_april.csv", "nutrition", 12840, 74.1, 83.8, 9.7, 12, 3, "EXISTS"),
-        (2, "fda_recalls_q2.csv", "safety", 8420, 61.2, 78.5, 17.3, 8, 5, "DERIVED"),
-        (3, "kroger_pricing.gcs", "pricing", 15620, 82.0, 91.2, 9.2, 15, 2, "EXISTS"),
-        (4, "whole_foods_sku.csv", "nutrition", 5340, 55.3, 69.0, 13.7, 6, 4, "DERIVED"),
-    ]
-    st.markdown("""
-    <table class="data-table">
-        <thead><tr><th>#</th><th>Source</th><th>Domain</th><th>Rows</th><th>DQ (Pre→Post)</th><th>Delta</th><th>Reg. Hits</th><th>Generated</th><th>Schema</th></tr></thead>
-        <tbody>
-    """, unsafe_allow_html=True)
-    for run_num, source, domain, rows, dq_pre, dq_post, delta, reg_hits, generated, schema in runs:
-        delta_cls = "delta-up" if delta > 0 else "delta-down"
-        delta_sign = "+" if delta > 0 else ""
-        schema_badge = '<span class="badge badge-success">{}</span>'.format(schema)
-        st.markdown("""
-        <tr>
-            <td>Run {}</td>
-            <td>{}</td>
-            <td><span class="badge badge-info">{}</span></td>
-            <td>{:,}</td>
-            <td>{:.1f}% → {:.1f}%</td>
-            <td class="{}">{}{:.1f}%</td>
-            <td>{}</td>
-            <td>{}</td>
-            <td>{}</td>
-        </tr>
-        """.format(run_num, source, domain, rows, dq_pre, dq_post, delta_cls, delta_sign, delta, reg_hits, generated, schema_badge), unsafe_allow_html=True)
-    st.markdown("</tbody></table>", unsafe_allow_html=True)
-
-    # Grafana
-    st.markdown("""
-    <div class="card mb">
-        <div class="card-title">Grafana Dashboard</div>
-        <div class="grafana-toolbar">
-            <div class="grafana-logo">
-                <span class="grafana-logo-text">Grafana</span>
-            </div>
-            <div class="grafana-breadcrumb">
-                <span>Home</span> / <span>Dashboards</span> / <span>UC1 Pipeline</span>
-            </div>
-            <div class="grafana-controls">
-                <div class="grafana-timerange">
-                    <div class="timerange-btn">15m</div>
-                    <div class="timerange-btn active">30m</div>
-                    <div class="timerange-btn">1h</div>
-                    <div class="timerange-btn">6h</div>
-                </div>
-            </div>
-        </div>
-        <div class="grafana-embed" style="height: 400px; display: flex; align-items: center; justify-content: center; color: #adb5bd;">
-            <div style="text-align: center;">
-                <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Grafana Dashboard</div>
-                <div style="font-size: 12px;">Configure GRAFANA_URL in settings to view metrics</div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Chatbot
-    st.markdown("""
-    <div class="card">
-        <div class="card-title">Pipeline Assistant</div>
-        <div class="chat-scroll">
-            <div class="chat-msg">
-                <div class="chat-avatar ai">AI</div>
-                <div class="chat-bubble">Hi! I'm your pipeline assistant. Ask me about runs, DQ scores, or any enrichment results.</div>
-            </div>
-            <div class="chat-msg">
-                <div class="chat-avatar user">You</div>
-                <div class="chat-bubble">Show me the recent runs with the highest DQ improvement</div>
-            </div>
-            <div class="chat-msg">
-                <div class="chat-avatar ai">AI</div>
-                <div class="chat-bubble">Based on the run history, the top DQ improvements were:<br><br>
-                1. <b>fda_recalls_q2.csv</b>: +17.3% (61.2% → 78.5%)<br>
-                2. <b>whole_foods_sku.csv</b>: +13.7% (55.3% → 69.0%)</div>
-            </div>
-        </div>
-        <div class="chat-input">
-            <input class="field-input" placeholder="Ask about pipeline runs, DQ scores, or enrichment...">
-            <button class="btn btn-primary">Send</button>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
 def render_topbar():
-    """Render the topbar."""
     st.markdown("""
-    <div class="topbar-section">
-        <div class="topbar-brand">
-            <div class="logo">DF</div>
-            <div class="brand-name">Data<span>Forge</span></div>
-        </div>
-        <div class="health-rail">
-            <span class="health-label">Infra</span>
-            <div class="health-pill"><span class="health-dot dot-ok"></span>Redis</div>
-            <div class="health-pill"><span class="health-dot dot-ok"></span>Postgres</div>
-            <div class="health-pill"><span class="health-dot dot-warn"></span>Kafka</div>
-            <div class="health-pill"><span class="health-dot dot-ok"></span>ChromaDB</div>
-            <div class="health-pill"><span class="health-dot dot-ok"></span>GCS</div>
-        </div>
+    <div class="topbar">
+      <div class="topbar-brand">
+        <div class="logo">DF</div>
+        <div class="name">Data<span>Forge</span></div>
+      </div>
+      <div class="health-rail">
+        <span class="health-label">Infra</span>
+        <div class="health-pill"><span class="health-dot ok"></span>Redis</div>
+        <div class="health-pill"><span class="health-dot ok"></span>Postgres</div>
+        <div class="health-pill"><span class="health-dot warn"></span>Kafka</div>
+        <div class="health-pill"><span class="health-dot ok"></span>ChromaDB</div>
+        <div class="health-pill"><span class="health-dot ok"></span>GCS</div>
+      </div>
+      <div class="topbar-right">
         <div class="run-badge">2 active runs</div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
 
 def render_sidebar(page: str):
-    """Render the sidebar navigation."""
     with st.sidebar:
         st.markdown(STYLES, unsafe_allow_html=True)
 
-        pages = [
-            ("dashboard", "db", "Dashboard"),
-            ("domain", "dp", "Domain Packs"),
-            ("pipeline", "pl", "Pipeline", "ETL"),
-            ("observability", "ob", "Observability"),
-            ("search", "sr", "Search"),
-            ("recs", "rc", "Recommendations"),
-            ("airflow", "af", "Airflow", "12"),
-            ("tests", "ts", "Tests"),
-        ]
+        def nav_item(page_id, icon, label, badge=None):
+            active = "active" if page_id == page else ""
+            badge_html = f'<span class="nav-badge">{badge}</span>' if badge else ""
+            st.markdown(f"""
+            <a href="?page={page_id}" style="text-decoration:none">
+              <div class="nav-item {active}">
+                <span class="nav-icon">{icon}</span>{label}{badge_html}
+              </div>
+            </a>""", unsafe_allow_html=True)
 
-        for p in pages:
-            page_id = p[0]
-            icon = p[1]
-            label = p[2]
-            badge = p[3] if len(p) > 3 else None
+        nav_item("dashboard", "db", "Dashboard")
+        st.markdown('<span class="nav-label">Pipeline</span>', unsafe_allow_html=True)
+        nav_item("pipeline", "pl", "Pipeline", "ETL")
+        nav_item("domain", "dp", "Domain Packs")
+        nav_item("enrichment", "el", "Enrichment Lab")
+        st.markdown('<span class="nav-label">Analytics</span>', unsafe_allow_html=True)
+        nav_item("observability", "ob", "Observability")
+        nav_item("search", "sr", "Search")
+        nav_item("recs", "rc", "Recommendations")
+        st.markdown('<span class="nav-label">Ops</span>', unsafe_allow_html=True)
+        nav_item("airflow", "af", "Airflow", "12")
+        nav_item("tests", "ts", "Tests")
 
-            badge_html = ""
-            if badge:
-                badge_html = '<span class="badge" style="margin-left: auto; font-size: 10px; padding: 1px 6px; background: #e9ecef;">{}</span>'.format(badge)
 
-            st.markdown("""
-            <a href="?page={page_id}" style="text-decoration: none;">
-                <div class="quick-action" style="margin: 4px 8px;">
-                    <span style="font-family: monospace; font-size: 10px; font-weight: 700; width: 20px; opacity: 0.6;">{icon}</span>
-                    <span>{label}</span>
-                    {badge_html}
+def render_dashboard():
+    st.markdown("""
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Dashboard</div>
+        <div class="page-subtitle">System at a glance · Last refreshed 14s ago</div>
+      </div>
+    </div>
+
+    <div class="grid-4 mb">
+      <div class="stat-card">
+        <div class="stat-label">Runs Today</div>
+        <div class="stat-value">47</div>
+        <div class="stat-delta up">+12 vs yesterday</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Success Rate</div>
+        <div class="stat-value">96.3<span class="stat-unit">%</span></div>
+        <div class="stat-delta up">+1.8 pp</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Avg DQ Delta</div>
+        <div class="stat-value">+8.4<span class="stat-unit">pp</span></div>
+        <div class="stat-delta up">improving</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Quarantine Rate</div>
+        <div class="stat-value">2.1<span class="stat-unit">%</span></div>
+        <div class="stat-delta down">-0.4 pp</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Recent Runs</div>
+        <table class="data-table">
+          <thead><tr><th>Source</th><th>Domain</th><th>DQ Score</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>usda_april.csv</td>
+              <td><span class="badge info">nutrition</span></td>
+              <td><div class="dq-arrow"><span class="before">74.1</span><span class="arrow"> → </span><span class="after">83.8</span><span class="delta"> (+9.7)</span></div></td>
+              <td><span class="badge success">success</span></td>
+            </tr>
+            <tr>
+              <td>fda_recalls_q2.csv</td>
+              <td><span class="badge warning">safety</span></td>
+              <td><div class="dq-arrow"><span class="before">61.2</span><span class="arrow"> → </span><span class="after">78.5</span><span class="delta"> (+17.3)</span></div></td>
+              <td><span class="badge success">success</span></td>
+            </tr>
+            <tr>
+              <td>kroger_pricing.gcs</td>
+              <td><span class="badge purple">pricing</span></td>
+              <td><div class="dq-arrow"><span class="before">82.0</span><span class="arrow"> → </span><span class="after">—</span></div></td>
+              <td><span class="badge running">running</span></td>
+            </tr>
+            <tr>
+              <td>whole_foods_sku.csv</td>
+              <td><span class="badge info">nutrition</span></td>
+              <td><div class="dq-arrow"><span class="before">55.3</span><span class="arrow"> → </span><span class="after">69.0</span><span class="delta"> (+13.7)</span></div></td>
+              <td><span class="badge error">failed</span></td>
+            </tr>
+            <tr>
+              <td>open_food_facts.csv</td>
+              <td><span class="badge info">nutrition</span></td>
+              <td><div class="dq-arrow"><span class="before">70.8</span><span class="arrow"> → </span><span class="after">81.2</span><span class="delta"> (+10.4)</span></div></td>
+              <td><span class="badge success">success</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <div class="card-title">Quick Actions</div>
+          <div class="quick-actions">
+            <a href="?page=pipeline" class="quick-action">Start Pipeline Run</a>
+            <a href="?page=airflow" class="quick-action">Trigger DAG</a>
+            <a href="?page=tests" class="quick-action">Run Tests</a>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Active DAGs</div>
+          <div class="dag-strip">
+            <div class="dag-strip-item">
+              <div class="dag-spin"></div>
+              <div>
+                <div class="dag-strip-name">bronze_to_silver_dag</div>
+                <div class="dag-strip-time">running · 4m 22s</div>
+              </div>
+            </div>
+            <div class="dag-strip-item">
+              <div class="dag-spin"></div>
+              <div>
+                <div class="dag-strip-name">uc2_anomaly_detector</div>
+                <div class="dag-strip-time">running · 1m 08s</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_pipeline():
+    st.markdown("""
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Pipeline Wizard</div>
+        <div class="page-subtitle">Bronze → Silver → Gold · Human-in-the-loop pipeline</div>
+      </div>
+      <div class="page-controls">
+        <div class="mode-toggle">
+          <div class="mode-option active">Full</div>
+          <div class="mode-option">Silver only</div>
+          <div class="mode-option">Gold only</div>
+        </div>
+        <div class="toggle-inline">
+          <div class="toggle on"></div>
+          <span>Critic</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stepper">
+      <div class="step">
+        <div class="step-node"><div class="step-circle done">✓</div><div class="step-label done">Source</div></div>
+        <div class="step-line done"></div>
+      </div>
+      <div class="step">
+        <div class="step-node"><div class="step-circle done">✓</div><div class="step-label done">Schema</div></div>
+        <div class="step-line done"></div>
+      </div>
+      <div class="step">
+        <div class="step-node"><div class="step-circle active">3</div><div class="step-label active">HITL</div></div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step">
+        <div class="step-node"><div class="step-circle">4</div><div class="step-label">Execute</div></div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-node"><div class="step-circle">5</div><div class="step-label">Results</div></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="stack">
+        <div class="card">
+          <div class="card-title">Step 3 — HITL Decisions</div>
+          <div class="alert purple mb">
+            Critic: "allergen_info field is sparse (38% null). Consider excluding or imputing from product description."
+          </div>
+          <div class="section-label">Missing Columns</div>
+          <div class="stack gap-8">
+            <div class="decision-card">
+              <div class="decision-body">
+                <div class="decision-field">allergen_info</div>
+                <div class="decision-reason">38% null · LLM-derivable from description</div>
+              </div>
+              <div class="decision-actions">
+                <button class="btn btn-ghost btn-sm">Null</button>
+                <button class="btn btn-primary btn-sm">Default</button>
+                <button class="btn btn-ghost btn-sm">Exclude</button>
+              </div>
+            </div>
+            <div class="decision-card">
+              <div class="decision-body">
+                <div class="decision-field">serving_size_g</div>
+                <div class="decision-reason">92% null · No reliable source</div>
+              </div>
+              <div class="decision-actions">
+                <button class="btn btn-primary btn-sm">Null</button>
+                <button class="btn btn-ghost btn-sm">Default</button>
+                <button class="btn btn-ghost btn-sm">Exclude</button>
+              </div>
+            </div>
+            <div class="decision-card">
+              <div class="decision-body">
+                <div class="decision-field">is_organic</div>
+                <div class="decision-reason">Missing · Derivable from label_text</div>
+              </div>
+              <div class="decision-actions">
+                <button class="btn btn-ghost btn-sm">Null</button>
+                <button class="btn btn-ghost btn-sm">Default</button>
+                <button class="btn btn-primary btn-sm">Exclude</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Block Sequence Preview</div>
+          <div class="block-chips">
+            <div class="block-chip done">Normalize</div>
+            <div class="block-chip done">Deduplicate</div>
+            <div class="block-chip done">SchemaAlign</div>
+            <div class="block-chip running">Enrich_S1</div>
+            <div class="block-chip">Enrich_S2</div>
+            <div class="block-chip">Enrich_S3</div>
+            <div class="block-chip">DQ_Score</div>
+            <div class="block-chip">Quarantine</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Live Log</div>
+          <span class="card-meta streaming"><span class="stream-dot"></span>streaming</span>
+        </div>
+        <div class="terminal h-380">
+<span class="t-dim">[14:22:01]</span> <span class="t-green">OK</span>   <span class="t-text">normalize_block</span>    completed <span class="t-green">12,840 rows</span><br>
+<span class="t-dim">[14:22:04]</span> <span class="t-green">OK</span>   <span class="t-text">deduplicate_block</span>  removed <span class="t-amber">234 dupes</span> → <span class="t-green">12,606</span><br>
+<span class="t-dim">[14:22:08]</span> <span class="t-green">OK</span>   <span class="t-text">schema_align</span>       47 renames, 3 casts<br>
+<span class="t-dim">[14:22:12]</span> <span class="t-blue">RUN</span>  <span class="t-text">enrich_s1_block</span>    starting...<br>
+<span class="t-dim">[14:22:12]</span>      ChromaDB k=5 similarity search<br>
+<span class="t-dim">[14:22:14]</span>      allergens batch 1/4 <span class="t-blue">3,150 rows</span><br>
+<span class="t-dim">[14:22:16]</span>      allergens batch 2/4 <span class="t-blue">3,150 rows</span><br>
+<span class="t-dim">[14:22:18]</span>      allergens batch 3/4 <span class="t-blue">3,150 rows</span><br>
+<span class="t-dim">[14:22:20]</span>      allergens batch 4/4 <span class="t-blue">3,156 rows</span><br>
+<span class="t-dim">[14:22:22]</span> <span class="t-green">OK</span>   <span class="t-text">enrich_s1_block</span>    <span class="t-green">12,606 rows enriched</span><br>
+<span class="t-dim">[14:22:23]</span> <span class="t-blue">RUN</span>  <span class="t-text">enrich_s2_block</span>    starting (LLM)...<br>
+<span class="t-dim">[14:22:23]</span>      model: <span class="t-amber">gpt-4o-mini</span> · max_tokens=256<br>
+<span class="t-dim">[14:22:26]</span>      batch 1/8 completed · <span class="t-blue">1,575 rows</span><br>
+<span class="t-dim">[14:22:27]</span>      batch 2/8 completed · <span class="t-blue">1,575 rows</span> _
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_domain_packs():
+    st.markdown("""
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Domain Packs</div>
+        <div class="page-subtitle">Generate, validate, and manage domain enrichment configurations</div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active">Generate Pack</div>
+      <div class="tab">Block Scaffold</div>
+      <div class="tab">Preview / Validate</div>
+      <div class="tab">Manage</div>
+    </div>
+
+    <div class="grid-2">
+      <div class="stack">
+        <div class="card">
+          <div class="card-title">Pack Configuration</div>
+          <div class="mb-12">
+            <div class="field-label">Domain Name</div>
+            <input class="field-input" type="text" value="cosmetics" placeholder="e.g. cosmetics, supplements">
+          </div>
+          <div class="mb-12">
+            <div class="field-label">Description</div>
+            <textarea class="field-input" rows="3" style="resize:none">Beauty and personal care products. Focus on ingredient safety, skin type suitability, and SPF values.</textarea>
+          </div>
+          <div class="mb-16">
+            <div class="field-label">Sample CSV (for field detection)</div>
+            <div class="drop-zone">
+              <div class="drop-zone-icon">[ csv ]</div>
+              <div>Drop CSV or click to browse</div>
+              <div class="mt-6 c-dim">cosmetics_sample.csv · 1,200 rows detected</div>
+            </div>
+          </div>
+          <button class="btn btn-primary w-full">Generate Pack</button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Agent Progress</div>
+          <div class="stack gap-10">
+            <div class="agent-row">
+              <span class="badge success">done</span>
+              <span class="agent-label">Analyze CSV</span>
+              <span class="agent-result c-green">28 fields</span>
+            </div>
+            <div class="agent-row">
+              <span class="badge success">done</span>
+              <span class="agent-label">Generate Rules</span>
+              <span class="agent-result c-green">14 rules</span>
+            </div>
+            <div class="agent-row">
+              <span class="badge running">run</span>
+              <span class="agent-label c-accent">Validate</span>
+              <span class="agent-result c-dim">running...</span>
+            </div>
+            <div class="agent-row opacity-40">
+              <span class="badge info">4</span>
+              <span class="agent-label c-dim">Examples</span>
+            </div>
+            <div class="agent-row opacity-40">
+              <span class="badge info">5</span>
+              <span class="agent-label c-dim">Sequence</span>
+            </div>
+            <div class="agent-row opacity-40">
+              <span class="badge info">6</span>
+              <span class="agent-label c-dim">Review</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Generated YAML — Side-by-Side Review</div>
+        <div class="grid-2 gap-10">
+          <div>
+            <div class="section-label">Existing</div>
+            <div class="yaml-editor">
+<span class="yaml-key">domain:</span> <span class="yaml-val">nutrition</span><br>
+<span class="yaml-key">version:</span> <span class="yaml-num">1.2</span><br>
+<span class="yaml-key">fields:</span><br>
+&nbsp;&nbsp;<span class="yaml-key">- name:</span> <span class="yaml-val">allergens</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="yaml-key">tier:</span> <span class="yaml-val">S1</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="yaml-key">required:</span> <span class="yaml-bool">true</span>
+            </div>
+          </div>
+          <div>
+            <div class="section-label generated">Generated</div>
+            <div class="yaml-editor new">
+<span class="yaml-key">domain:</span> <span class="yaml-val">cosmetics</span><br>
+<span class="yaml-key">version:</span> <span class="yaml-num">1.0</span><br>
+<span class="yaml-key">fields:</span><br>
+&nbsp;&nbsp;<span class="yaml-key">- name:</span> <span class="yaml-val">ingredients</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="yaml-key">tier:</span> <span class="yaml-val">S1</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="yaml-key">required:</span> <span class="yaml-bool">true</span><br>
+&nbsp;&nbsp;<span class="yaml-key">- name:</span> <span class="yaml-val">spf_value</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="yaml-key">tier:</span> <span class="yaml-val">S2</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="yaml-key">regex:</span> <span class="yaml-val">^\\d{1,3}$</span>
+            </div>
+          </div>
+        </div>
+        <div class="row-sm mt-14">
+          <button class="btn btn-primary">Commit to Disk</button>
+          <button class="btn btn-ghost">Edit</button>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_enrichment_lab():
+    st.markdown("""
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Enrichment Lab</div>
+        <div class="page-subtitle">Corpus management · Tier thresholds · Guardrails</div>
+      </div>
+    </div>
+
+    <div class="grid-2 mb">
+      <div class="card">
+        <div class="card-title">Corpus Stats</div>
+        <div class="grid-3 gap-10 mb-16">
+          <div class="stat-card">
+            <div class="stat-label">Products</div>
+            <div class="stat-value sv-sm">2.4M</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Embedding</div>
+            <div class="stat-value sv-xs">ada-002</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Last Seed</div>
+            <div class="stat-value sv-xs">2h ago</div>
+          </div>
+        </div>
+        <button class="btn btn-ghost w-full">Rebuild Corpus</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Tier Thresholds</div>
+        <div class="slider-row">
+          <div class="slider-name">VOTE_SIMILARITY_THRESHOLD</div>
+          <input type="range" class="slider" min="0" max="100" value="82">
+          <div class="slider-val">0.82</div>
+        </div>
+        <div class="slider-row">
+          <div class="slider-name">CONFIDENCE_THRESHOLD</div>
+          <input type="range" class="slider" min="0" max="100" value="70">
+          <div class="slider-val">0.70</div>
+        </div>
+        <div class="slider-row">
+          <div class="slider-name">K_NEIGHBORS</div>
+          <input type="range" class="slider" min="1" max="20" value="5">
+          <div class="slider-val">5</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Enrichment Field Rules</div>
+        <table class="data-table">
+          <thead><tr><th>Field</th><th>Tier</th><th>Rule Type</th><th>Preview</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>allergens</td>
+              <td><span class="badge success">S1</span></td>
+              <td class="mono">vector_vote</td>
+              <td class="mono tc-dim">k=5, min_sim=0.82</td>
+            </tr>
+            <tr>
+              <td>dietary_tags</td>
+              <td><span class="badge success">S1</span></td>
+              <td class="mono">regex</td>
+              <td class="mono tc-dim">(vegan|gluten.free)</td>
+            </tr>
+            <tr>
+              <td>brand_description</td>
+              <td><span class="badge info">S2</span></td>
+              <td class="mono">llm_prompt</td>
+              <td class="mono tc-dim">Summarize brand in...</td>
+            </tr>
+            <tr>
+              <td>sustainability_score</td>
+              <td><span class="badge warning">S3</span></td>
+              <td class="mono">llm_prompt</td>
+              <td class="mono tc-dim">Rate sustainability...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <div class="card-title">Safety Guardrails</div>
+          <div class="stack gap-8">
+            <div class="guardrail-badge">[lock] allergens · S1-only · immutable</div>
+            <div class="guardrail-badge">[lock] dietary_tags · S1-only · immutable</div>
+            <div class="guardrail-badge">[lock] is_organic · S1-only · immutable</div>
+          </div>
+          <div class="guardrail-ok">All guardrail constraints satisfied</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Enrichment Tier Breakdown — Last 5 Runs</div>
+          <div class="bar-chart">
+            <div class="bar-row">
+              <div class="bar-label">usda_apr</div>
+              <div class="bar-track">
+                <div class="tier-bar" style="width:100%;height:100%">
+                  <div class="tier-s1" style="width:55%"></div>
+                  <div class="tier-s2" style="width:30%"></div>
+                  <div class="tier-s3" style="width:15%"></div>
                 </div>
-            </a>
-            """.format(page_id=page_id, icon=icon, label=label, badge_html=badge_html), unsafe_allow_html=True)
+              </div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label">fda_q2</div>
+              <div class="bar-track">
+                <div class="tier-bar" style="width:100%;height:100%">
+                  <div class="tier-s1" style="width:42%"></div>
+                  <div class="tier-s2" style="width:38%"></div>
+                  <div class="tier-s3" style="width:20%"></div>
+                </div>
+              </div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label">kroger</div>
+              <div class="bar-track">
+                <div class="tier-bar" style="width:100%;height:100%">
+                  <div class="tier-s1" style="width:61%"></div>
+                  <div class="tier-s2" style="width:25%"></div>
+                  <div class="tier-s3" style="width:14%"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="tier-legend">
+            <div class="tier-legend-item"><div class="tier-dot s1"></div>S1 Vector</div>
+            <div class="tier-legend-item"><div class="tier-dot s2"></div>S2 LLM Low-conf</div>
+            <div class="tier-legend-item"><div class="tier-dot s3"></div>S3 LLM Generate</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_observability():
+    st.markdown("""
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Observability</div>
+        <div class="page-subtitle">Data quality across the pipeline lifecycle</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    tab_runs, tab_grafana, tab_dq, tab_anomaly, tab_quarantine, tab_cost, tab_chat = st.tabs([
+        "Runs History", "Grafana", "DQ Timeline",
+        "Anomaly Detector", "Quarantine", "Cost Tracker", "Chatbot",
+    ])
+
+    with tab_runs:
+        st.markdown("""
+        <div class="card mb">
+          <div class="filter-row">
+            <input class="field-input f-grow" type="text" placeholder="Filter by source, domain, run ID...">
+            <select class="field-input f-sm">
+              <option>All Domains</option><option>nutrition</option><option>safety</option><option>pricing</option>
+            </select>
+            <select class="field-input f-xs">
+              <option>All Status</option><option>success</option><option>failed</option><option>running</option>
+            </select>
+            <input class="field-input f-sm" type="date">
+          </div>
+          <table class="data-table">
+            <thead><tr>
+              <th>Run ID</th><th>Source</th><th>Domain</th>
+              <th>Bronze</th><th>Silver</th><th>Gold</th>
+              <th>DQ Pre</th><th>DQ Post</th><th>Delta</th>
+              <th>Duration</th><th>Status</th>
+            </tr></thead>
+            <tbody>
+              <tr>
+                <td class="mono tc-accent">run_8f3a2</td>
+                <td>usda_april.csv</td>
+                <td><span class="badge info">nutrition</span></td>
+                <td class="mono">14,280</td><td class="mono">12,840</td><td class="mono">12,606</td>
+                <td class="mono">74.1</td>
+                <td class="mono tc-green">83.8</td>
+                <td class="mono tc-green">+9.7</td>
+                <td class="mono">6m 14s</td>
+                <td><span class="badge success">success</span></td>
+              </tr>
+              <tr>
+                <td class="mono tc-accent">run_7c1b9</td>
+                <td>fda_recalls.csv</td>
+                <td><span class="badge warning">safety</span></td>
+                <td class="mono">8,910</td><td class="mono">8,102</td><td class="mono">7,988</td>
+                <td class="mono">61.2</td>
+                <td class="mono tc-green">78.5</td>
+                <td class="mono tc-green">+17.3</td>
+                <td class="mono">4m 52s</td>
+                <td><span class="badge success">success</span></td>
+              </tr>
+              <tr>
+                <td class="mono tc-amber">run_6e0c8</td>
+                <td>whole_foods.csv</td>
+                <td><span class="badge info">nutrition</span></td>
+                <td class="mono">5,440</td><td class="mono">5,110</td><td class="mono">—</td>
+                <td class="mono">55.3</td>
+                <td class="mono tc-red">—</td>
+                <td class="mono tc-red">—</td>
+                <td class="mono">2m 18s</td>
+                <td><span class="badge error">failed</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with tab_grafana:
+        st.markdown("""
+        <div class="grafana-toolbar">
+          <div class="row-sm">
+            <div class="grafana-logo">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" fill="#F46800"/><circle cx="12" cy="12" r="5" fill="#fff"/><circle cx="12" cy="12" r="2.5" fill="#F46800"/></svg>
+              <span class="grafana-logo-text">Grafana</span>
+            </div>
+            <div class="grafana-breadcrumb">
+              <span class="mono tc-dim">Market Intelligence Platform</span>
+              <span class="tc-dim">/</span>
+              <span class="mono">Pipeline Observability</span>
+            </div>
+          </div>
+          <div class="grafana-controls">
+            <div class="grafana-timerange">
+              <div class="grafana-timerange-btn active">1h</div>
+              <div class="grafana-timerange-btn">6h</div>
+              <div class="grafana-timerange-btn">24h</div>
+              <div class="grafana-timerange-btn">7d</div>
+              <div class="grafana-timerange-btn">30d</div>
+            </div>
+            <button class="btn btn-ghost btn-sm">Refresh</button>
+          </div>
+        </div>
+        <div class="grafana-embed-wrap">
+          <div class="grafana-placeholder">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" style="margin-bottom:14px;opacity:0.35"><circle cx="12" cy="12" r="10" fill="#F46800"/><circle cx="12" cy="12" r="5" fill="#fff"/><circle cx="12" cy="12" r="2.5" fill="#F46800"/></svg>
+            <div class="grafana-placeholder-title">Grafana embed not configured</div>
+            <div class="grafana-placeholder-sub">Set <span class="mono">GRAFANA_BASE_URL</span> in your environment<br>to embed the live dashboard here.</div>
+            <div class="grafana-placeholder-url mono">http://grafana:3000/d/&lt;uid&gt;/pipeline-observability?orgId=1&amp;kiosk=tv&amp;theme=light</div>
+          </div>
+        </div>
+        <div class="grid-4 mt-12">
+          <div class="stat-card"><div class="stat-label">Pipeline Runs / 24h</div><div class="stat-value">47</div><div class="stat-delta up">+12 vs prior day</div></div>
+          <div class="stat-card"><div class="stat-label">Avg DQ Delta</div><div class="stat-value">+8.4<span class="stat-unit">pp</span></div><div class="stat-delta up">improving</div></div>
+          <div class="stat-card"><div class="stat-label">Error Rate</div><div class="stat-value">3.7<span class="stat-unit">%</span></div><div class="stat-delta down">+0.4 pp</div></div>
+          <div class="stat-card"><div class="stat-label">Kafka Lag</div><div class="stat-value">2.1<span class="stat-unit">k</span></div><div class="stat-delta down">degraded</div></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with tab_dq:
+        st.markdown('<div class="card" style="text-align:center;padding:60px;color:var(--text-dim);font-size:14px;font-weight:600">DQ Timeline — panel not yet implemented</div>', unsafe_allow_html=True)
+
+    with tab_anomaly:
+        st.markdown('<div class="card" style="text-align:center;padding:60px;color:var(--text-dim);font-size:14px;font-weight:600">Anomaly Detector — panel not yet implemented</div>', unsafe_allow_html=True)
+
+    with tab_quarantine:
+        st.markdown('<div class="card" style="text-align:center;padding:60px;color:var(--text-dim);font-size:14px;font-weight:600">Quarantine — panel not yet implemented</div>', unsafe_allow_html=True)
+
+    with tab_cost:
+        st.markdown('<div class="card" style="text-align:center;padding:60px;color:var(--text-dim);font-size:14px;font-weight:600">Cost Tracker — panel not yet implemented</div>', unsafe_allow_html=True)
+
+    with tab_chat:
+        st.markdown("""
+        <div class="card">
+          <div class="card-title">Observability Chatbot — RAG over run history</div>
+          <div class="chat-scroll">
+            <div class="chat-msg">
+              <div class="chat-avatar user">U</div>
+              <div class="chat-bubble">What was the DQ delta for nutrition sources last week?</div>
+            </div>
+            <div class="chat-msg">
+              <div class="chat-avatar ai">AI</div>
+              <div class="chat-bubble">Across 14 nutrition runs last week (<span class="run-chip">run_8f3a2</span>, <span class="run-chip">run_7a8d1</span> + 12 more), average DQ delta was <strong>+11.2 pp</strong>. Best: usda_organic at +18.4 pp. Worst: kroger_generic at +4.1 pp.</div>
+            </div>
+            <div class="chat-msg">
+              <div class="chat-avatar user">U</div>
+              <div class="chat-bubble">Which blocks contributed most to the improvement?</div>
+            </div>
+            <div class="chat-msg">
+              <div class="chat-avatar ai">AI</div>
+              <div class="chat-bubble">Top 3 by delta contribution: <span class="run-chip">enrich_s1_block</span> +5.2 pp, <span class="run-chip">enrich_s2_block</span> +3.8 pp, <span class="run-chip">deduplicate</span> +2.2 pp.</div>
+            </div>
+          </div>
+          <div class="chat-input-row">
+            <input class="search-bar" type="text" placeholder="Ask about run history...">
+            <button class="btn btn-primary">Send</button>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def render_search():
+    st.markdown("""
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Product Search</div>
+        <div class="page-subtitle">UC3 hybrid search · ChromaDB + BM25</div>
+      </div>
+      <div class="page-controls">
+        <span class="mono card-meta dim">ChromaDB · 2.4M docs · BM25 active</span>
+      </div>
+    </div>
+
+    <div class="card mb">
+      <div class="search-form">
+        <input class="search-bar" type="text" value="organic almond milk gluten free">
+        <button class="btn btn-primary" style="height:46px;padding:0 22px;font-size:14px">Search</button>
+      </div>
+      <div class="search-options">
+        <div class="mode-toggle">
+          <div class="mode-option active">Hybrid</div>
+          <div class="mode-option">BM25</div>
+          <div class="mode-option">Semantic</div>
+        </div>
+        <label class="search-check"><input type="checkbox"> Organic only</label>
+        <label class="search-check"><input type="checkbox"> Exclude recalled</label>
+      </div>
+    </div>
+
+    <div class="product-grid">
+      <div class="product-card">
+        <div class="product-card-header">
+          <div><div class="product-name">Califia Farms Unsweetened Almond Milk</div><div class="product-brand">Califia Farms · dairy-alt</div></div>
+          <span class="badge success">DQ 91</span>
+        </div>
+        <div class="product-tags"><span class="badge success">organic</span><span class="badge info">gluten-free</span><span class="badge info">vegan</span></div>
+      </div>
+      <div class="product-card">
+        <div class="product-card-header">
+          <div><div class="product-name">Silk Original Almond Milk</div><div class="product-brand">Silk · dairy-alt</div></div>
+          <span class="badge success">DQ 87</span>
+        </div>
+        <div class="product-tags"><span class="badge info">gluten-free</span><span class="badge info">vegan</span></div>
+      </div>
+      <div class="product-card">
+        <div class="product-card-header">
+          <div><div class="product-name">365 Organic Almond Milk Unsweetened</div><div class="product-brand">Whole Foods 365 · dairy-alt</div></div>
+          <span class="badge success">DQ 83</span>
+        </div>
+        <div class="product-tags"><span class="badge success">organic</span><span class="badge info">gluten-free</span></div>
+      </div>
+      <div class="product-card recalled">
+        <div class="product-card-header">
+          <div><div class="product-name">Blue Diamond Almond Breeze</div><div class="product-brand">Blue Diamond · dairy-alt</div></div>
+          <span class="badge warning">DQ 71</span>
+        </div>
+        <div class="product-tags"><span class="badge error">recall flag</span><span class="badge info">gluten-free</span></div>
+      </div>
+      <div class="product-card">
+        <div class="product-card-header">
+          <div><div class="product-name">So Delicious Unsweetened Almond</div><div class="product-brand">So Delicious · dairy-alt</div></div>
+          <span class="badge success">DQ 85</span>
+        </div>
+        <div class="product-tags"><span class="badge success">organic</span><span class="badge info">vegan</span></div>
+      </div>
+      <div class="product-card">
+        <div class="product-card-header">
+          <div><div class="product-name">Elmhurst 1925 Almond Milk</div><div class="product-brand">Elmhurst · dairy-alt</div></div>
+          <span class="badge success">DQ 89</span>
+        </div>
+        <div class="product-tags"><span class="badge info">gluten-free</span><span class="badge info">vegan</span><span class="badge success">organic</span></div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_recommendations():
+    st.markdown("""
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Recommendations</div>
+        <div class="page-subtitle">UC4 product recommendations · Association rules + affinity graph</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="stack">
+        <div class="card">
+          <div class="card-title">Product Lookup</div>
+          <input class="search-bar mb-10" type="text" value="Califia Farms Almond Milk 32oz">
+          <div class="resolve-row">
+            <span>Resolved to</span>
+            <span class="badge info mono">prod_cf_almond_32</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Also Bought</div>
+            <div class="toggle-inline">
+              <div class="toggle on"></div>
+              <span class="fs-12">Enrichment Impact</span>
+            </div>
+          </div>
+          <table class="data-table">
+            <thead><tr><th>Product</th><th>Confidence</th><th>Lift</th></tr></thead>
+            <tbody>
+              <tr><td>Kind Almond Bar</td><td class="mono">0.84</td><td class="mono tc-green">3.2x</td></tr>
+              <tr><td>Bob's Red Mill Oats</td><td class="mono">0.71</td><td class="mono tc-green">2.8x</td></tr>
+              <tr><td>Simple Mills Crackers</td><td class="mono">0.62</td><td class="mono tc-accent">2.1x</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-title">You Might Like</div>
+          <table class="data-table">
+            <thead><tr><th>Product</th><th>Affinity</th><th>Hops</th></tr></thead>
+            <tbody>
+              <tr><td>Oat Yeah! Oat Milk</td><td class="mono tc-green">0.91</td><td class="mono">1</td></tr>
+              <tr><td>Forager Cashew Milk</td><td class="mono tc-green">0.77</td><td class="mono">2</td></tr>
+              <tr><td>Ripple Pea Milk</td><td class="mono tc-accent">0.64</td><td class="mono">2</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <div class="card-title">Top Antecedents by Max Lift</div>
+          <div class="bar-chart">
+            <div class="bar-row"><div class="bar-label">Kind Almond Bar</div><div class="bar-track"><div class="bar-fill bar-accent" style="width:92%"></div></div><div class="bar-val">3.2x</div></div>
+            <div class="bar-row"><div class="bar-label">Bob's Oats</div><div class="bar-track"><div class="bar-fill bar-accent" style="width:80%"></div></div><div class="bar-val">2.8x</div></div>
+            <div class="bar-row"><div class="bar-label">Simple Mills</div><div class="bar-track"><div class="bar-fill bar-accent" style="width:62%"></div></div><div class="bar-val">2.1x</div></div>
+            <div class="bar-row"><div class="bar-label">Hu Kitchen</div><div class="bar-track"><div class="bar-fill bar-accent" style="width:54%"></div></div><div class="bar-val">1.9x</div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Association Rule Explorer</div>
+          <div class="slider-row">
+            <div class="slider-name">min_support</div>
+            <input type="range" class="slider" min="0" max="100" value="15">
+            <div class="slider-val">0.15</div>
+          </div>
+          <div class="slider-row">
+            <div class="slider-name">min_confidence</div>
+            <input type="range" class="slider" min="0" max="100" value="60">
+            <div class="slider-val">0.60</div>
+          </div>
+          <div class="slider-row">
+            <div class="slider-name">min_lift</div>
+            <input type="range" class="slider" min="100" max="500" value="150">
+            <div class="slider-val">1.5x</div>
+          </div>
+          <button class="btn btn-ghost w-full mt-6">Re-mine Rules</button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Index Status</div>
+          <div class="grid-3 gap-8">
+            <div class="stat-card"><div class="stat-label">Products</div><div class="stat-value sv-sm">148K</div></div>
+            <div class="stat-card"><div class="stat-label">Rules</div><div class="stat-value sv-sm">52K</div></div>
+            <div class="stat-card"><div class="stat-label">Graph Edges</div><div class="stat-value sv-sm">2.1M</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_airflow():
+    st.markdown("""
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Airflow Control Panel</div>
+        <div class="page-subtitle">DAG visibility · Manual triggers · Pipeline chain</div>
+      </div>
+    </div>
+
+    <div class="card mb">
+      <div class="card-title">Pipeline Chain</div>
+      <div class="dag-chain">
+        <div class="dag-node"><div class="dag-box ok">usda_ingest</div><div class="dag-schedule">daily 02:00</div></div>
+        <div class="dag-arrow"></div>
+        <div class="dag-node"><div class="dag-box ok">bronze_to_bq</div><div class="dag-schedule">daily 03:00</div></div>
+        <div class="dag-arrow"></div>
+        <div class="dag-node"><div class="dag-box running">bronze_to_silver</div><div class="dag-schedule running">running now</div></div>
+        <div class="dag-arrow"></div>
+        <div class="dag-node"><div class="dag-box">silver_to_gold</div><div class="dag-schedule">waiting</div></div>
+      </div>
+    </div>
+
+    <div class="card mb">
+      <div class="card-title">DAG Registry</div>
+      <table class="data-table">
+        <thead><tr><th>DAG ID</th><th>Schedule</th><th>Last Run</th><th>Duration</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="mono">usda_ingest</td>
+            <td class="mono tc-dim">@daily 02:00</td>
+            <td class="mono tc-dim">2025-04-24 02:00</td>
+            <td class="mono">3m 41s</td>
+            <td><span class="badge success">success</span></td>
+            <td><button class="btn btn-ghost btn-sm">Trigger</button></td>
+          </tr>
+          <tr>
+            <td class="mono">bronze_to_silver_dag</td>
+            <td class="mono tc-dim">@daily 05:00</td>
+            <td class="mono tc-cyan">running</td>
+            <td class="mono tc-cyan">4m 22s...</td>
+            <td><span class="badge running">running</span></td>
+            <td><button class="btn btn-ghost btn-sm" disabled>Trigger</button></td>
+          </tr>
+          <tr>
+            <td class="mono">silver_to_gold_dag</td>
+            <td class="mono tc-dim">@daily 06:00</td>
+            <td class="mono tc-dim">2025-04-23 06:00</td>
+            <td class="mono">8m 12s</td>
+            <td><span class="badge success">success</span></td>
+            <td><button class="btn btn-ghost btn-sm">Trigger</button></td>
+          </tr>
+          <tr>
+            <td class="mono">uc2_anomaly_detector</td>
+            <td class="mono tc-dim">@hourly</td>
+            <td class="mono tc-cyan">running</td>
+            <td class="mono tc-cyan">1m 08s...</td>
+            <td><span class="badge running">running</span></td>
+            <td><button class="btn btn-ghost btn-sm" disabled>Trigger</button></td>
+          </tr>
+          <tr>
+            <td class="mono">uc2_chunker</td>
+            <td class="mono tc-dim">*/5 * * * *</td>
+            <td class="mono tc-dim">14:20:00</td>
+            <td class="mono">28s</td>
+            <td><span class="badge success">success</span></td>
+            <td><button class="btn btn-ghost btn-sm">Trigger</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Log Tail — bronze_to_silver_dag</div>
+        <span class="card-meta dim">last 50 lines</span>
+      </div>
+      <div class="terminal h-160">
+<span class="t-dim">[05:18:22]</span> <span class="t-blue">INFO</span> Starting DagRun bronze_to_silver_dag · run_id=scheduled__2025-04-24<br>
+<span class="t-dim">[05:18:23]</span> <span class="t-blue">INFO</span> Task load_source started<br>
+<span class="t-dim">[05:18:25]</span> <span class="t-green">INFO</span> GCS read complete · 14,280 rows<br>
+<span class="t-dim">[05:18:26]</span> <span class="t-blue">INFO</span> Task analyze_schema started<br>
+<span class="t-dim">[05:18:28]</span> <span class="t-green">INFO</span> Schema delta: 47 renames, 3 casts, 2 missing cols<br>
+<span class="t-dim">[05:22:14]</span> <span class="t-blue">INFO</span> Task enrich_s1 started · k=5<br>
+<span class="t-dim">[05:22:44]</span> <span class="t-amber">WARN</span> Kafka consumer lag: 2,140 msgs behind<br>
+<span class="t-dim">[05:22:45]</span> <span class="t-blue">INFO</span> enrich_s1 batch 2/8 completed _
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_tests():
+    st.markdown("""
+    <div class="page-header">
+      <div class="page-header-left">
+        <div class="page-title">Test Runner</div>
+        <div class="page-subtitle">Execute test suites · Stream results live</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="stack">
+        <div class="card">
+          <div class="card-title">Test Suites</div>
+          <div class="tabs tabs-card">
+            <div class="tab active">Unit</div>
+            <div class="tab">Integration</div>
+            <div class="tab">UC2</div>
+            <div class="tab">API</div>
+            <div class="tab">All</div>
+          </div>
+          <table class="data-table">
+            <thead><tr><th>File</th><th>Tests</th><th>Last Result</th><th></th></tr></thead>
+            <tbody>
+              <tr>
+                <td class="mono fs-11">test_normalize_block.py</td>
+                <td class="mono">12</td><td><span class="badge success">pass</span></td>
+                <td><button class="btn btn-ghost btn-sm">Run</button></td>
+              </tr>
+              <tr>
+                <td class="mono fs-11">test_dq_scorer.py</td>
+                <td class="mono">8</td><td><span class="badge success">pass</span></td>
+                <td><button class="btn btn-ghost btn-sm">Run</button></td>
+              </tr>
+              <tr>
+                <td class="mono fs-11">test_enrichment_s1.py</td>
+                <td class="mono">15</td><td><span class="badge error">fail</span></td>
+                <td><button class="btn btn-ghost btn-sm">Run</button></td>
+              </tr>
+              <tr>
+                <td class="mono fs-11">test_quarantine_logic.py</td>
+                <td class="mono">6</td><td><span class="badge success">pass</span></td>
+                <td><button class="btn btn-ghost btn-sm">Run</button></td>
+              </tr>
+              <tr>
+                <td class="mono fs-11">test_domain_pack_gen.py</td>
+                <td class="mono">9</td><td><span class="badge warning">not run</span></td>
+                <td><button class="btn btn-ghost btn-sm">Run</button></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="divider"></div>
+          <div class="row-sm wrap">
+            <button class="btn btn-primary btn-sm">Run Unit</button>
+            <button class="btn btn-ghost btn-sm">Run All</button>
+            <button class="btn btn-ghost btn-sm">Fast (skip integration)</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Results Summary</div>
+          <div class="grid-3 gap-8 mb-14">
+            <div class="stat-card"><div class="stat-label">Passed</div><div class="stat-value sv-lg c-green">47</div></div>
+            <div class="stat-card"><div class="stat-label">Failed</div><div class="stat-value sv-lg c-red">3</div></div>
+            <div class="stat-card"><div class="stat-label">Duration</div><div class="stat-value sv-md">14s</div></div>
+          </div>
+          <div class="alert red">
+            <div class="section-label failed mb-6">Failed Tests</div>
+            <div class="failed-list">
+              test_enrichment_s1.py::test_similarity_threshold<br>
+              test_enrichment_s1.py::test_k_neighbors_default<br>
+              test_enrichment_s1.py::test_allergen_s1_lock
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Output Terminal</div>
+          <span class="card-meta dim">auto-scroll on</span>
+        </div>
+        <div class="terminal h-508">
+<span class="t-dim">$ poetry run pytest tests/unit/ -v</span><br>
+<span class="t-dim">============================== test session starts ==============================</span><br>
+<span class="t-dim">platform linux -- Python 3.11.4, pytest-7.4.0</span><br>
+<span class="t-dim">rootdir: /app, configfile: pyproject.toml</span><br>
+<span class="t-text">collected 50 items</span><br><br>
+<span class="t-green">PASSED</span> <span class="t-text">tests/unit/test_normalize_block.py::test_strip_whitespace</span><br>
+<span class="t-green">PASSED</span> <span class="t-text">tests/unit/test_normalize_block.py::test_lowercase_fields</span><br>
+<span class="t-green">PASSED</span> <span class="t-text">tests/unit/test_normalize_block.py::test_null_handling</span><br>
+<span class="t-green">PASSED</span> <span class="t-text">tests/unit/test_dq_scorer.py::test_score_range</span><br>
+<span class="t-green">PASSED</span> <span class="t-text">tests/unit/test_dq_scorer.py::test_completeness_weight</span><br>
+<span class="t-red">FAILED</span> <span class="t-text">tests/unit/test_enrichment_s1.py::</span><span class="t-red">test_similarity_threshold</span><br>
+<span class="t-dim">  E   AssertionError: similarity 0.79 &lt; threshold 0.82</span><br>
+<span class="t-dim">  E   assert 0.79 &gt;= 0.82</span><br>
+<span class="t-red">FAILED</span> <span class="t-text">tests/unit/test_enrichment_s1.py::</span><span class="t-red">test_k_neighbors_default</span><br>
+<span class="t-dim">  E   AssertionError: expected k=5, got k=3</span><br>
+<span class="t-green">PASSED</span> <span class="t-text">tests/unit/test_quarantine_logic.py::test_dq_threshold</span><br>
+<span class="t-dim">...</span><br><br>
+<span class="t-dim">=============== </span><span class="t-green">47 passed</span><span class="t-dim">, </span><span class="t-red">3 failed</span><span class="t-dim"> in 14.22s ================</span>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def main():
-    """Main app entry point."""
     st.set_page_config(
         page_title="Market Intelligence Platform",
         page_icon="DF",
         layout="wide",
-        initial_sidebar_state="collapsed",
+        initial_sidebar_state="expanded",
     )
 
     init_session_state()
-    get_current_page()
-    render_html_shell()
+    page = get_current_page()
+
+    st.markdown(STYLES, unsafe_allow_html=True)
+    render_topbar()
+    render_sidebar(page)
+
+    pages = {
+        "dashboard":    render_dashboard,
+        "pipeline":     render_pipeline,
+        "domain":       render_domain_packs,
+        "enrichment":   render_enrichment_lab,
+        "observability": render_observability,
+        "search":       render_search,
+        "recs":         render_recommendations,
+        "airflow":      render_airflow,
+        "tests":        render_tests,
+    }
+    pages.get(page, render_dashboard)()
 
 
 if __name__ == "__main__":
