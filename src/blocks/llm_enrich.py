@@ -13,11 +13,6 @@ from src.enrichment.rules_loader import EnrichmentRulesLoader
 
 logger = logging.getLogger(__name__)
 
-ENRICHMENT_COLUMNS = ["primary_category", "dietary_tags", "is_organic", "allergens"]
-
-# Safety fields that must never be modified by S2 or S3
-_SAFETY_FIELDS = ["allergens", "is_organic", "dietary_tags"]
-
 
 class LLMEnrichBlock(Block):
     name = "llm_enrich"
@@ -32,12 +27,13 @@ class LLMEnrichBlock(Block):
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         config = config or {}
         domain = config.get("domain", "nutrition")
-        enrich_cols = config.get("enrichment_columns", ENRICHMENT_COLUMNS)
 
         df = df.copy()
 
         # Load enrichment rules for this domain
         rules_loader = EnrichmentRulesLoader(domain)
+        enrich_cols = config.get("enrichment_columns") or rules_loader.enrichment_column_names
+        safety_fields = rules_loader.safety_field_names()
 
         # Ensure enrichment columns exist
         for col in enrich_cols:
@@ -53,16 +49,15 @@ class LLMEnrichBlock(Block):
 
         # Strategy 1: Deterministic extraction using domain rules
         df, needs_enrichment, s1_stats = deterministic_enrich(
-            df, enrich_cols, needs_enrichment, rules=rules_loader.s1_fields
+            df, enrich_cols, needs_enrichment, rules=rules_loader.s1_fields, domain=domain
         )
         stats["deterministic"] = s1_stats["resolved"]
         logger.info(f"  S1 (deterministic extraction): resolved {stats['deterministic']} rows")
 
         # Capture safety field values after S1 to verify S2/S3 do not modify them
-        safety_field_names = rules_loader.safety_field_names() or _SAFETY_FIELDS
         safety_snapshot = {
             col: df[col].copy()
-            for col in safety_field_names
+            for col in safety_fields
             if col in df.columns
         }
 
@@ -77,7 +72,7 @@ class LLMEnrichBlock(Block):
         unresolved_before_s3 = needs_enrichment.copy()
 
         # Strategy 3: RAG-augmented LLM (primary_category only)
-        df, needs_enrichment, s3_stats = llm_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"))
+        df, needs_enrichment, s3_stats = llm_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"), domain=domain)
         stats["llm"] = s3_stats["resolved"]
         stats["unresolved"] = int(df["primary_category"].isna().sum()) if "primary_category" in df.columns else 0
         logger.info(f"  S3 (LLM): resolved {stats['llm']} rows")
