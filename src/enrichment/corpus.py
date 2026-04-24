@@ -53,7 +53,7 @@ def _get_model():
     return _MODEL
 
 
-def _get_collection():
+def _get_collection(collection_name: str | None = None):
     """Get or create the ChromaDB product corpus collection."""
     import chromadb
     client = chromadb.HttpClient(
@@ -61,7 +61,7 @@ def _get_collection():
         port=int(os.environ.get("CHROMA_PORT", "8000")),
     )
     return client.get_or_create_collection(
-        _COLLECTION_NAME,
+        collection_name or _COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"},
     )
 
@@ -153,14 +153,14 @@ def evict_corpus(collection) -> None:
         logger.warning("evict_corpus failed: %s", e)
 
 
-def load_corpus() -> tuple[Optional[object], list[dict]]:
+def load_corpus(collection_name: str | None = None) -> tuple[Optional[object], list[dict]]:
     """
     Load the ChromaDB product corpus collection.
     Returns (collection, []) — metadata list is unused (ChromaDB stores its own).
     Returns (None, []) if ChromaDB is unreachable.
     """
     try:
-        collection = _get_collection()
+        collection = _get_collection(collection_name)
         n = collection.count()
         logger.info(f"Loaded corpus: {n} vectors")
         return collection, []
