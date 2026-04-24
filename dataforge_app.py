@@ -38,11 +38,24 @@ GLOBAL_CSS = """
 /* ── Streamlit overrides ── */
 #MainMenu, footer { visibility: hidden; }
 header[data-testid="stHeader"] { display: none; }
+/* Force light theme — override Streamlit dark mode */
+html, body, .stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+section[data-testid="stMain"] > div,
+.main {
+  background-color: #ffffff !important;
+  color: #212529 !important;
+}
+[data-testid="stAppViewContainer"] > section:first-child {
+  background-color: var(--surface) !important;
+}
 .main .block-container {
   padding-top: 0.5rem !important;
   padding-left: 1.5rem !important;
   padding-right: 1.5rem !important;
   max-width: 100% !important;
+  background-color: #ffffff !important;
 }
 /* ── Global font size ── */
 body, p, div, span, li, td, th, input, select, textarea, label,
