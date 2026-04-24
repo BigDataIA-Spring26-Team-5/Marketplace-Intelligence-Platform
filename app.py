@@ -860,9 +860,19 @@ def main() -> None:
     _init_state()
     _setup_logging()
 
+    # Consume _mode_override written by "Run Pipeline" button in domain_kits.py (FR-8)
+    _mode_override = st.session_state.pop("_mode_override", None)
+    _domain_override = st.session_state.pop("_domain_override", None)
+    if _mode_override in ("Pipeline", "Observability", "Domain Packs"):
+        st.session_state["app_mode"] = _mode_override
+    if _domain_override:
+        st.session_state["domain_select"] = _domain_override
+
     # Sidebar: mode selector + cache controls + live log feed
     with st.sidebar:
-        mode = st.radio("Mode", ["Pipeline", "Observability", "Domain Packs"], key="app_mode")
+        _modes = ["Pipeline", "Observability", "Domain Packs"]
+        _current_mode_idx = _modes.index(st.session_state.get("app_mode", "Pipeline"))
+        mode = st.radio("Mode", _modes, index=_current_mode_idx, key="app_mode")
         st.markdown("---")
         st.markdown("### Cache Controls")
         no_cache = st.checkbox(

@@ -31,7 +31,8 @@ poetry run streamlit run app.py
 
 # Validate an existing pack
 # Navigate: Domain Packs → Preview/Validate tab
-# Select domain → click "Run Validation"
+# Select domain → upload source CSV → click "Run Validation"
+# (CSV upload is required — Validate button disabled without it)
 ```
 
 ---
@@ -39,18 +40,30 @@ poetry run streamlit run app.py
 ## Testing
 
 ```bash
-# Unit: validator function
-poetry run pytest tests/unit/test_domain_kit_validator.py
+# Unit: validator function — all 5 deterministic checks
+poetry run pytest tests/unit/test_domain_kit_validator.py -v
 
-# Unit: graph node functions (no LLM — mock call_llm_json)
-poetry run pytest tests/unit/test_domain_kit_graph.py
+# Unit: graph node functions — mocked call_llm_json, no LLM required
+poetry run pytest tests/unit/test_domain_kit_graph.py -v
 
-# Integration: end-to-end generation against fixture CSVs (needs ANTHROPIC_API_KEY)
-poetry run pytest tests/integration/test_domain_kit_generation.py -m integration
+# Unit: re-export surface for kit_generator.py and block_scaffolder.py
+poetry run pytest tests/unit/test_kit_generator.py tests/unit/test_block_scaffolder.py -v
 
-# SC-002 regression
-poetry run pytest tests/unit/test_sc002_domain_isolation.py
+# Integration: full DomainKitGraph against 4 fixture CSVs — mocked HITL, no real LLM
+poetry run pytest tests/integration/test_domain_kit_generation.py -v
+
+# Run all 019 tests at once
+poetry run pytest tests/unit/test_domain_kit_validator.py tests/unit/test_domain_kit_graph.py tests/integration/test_domain_kit_generation.py -v
 ```
+
+### Test counts
+
+| Suite | File | Tests | LLM required |
+|---|---|---|---|
+| Validator | `tests/unit/test_domain_kit_validator.py` | 12 | No |
+| Graph nodes | `tests/unit/test_domain_kit_graph.py` | 27 | No (mocked) |
+| Re-export adapters | `tests/unit/test_kit_generator.py`, `test_block_scaffolder.py` | 7 | No |
+| Integration | `tests/integration/test_domain_kit_generation.py` | 12 | No (mocked) |
 
 ---
 

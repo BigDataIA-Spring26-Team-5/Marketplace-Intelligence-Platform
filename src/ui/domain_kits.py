@@ -284,8 +284,13 @@ def _render_generate_tab() -> None:
     except ImportError:
         return
 
+    from src.agents.domain_kit_graph import DomainKitState, run_kit_step
+
     st.subheader("Generate Domain Pack")
-    st.caption("Enter domain details and provide a sample CSV. The AI will generate three YAML configuration files.")
+    st.caption(
+        "Enter domain details and a sample CSV. "
+        "The agent generates three YAML files in sequential steps with auto-retry on errors."
+    )
 
     # --- Fixture quick-load ---
     st.markdown("**Quick-load a sample fixture**")
@@ -351,96 +356,143 @@ def _render_generate_tab() -> None:
 
     can_generate = slug_valid and description.strip() and csv_content
 
-    if st.button("Generate", disabled=not can_generate, key="kit_generate_btn"):
-        from src.ui.kit_generator import generate_domain_kit
-        with st.spinner("Generating domain pack… (LLM call, ~15–30 seconds)"):
-            try:
-                pack = generate_domain_kit(domain_name, description, csv_content)
-                st.session_state["pack_gen"] = pack
-                st.session_state["kit_domain_committed"] = False
-            except Exception as exc:
-                st.error(f"Generation failed: {exc}")
-                if st.button("Retry", key="kit_retry_btn"):
-                    st.rerun()
+    # --- Agent state in session ---
+    kit_state: DomainKitState = st.session_state.get("domain_kit_state", {})
 
-    pack = st.session_state.get("pack_gen")
-    if not pack:
+    if st.button("Generate Domain Kit", disabled=not can_generate, key="kit_generate_btn"):
+        # Reset state for fresh generation
+        kit_state = DomainKitState(
+            domain_name=domain_name,
+            description=description,
+            csv_content=csv_content,
+            retry_count=0,
+            validation_errors=[],
+        )
+        with st.spinner("Step 1/5 — Analysing CSV…"):
+            kit_state = run_kit_step("analyze_csv", kit_state)
+        if kit_state.get("error"):
+            st.error(f"CSV analysis failed: {kit_state['error']}")
+            st.session_state["domain_kit_state"] = kit_state
+            return
+
+        with st.spinner("Step 2/5 — Generating enrichment rules…"):
+            kit_state = run_kit_step("generate_enrichment_rules", kit_state)
+        if kit_state.get("error"):
+            st.error(f"Enrichment rules generation failed: {kit_state['error']}")
+            st.session_state["domain_kit_state"] = kit_state
+            return
+
+        with st.spinner("Step 3/5 — Validating enrichment rules…"):
+            kit_state = run_kit_step("validate_enrichment_rules", kit_state)
+
+        # Auto-retry loop (max 2)
+        while kit_state.get("validation_errors") and kit_state.get("retry_count", 0) < 2:
+            with st.spinner(
+                f"Step 3/5 — Revising enrichment rules (attempt {kit_state['retry_count']}/2)…"
+            ):
+                kit_state = run_kit_step("revise_enrichment_rules", kit_state)
+                kit_state = run_kit_step("validate_enrichment_rules", kit_state)
+
+        with st.spinner("Step 4/5 — Generating prompt examples…"):
+            kit_state = run_kit_step("generate_prompt_examples", kit_state)
+        if kit_state.get("error"):
+            st.error(f"Prompt examples generation failed: {kit_state['error']}")
+            st.session_state["domain_kit_state"] = kit_state
+            return
+
+        with st.spinner("Step 5/5 — Generating block sequence…"):
+            kit_state = run_kit_step("generate_block_sequence", kit_state)
+        if kit_state.get("error"):
+            st.error(f"Block sequence generation failed: {kit_state['error']}")
+            st.session_state["domain_kit_state"] = kit_state
+            return
+
+        kit_state = run_kit_step("hitl_review", kit_state)
+        st.session_state["domain_kit_state"] = kit_state
+        st.rerun()
+
+    # --- HITL review ---
+    if not kit_state.get("pending_review"):
         return
 
     st.markdown("---")
     st.subheader("Review Generated Files")
-    st.caption("Edit the files below before committing. Each file is validated on save.")
 
-    file_keys = ["enrichment_rules.yaml", "prompt_examples.yaml", "block_sequence.yaml"]
-    edited: dict[str, str] = {}
-    file_errors: dict[str, str] = {}
+    # Degraded-HITL warning if validation errors remain after retries
+    remaining_errors = kit_state.get("validation_errors", [])
+    if remaining_errors:
+        st.warning(
+            "⚠️ Enrichment rules have unresolved validation issues after 2 auto-retries. "
+            "Review and fix manually before approving."
+        )
+        for err in remaining_errors:
+            st.error(err)
 
-    for fname in file_keys:
-        raw = pack.get(fname, "")
-        if raw.startswith('{"error"'):
-            try:
-                err_msg = json.loads(raw).get("error", raw)
-            except Exception:
-                err_msg = raw
-            st.error(f"**{fname}**: {err_msg}")
-            if st.button(f"Retry {fname}", key=f"retry_{fname}"):
-                st.rerun()
-            file_errors[fname] = err_msg
-            continue
+    # Diff view if existing files detected
+    existing_files: dict = kit_state.get("existing_files", {})
+    if existing_files:
+        st.warning(
+            f"⚠️ Domain `{domain_name}` already has files. "
+            "Approving will overwrite them (`.bak` copies will be created first)."
+        )
+        with st.expander("Show diff — existing vs generated", expanded=False):
+            for fname, old_content in existing_files.items():
+                new_content = kit_state.get(
+                    fname.replace(".yaml", "_yaml").replace(".", "_"),
+                    old_content,
+                )
+                st.markdown(f"**{fname}**")
+                col_old, col_new = st.columns(2)
+                with col_old:
+                    st.caption("Existing")
+                    st.code(old_content[:2000], language="yaml")
+                with col_new:
+                    st.caption("Generated")
+                    st.code(new_content[:2000], language="yaml")
 
+    # Editable text areas for all 3 YAMLs
+    file_map = {
+        "enrichment_rules.yaml": kit_state.get("enrichment_rules_yaml", ""),
+        "prompt_examples.yaml": kit_state.get("prompt_examples_yaml", ""),
+        "block_sequence.yaml": kit_state.get("block_sequence_yaml", ""),
+    }
+
+    user_edits: dict[str, str] = {}
+    yaml_errors: list[str] = []
+
+    for fname, raw_content in file_map.items():
+        st.markdown(f"**{fname}**")
         edited_val = st.text_area(
             fname,
-            value=raw,
+            value=raw_content,
             height=300,
             key=f"kit_edit_{fname}",
+            label_visibility="collapsed",
         )
-        edited[fname] = edited_val
-
-        # Inline YAML validation
+        user_edits[fname] = edited_val
         try:
             yaml.safe_load(edited_val)
-            st.success(f"✓ {fname} — valid YAML", icon=None)
         except yaml.YAMLError as exc:
             st.warning(f"{fname} — YAML syntax error: {exc}")
-            file_errors[fname] = str(exc)
+            yaml_errors.append(fname)
 
-    validated = not file_errors and len(edited) == len(file_keys)
+    approve_disabled = bool(yaml_errors)
+    if yaml_errors:
+        st.error(f"Fix YAML syntax errors in {yaml_errors} before approving.")
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("Validate", key="kit_validate_btn"):
-            all_ok = True
-            for fname, content in edited.items():
-                errs, warns = _validate_enrichment_rules(content) if fname == "enrichment_rules.yaml" else ([], [])
-                for e in errs:
-                    st.error(f"{fname}: {e}")
-                    all_ok = False
-                for w in warns:
-                    st.warning(f"{fname}: {w}")
-            if "block_sequence.yaml" in edited:
-                _, unknown = _resolve_block_sequence(edited["block_sequence.yaml"], domain_name)
-                for u in unknown:
-                    st.warning(f"block_sequence.yaml: unknown block '{u}'")
-            if all_ok:
-                st.success("Validation passed")
+    if st.button("Approve & Save All", disabled=approve_disabled, key="kit_approve_btn"):
+        kit_state = {**kit_state, "user_edits": user_edits}
+        kit_state = run_kit_step("commit_to_disk", kit_state)
+        st.session_state["domain_kit_state"] = kit_state
 
-    with col2:
-        if st.button("Commit", disabled=not validated, key="kit_commit_btn"):
-            domain_dir = DOMAIN_PACKS_DIR / domain_name
-            try:
-                domain_dir.mkdir(parents=True, exist_ok=True)
-                for fname, content in edited.items():
-                    (domain_dir / fname).write_text(content)
-                _append_audit(domain_name, "generate", "success", f"committed {list(edited.keys())}")
-                st.session_state["kit_domain_committed"] = True
-                st.success(f"Domain '{domain_name}' committed to `domain_packs/{domain_name}/`")
-                if st.button("Run Pipeline with this domain", key="kit_run_pipeline_btn"):
-                    st.session_state["app_mode"] = "Pipeline"
-                    st.session_state["domain"] = domain_name
-                    st.rerun()
-            except Exception as exc:
-                _append_audit(domain_name, "generate", "error", str(exc))
-                st.error(f"Commit failed: {exc}")
+        if kit_state.get("committed"):
+            st.success(f"Domain pack `{domain_name}` saved to `domain_packs/{domain_name}/`")
+            if st.button("Run Pipeline with this domain", key="kit_run_pipeline_btn"):
+                st.session_state["_mode_override"] = "Pipeline"
+                st.session_state["_domain_override"] = domain_name
+                st.rerun()
+        else:
+            st.error(f"Commit failed: {kit_state.get('error', 'unknown error')}")
 
 
 def _render_scaffold_tab() -> None:
@@ -449,8 +501,13 @@ def _render_scaffold_tab() -> None:
     except ImportError:
         return
 
+    from src.agents.domain_kit_graph import ScaffoldState, run_scaffold_step
+
     st.subheader("Custom Block Scaffold")
-    st.caption("Describe what to extract and the AI generates a Python `Block` subclass scaffold for download.")
+    st.caption(
+        "Describe what to extract. The agent generates a Python `Block` subclass with "
+        "auto-retry on syntax errors."
+    )
 
     domains = [d.name for d in sorted(DOMAIN_PACKS_DIR.iterdir()) if d.is_dir()] if DOMAIN_PACKS_DIR.exists() else []
     selected_domain = st.selectbox("Domain", domains or ["<none>"], key="scaffold_domain")
@@ -464,29 +521,60 @@ def _render_scaffold_tab() -> None:
 
     can_generate = bool(extraction_description.strip() and selected_domain and selected_domain != "<none>")
 
-    if st.button("Generate Block", disabled=not can_generate, key="scaffold_generate_btn"):
-        from src.ui.block_scaffolder import generate_block_scaffold
-        with st.spinner("Generating block scaffold…"):
-            try:
-                source, syntax_valid = generate_block_scaffold(selected_domain, extraction_description)
-                st.session_state["scaffold"] = {"source": source, "syntax_valid": syntax_valid}
-            except Exception as exc:
-                st.error(f"Scaffold generation failed: {exc}")
+    scaffold_state: ScaffoldState = st.session_state.get("scaffold_state", {})
 
-    scaffold = st.session_state.get("scaffold")
-    if not scaffold:
+    if st.button("Generate Block", disabled=not can_generate, key="scaffold_generate_btn"):
+        scaffold_state = ScaffoldState(
+            domain_name=selected_domain,
+            extraction_description=extraction_description,
+            retry_count=0,
+        )
+        with st.spinner("Step 1/2 — Generating scaffold…"):
+            scaffold_state = run_scaffold_step("generate_scaffold", scaffold_state)
+        if scaffold_state.get("error"):
+            st.error(f"Generation failed: {scaffold_state['error']}")
+            st.session_state["scaffold_state"] = scaffold_state
+            return
+
+        with st.spinner("Step 2/2 — Validating syntax…"):
+            scaffold_state = run_scaffold_step("validate_syntax", scaffold_state)
+
+        # Auto-retry loop (max 2)
+        while not scaffold_state.get("syntax_valid", True) and scaffold_state.get("retry_count", 0) < 2:
+            with st.spinner(
+                f"Step 2/2 — Fixing syntax (attempt {scaffold_state['retry_count']}/2)…"
+            ):
+                scaffold_state = run_scaffold_step("fix_scaffold", scaffold_state)
+                scaffold_state = run_scaffold_step("validate_syntax", scaffold_state)
+
+        scaffold_state = run_scaffold_step("hitl_review", scaffold_state)
+        st.session_state["scaffold_state"] = scaffold_state
+        st.rerun()
+
+    if not scaffold_state.get("pending_review"):
         return
 
-    source = scaffold.get("source", "")
-    syntax_valid = scaffold.get("syntax_valid", False)
+    source = scaffold_state.get("scaffold_source", "")
+    syntax_valid = scaffold_state.get("syntax_valid", False)
+    syntax_error = scaffold_state.get("syntax_error", "")
 
     st.markdown("---")
+
     if syntax_valid:
         st.success("✓ Syntax valid")
     else:
-        st.error("✗ Syntax error in generated code (shown below)")
+        st.warning(
+            "⚠️ Syntax errors remain after 2 auto-retries. "
+            "Edit the code below before approving."
+        )
+        st.error(f"Syntax error: {syntax_error}")
 
-    st.code(source, language="python")
+    edited_source = st.text_area(
+        "Generated block source (edit before approving)",
+        value=source,
+        height=400,
+        key="scaffold_edit_source",
+    )
 
     st.warning(
         "**Security notice**: This file will execute on the server when placed in "
@@ -498,17 +586,18 @@ def _render_scaffold_tab() -> None:
         "I understand this file will execute on the server when placed in custom_blocks/",
         key="scaffold_ack",
     )
-    st.session_state["scaffold_ack"] = ack
 
-    download_enabled = syntax_valid and ack
-    st.download_button(
-        "Download scaffold.py",
-        data=source.encode("utf-8"),
-        file_name=f"{selected_domain}_block.py",
-        mime="text/x-python",
-        disabled=not download_enabled,
-        key="scaffold_download_btn",
-    )
+    if st.button("Approve & Save", disabled=not ack, key="scaffold_approve_btn"):
+        scaffold_state = {**scaffold_state, "user_source": edited_source}
+        scaffold_state = run_scaffold_step("save_to_custom_blocks", scaffold_state)
+        st.session_state["scaffold_state"] = scaffold_state
+        if scaffold_state.get("committed"):
+            st.success(
+                f"Block saved to `domain_packs/{selected_domain}/custom_blocks/`. "
+                "It will be auto-discovered on the next pipeline run."
+            )
+        else:
+            st.error(f"Save failed: {scaffold_state.get('error', 'unknown error')}")
 
 
 def _render_preview_tab() -> None:
@@ -517,8 +606,13 @@ def _render_preview_tab() -> None:
     except ImportError:
         return
 
+    from src.agents.domain_kit_graph import validate_enrichment_rules_yaml
+
     st.subheader("Preview / Validate Domain Pack")
-    st.caption("Resolve block execution order and validate enrichment rules without writing to disk.")
+    st.caption(
+        "Upload the source CSV and select a domain pack to run all deterministic validation checks. "
+        "A CSV upload is required — header-dependent checks cannot run without it."
+    )
 
     domains = [d.name for d in sorted(DOMAIN_PACKS_DIR.iterdir()) if d.is_dir()] if DOMAIN_PACKS_DIR.exists() else []
     selected_domain = st.selectbox("Domain", domains or ["<none>"], key="preview_domain")
@@ -538,17 +632,83 @@ def _render_preview_tab() -> None:
             bs_yaml = bs_path.read_text() if bs_path.exists() else ""
             er_yaml = er_path.read_text() if er_path.exists() else ""
 
-    if st.button("Preview", key="preview_btn"):
+    # CSV upload — required for header-dependent checks
+    st.markdown("**Upload source CSV** (required for full validation)")
+    preview_csv = st.file_uploader(
+        "Source CSV for this domain",
+        type=["csv"],
+        key="preview_csv_upload",
+    )
+
+    csv_headers: list[str] = []
+    if preview_csv is not None:
+        import csv as _csv
+        import io as _io
+        reader = _csv.reader(_io.StringIO(preview_csv.read().decode("utf-8", errors="replace")))
+        rows = list(reader)
+        if rows:
+            csv_headers = rows[0]
+            st.caption(f"CSV headers detected: {csv_headers}")
+
+    validate_disabled = not preview_csv
+    if validate_disabled:
+        st.info("Upload a CSV above to enable validation.")
+
+    if st.button("Run Validation", disabled=validate_disabled, key="preview_btn"):
         if not bs_yaml and not er_yaml:
-            st.warning("No YAML content to preview. Select a domain or paste YAML above.")
+            st.warning("No YAML content to validate. Select a domain or paste YAML above.")
             return
 
         domain_label = selected_domain if not paste_mode else "(pasted)"
+        domain_dir = (
+            DOMAIN_PACKS_DIR / selected_domain
+            if selected_domain and selected_domain != "<none>" and not paste_mode
+            else None
+        )
 
-        st.markdown("---")
+        er_dict: dict = {}
+        bs_dict: dict = {}
+
+        if er_yaml:
+            try:
+                er_dict = yaml.safe_load(er_yaml) or {}
+            except yaml.YAMLError as exc:
+                st.error(f"enrichment_rules.yaml parse error: {exc}")
 
         if bs_yaml:
-            st.markdown("### Block Execution Order")
+            try:
+                bs_dict = yaml.safe_load(bs_yaml) or {}
+            except yaml.YAMLError as exc:
+                st.error(f"block_sequence.yaml parse error: {exc}")
+
+        issues = validate_enrichment_rules_yaml(
+            enrichment_yaml_dict=er_dict,
+            csv_headers=csv_headers,
+            block_sequence_dict=bs_dict if bs_dict else None,
+            domain_dir=domain_dir,
+        )
+
+        errors = [i for i in issues if i["level"] == "error"]
+        warnings = [i for i in issues if i["level"] == "warning"]
+
+        st.markdown("---")
+        st.markdown(f"### Validation Results — `{domain_label}`")
+
+        if not issues:
+            st.success("✓ All checks passed — no errors or warnings.")
+        else:
+            for issue in errors:
+                st.error(f"**[{issue['check']}]** {issue['message']}")
+            for issue in warnings:
+                st.warning(f"**[{issue['check']}]** {issue['message']}")
+            if errors:
+                st.error(f"{len(errors)} error(s), {len(warnings)} warning(s)")
+            else:
+                st.warning(f"0 errors, {len(warnings)} warning(s)")
+
+        # Block sequence expansion
+        if bs_yaml:
+            st.markdown("### Resolved Block Sequence")
             resolved, unknown = _resolve_block_sequence(bs_yaml, domain_label)
             if resolved:
                 rows = [{"#": i + 1, "Block": name} for i, name in enumerate(resolved)]
@@ -556,21 +716,10 @@ def _render_preview_tab() -> None:
             for u in unknown:
                 st.warning(f"Unknown block: `{u}`")
 
-        if er_yaml:
-            st.markdown("### Enrichment Field Summary")
-            try:
-                er_data = yaml.safe_load(er_yaml)
-                st.json(er_data)
-            except yaml.YAMLError as exc:
-                st.error(f"enrichment_rules.yaml parse error: {exc}")
-
-            errs, warns = _validate_enrichment_rules(er_yaml)
-            for e in errs:
-                st.error(e)
-            for w in warns:
-                st.warning(w)
-            if not errs and not warns:
-                st.success("enrichment_rules.yaml validation passed")
+        # Enrichment field summary
+        if er_yaml and er_dict:
+            with st.expander("Enrichment rules detail", expanded=False):
+                st.json(er_dict)
 
 
 def _render_manage_tab() -> None:
