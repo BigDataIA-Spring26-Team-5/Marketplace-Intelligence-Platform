@@ -86,7 +86,7 @@ def _render_hitl_panels(results: dict, current_step: int):
         n_cols = ls.get("n_cols", 0)
         n_rows = ls.get("n_rows_sample", 0)
 
-        with st.expander(f"📥 Source Preview — {n_rows} rows × {n_cols} cols", expanded=(current_step == 2)):
+        with st.expander(f"Source Preview — {n_rows} rows × {n_cols} cols", expanded=(current_step == 2)):
             if preview and cols_info:
                 col_names = [c["column"] for c in cols_info]
                 header = "".join(f'<th>{c}</th>' for c in col_names[:8])
@@ -127,7 +127,7 @@ def _render_hitl_panels(results: dict, current_step: int):
         cache_hit = az.get("cache_hit", False)
         hit_label = " 🗲 cache hit" if cache_hit else ""
 
-        with st.expander(f"🧠 Schema Delta — {len(mapping_rows)} mapped, {n_gaps} gaps{hit_label}", expanded=(current_step == 3)):
+        with st.expander(f"Schema Delta — {len(mapping_rows)} mapped, {n_gaps} gaps{hit_label}", expanded=(current_step == 3)):
             if mapping_rows:
                 st.markdown("**Column Mapping** (source → unified schema):", unsafe_allow_html=False)
                 rows_html = ""
@@ -172,7 +172,7 @@ def _render_hitl_panels(results: dict, current_step: int):
         n_hits = cr.get("n_hits", 0)
         label = yaml_path.split("/")[-1] if yaml_path else "mapping"
 
-        with st.expander(f"⚙️ Generated YAML — {label} ({n_hits} registry hits)", expanded=(current_step == 4)):
+        with st.expander(f"Generated YAML — {label} ({n_hits} registry hits)", expanded=(current_step == 4)):
             if n_hits:
                 hits = cr.get("block_hits", {})
                 hits_html = "".join(
@@ -192,7 +192,7 @@ def _render_hitl_panels(results: dict, current_step: int):
         reasoning = ps_res.get("reasoning", "")
         skipped = ps_res.get("skipped", {})
 
-        with st.expander(f"📋 Block Sequence — {len(seq)} blocks", expanded=(current_step == 5)):
+        with st.expander(f"Block Sequence — {len(seq)} blocks", expanded=(current_step == 5)):
             running_block = results.get("run_pipeline", {}).get("current_block")
             if seq:
                 st.markdown(_block_chips_html(seq, running_block), unsafe_allow_html=True)
@@ -224,7 +224,7 @@ def _render_hitl_panels(results: dict, current_step: int):
             sign = "+" if dq_delta >= 0 else ""
             delta_str = f' <span style="color:{"var(--green)" if dq_delta>=0 else "var(--red)"}">{sign}{dq_delta:.2f}</span>'
 
-        with st.expander("🏃 Pipeline Execution", expanded=(current_step == 6)):
+        with st.expander("Pipeline Execution", expanded=(current_step == 6)):
             st.markdown(
                 f'<div class="stat-card" style="margin-bottom:8px">'
                 f'<div class="stat-label">Rows</div>'
@@ -245,7 +245,7 @@ def _render_hitl_panels(results: dict, current_step: int):
     # ── save_output ───────────────────────────────────────────────────────────
     so = results.get("save_output", {})
     if so:
-        with st.expander("💾 Output", expanded=(current_step == 7)):
+        with st.expander("Output", expanded=(current_step == 7)):
             uri = so.get("silver_uri") or so.get("output_path", "")
             score = so.get("dq_score_post")
             if uri:
