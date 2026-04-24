@@ -1,337 +1,270 @@
 # Marketplace Intelligence Platform (MIP)
 
-**Course:** DAMG 7245 — Big Data Systems and Intelligent Analytics · Spring 2026 · Group 5
+Food-product catalog pipeline that ingests heterogeneous sources (USDA FoodData Central, OpenFoodFacts, OpenFDA recalls, Amazon ESCI), produces a unified Bronze → Silver → Gold layer on GCS + BigQuery, and exposes four use cases on top:
 
-MIP is a domain-agnostic data intelligence platform. Point it at any structured data source, supply a domain schema, and it automatically generates YAML transforms, runs a Bronze → Silver → Gold ETL pipeline, enriches missing fields, scores data quality, and makes every run observable and queryable.
+- **UC1** — three-agent LangGraph ETL with YAML-only transforms, multi-tier enrichment, DQ scoring
+- **UC2** — observability: Prometheus + Grafana, RAG chatbot over run logs, anomaly detection
+- **UC3** — hybrid search (BM25 + semantic) across 99,666 indexed products
+- **UC4** — association-rule and graph-based recommendations built from 50k Instacart orders (49,688 products, 105 rules, 105 edges)
 
-The food catalog (USDA, OpenFoodFacts, OpenFDA, Amazon ESCI) is the **reference implementation** — five incompatible source schemas onboarded without a single line of hand-written ingestion code.
-
-**Live:** `35.239.47.242` — see [Live Endpoints](#live-endpoints).
-
----
-
-## Architecture
-
-Every source flows through a **Domain Pack** (schema + block sequence) into a three-agent LangGraph pipeline, producing Silver Parquet per source. Gold runs in two stages: per-source dedup+enrich → BigQuery, then cross-source concat+dedup → GCS canonical Parquet.
-
-```mermaid
-flowchart TD
-    subgraph DP["Domain Pack  (domain_packs/<domain>/)"]
-        Schema[canonical schema\nconfig/schemas/domain_schema.json]
-        BSeq[block_sequence.yaml\nsilver_sequence · gold_sequence]
-        CB[custom_blocks/*.py\noptional domain extensions]
-    end
-
-    subgraph Sources["Data Sources (reference: food catalog)"]
-        S1[USDA Branded]
-        S2[USDA Foundation]
-        S3[OpenFoodFacts]
-        S4[OpenFDA Recalls]
-        S5[Amazon ESCI]
-    end
-
-    subgraph Bronze["Bronze  gs://mip-bronze-2024/"]
-        B[source/YYYY/MM/DD/  JSONL part files]
-    end
-
-    subgraph AgentETL["3-Agent LangGraph  (per source × domain)"]
-        Cache[(Redis YAML Cache\nschema fingerprint · 30d TTL)]
-        A1[Agent 1 – Orchestrator\nmap source cols → domain schema\nemit RENAME·CAST·FORMAT·DERIVE ops]
-        A2[Agent 2 – Critic  opt-in\nvalidate ops · reject bad ones]
-        A3[Agent 3 – Planner\nreorder block sequence\ncannot add or remove blocks]
-        YAML[DYNAMIC_MAPPING_source.yaml\nsrc/blocks/generated/domain/]
-    end
-
-    subgraph Silver["Silver  gs://mip-silver-2024/  (per source+date)"]
-        SP[N Parquet part files\nschema-conformed to domain]
-    end
-
-    subgraph PSourceGold["Per-Source Gold  run_gold_pipeline"]
-        CatP[concat part files\npd.concat frames]
-        Ded1[fuzzy dedup\ncolumn_wise_merge\ngolden_record_select]
-        EnrA["Enrichment Cascade  ↓"]
-        BQ[(BigQuery  mip_gold.products\nappend-mode per source)]
-    end
-
-    subgraph EnrFlow["Enrichment Agents  (Agentic Cascade)"]
-        E1[S1 – Deterministic\nregex · keyword rules\nallergens · dietary_tags · is_organic]
-        E2[S2 – KNN Agent\nFAISS IndexFlatIP cosine top-5\nprimary_category only]
-        E3[S3 – LLM-RAG Agent\nClaude Haiku + top-3 neighbors\nprimary_category only]
-        Corpus[(FAISS Corpus\ngrows each run\nS2+S3 write resolved rows back)]
-        E1 --> E2 --> E3
-        E2 <--> Corpus
-        E3 --> Corpus
-    end
-
-    subgraph CrossGold["Cross-Source Gold  run_domain_gold_gcs  --domain-gcs"]
-        BQR[read all domain sources from BQ\nnutrition: usda-branded + usda-foundation + off\nsafety: openfda    retail: esci]
-        CatBQ[pd.concat all source frames]
-        XDed[cross-source fuzzy dedup\nskipped for single-source domains]
-        SJoin[LEFT JOIN OpenFDA Silver\nnutrition only\nrecall_class · recall_reason · allergen override]
-        DQR[recompute dq_score_post + dq_delta\non merged canonical columns]
-        GCS[(GCS  mip-gold-2024/domain/date/\nParquet in 500k-row chunks)]
-    end
-
-    Sources --> Bronze
-    DP --> AgentETL
-    Bronze --> AgentETL
-    A1 <--> Cache
-    Cache -- "hit: skip A1·A2·A3" --> YAML
-    A1 --> A2 --> A3 --> YAML
-    YAML --> Silver
-
-    Silver --> CatP --> Ded1 --> EnrA --> BQ
-    EnrA -. drives .-> EnrFlow
-
-    BQ --> BQR --> CatBQ --> XDed --> SJoin --> DQR --> GCS
-
-    GCS --> Obs[Observability\nPrometheus · Grafana · RAG]
-    GCS --> Search[Hybrid Search\nBM25 + FAISS · 99k products]
-    GCS --> Recs[Recommendations\nRules + Graph · 105 rules]
-```
-
-### Domain Pack structure
-
-```
-domain_packs/<domain>/
-├── block_sequence.yaml      # silver_sequence · sequence · gold_sequence
-└── custom_blocks/*.py       # optional domain-specific Block subclasses
-
-config/schemas/<domain>_schema.json   # canonical column definitions
-src/blocks/generated/<domain>/        # DYNAMIC_MAPPING_<source>.yaml  (auto-generated)
-                                      # VALIDATION_PROFILE_<source>.json
-```
-
-Six domains shipped: `nutrition` · `safety` · `retail` · `pricing` · `finance` · `manufacturing`. Add a new domain → author a schema JSON + block_sequence.yaml, run the CLI once.
+Live on GCP at **35.239.47.242** — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the endpoint list.
 
 ---
 
-## Agentic Flows
+## 1. Problem
 
-The three agents run inside LangGraph and produce **Domain Pack artifacts** — the YAML transform files and planned block sequences that all subsequent pipeline runs replay deterministically.
-
-```mermaid
-flowchart TD
-    subgraph Input
-        Src[Source schema sample\n~5K rows adaptive]
-        DS[Domain Pack schema\nconfig/schemas/domain_schema.json]
-        BSQ[Domain Pack block sequence\ndomain_packs/domain/block_sequence.yaml]
-    end
-
-    subgraph Agent1["Agent 1 — Schema Gap Analyzer  (Orchestrator)"]
-        GA[detect gap: source col ↔ canonical col mismatch\nemit ops: RENAME · CAST · FORMAT · ADD · DELETE\nSPLIT · UNIFY · DERIVE]
-        FW[first run: derive + write domain schema\nsubsequent: map to existing schema]
-    end
-
-    Cache[(Redis YAML Cache\nschema fingerprint · 30d TTL\ncache hit → skip all 3 agents)]
-
-    subgraph Agent2["Agent 2 — Schema Critic  (opt-in --with-critic)"]
-        CR[validate ops against 7 rules\nno duplicate renames · no CAST without type\nSPLIT arity matches source · no safety-field inference\nreject bad ops · propose amendments]
-    end
-
-    subgraph Agent3["Agent 3 — Sequence Planner"]
-        SP[reorder blocks from block_sequence.yaml\ncannot add or remove — only reorder\nauto-re-append any dropped block before dq_score_post]
-    end
-
-    subgraph Output["Domain Pack Artifacts  (written to disk + cached)"]
-        YAML[src/blocks/generated/domain/\nDYNAMIC_MAPPING_source.yaml]
-        VP[src/blocks/generated/domain/\nVALIDATION_PROFILE_source.json]
-        Seq[planned block sequence\nstored in Redis cache blob]
-    end
-
-    Src --> Agent1
-    DS --> Agent1
-    Agent1 <--> Cache
-    Agent1 --> Agent2
-    Agent2 --> Agent3
-    BSQ --> Agent3
-    Agent3 --> Output
-```
-
-| Agent | Model | What it produces |
-|---|---|---|
-| **Schema Gap Analyzer** | `deepseek/deepseek-chat` | YAML op list; writes `DYNAMIC_MAPPING_<source>.yaml`; on first run derives and writes domain schema |
-| **Schema Critic** *(opt-in)* | `claude-sonnet-4-6` | Validated/amended op list; rejects ops that violate safety rules or structural constraints |
-| **Sequence Planner** | `deepseek/deepseek-chat` | Ordered block sequence; complete Redis cache blob (single write site in `plan_sequence_node`) |
+Food catalogs arrive in wildly different shapes — USDA's branded-food dump has 150+ nutrient columns, OpenFoodFacts uses multilingual free-text fields, OpenFDA recalls are event records, and ESCI is a search-relevance dataset. Merging them into a single usable catalog requires per-source schema reconciliation, safety-aware enrichment (allergens cannot be guessed), dedup across brand/product variants, and continuous quality scoring. MIP does this without hand-written per-source code — an LLM-driven orchestrator emits declarative YAML transforms that later runs replay deterministically, so new sources onboard without code changes.
 
 ---
 
-## Enrichment Cascade
+## 2. Architecture
 
-Cost-ordered deterministic cascade — not agentic. Runs inside `LLMEnrichBlock` during Gold execution.
+Five-layer flow: external sources → Kafka → Bronze (GCS JSONL) → 3-agent LangGraph ETL → Silver (GCS Parquet) → dedup + enrichment → Gold (BigQuery) → UC2/3/4 surfaces.
 
 ```mermaid
 flowchart LR
-    Row[row with missing fields] --> S1
-
-    subgraph S1["S1 — Deterministic  (always runs)"]
-        D1[regex + keyword rules\non row's own text\nallergens · dietary_tags\nis_organic · primary_category]
+    subgraph Sources
+      USDA[USDA FoodData]
+      OFF[OpenFoodFacts]
+      OPENFDA[OpenFDA recalls]
+      ESCI[Amazon ESCI]
     end
-
-    subgraph S2["S2 — FAISS KNN  (primary_category only)"]
-        D2[embed product text\ncosine top-5 neighbors\nvote threshold 0.45\nconfidence floor 0.60]
-    end
-
-    subgraph S3["S3 — LLM-RAG  (primary_category only)"]
-        D3[Claude Haiku\ntop-3 S2 neighbors as RAG context\nfallback when S2 below threshold]
-    end
-
-    Corpus[(FAISS Corpus\npersists · grows each run\nS2 + S3 write resolved rows back)]
-
-    S1 -- "primary_category still missing" --> S2
-    S2 -- "below confidence" --> S3
-    S2 --> Corpus
-    S3 --> Corpus
+    Sources --> Kafka
+    Kafka --> BronzeGCS[(Bronze GCS<br/>JSONL)]
+    BronzeGCS --> Airflow
+    Airflow --> LangGraph[3-agent LangGraph<br/>schema analyze → critic → plan]
+    LangGraph --> SilverGCS[(Silver GCS<br/>Parquet)]
+    SilverGCS --> DedupEnrich[Dedup +<br/>S1/S2/S3 enrichment]
+    DedupEnrich --> GoldBQ[(Gold BigQuery<br/>mip_gold.products)]
+    GoldBQ --> UC2[UC2 Observability<br/>Prom + Grafana + RAG]
+    GoldBQ --> UC3[UC3 Hybrid Search<br/>BM25 + FAISS]
+    GoldBQ --> UC4[UC4 Recommender<br/>Rules + Graph]
 ```
 
-> **Hard safety rule.** `allergens`, `is_organic`, `dietary_tags` — S1 extraction only, never touched by S2 or S3. `LLMEnrichBlock` post-run assertion fires if this is ever crossed — fix the cause, never silence it.
+For the full node-by-node diagram (13 nodes, internal state, prompts), see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+### Single-record data flow
+
+```mermaid
+flowchart TD
+    Raw["Raw JSONL row<br/>brands, ingredients_text, last_modified_t ..."] --> Map["column_mapping<br/>brands → brand_name<br/>ingredients_text → ingredients"]
+    Map --> Pre["dq_score_pre<br/>completeness, freshness, richness"]
+    Pre --> Dyn["DynamicMappingBlock<br/>RENAME/CAST/FORMAT/DELETE/..."]
+    Dyn --> Clean["strip_whitespace / lowercase_brand / ..."]
+    Clean --> Dedup["fuzzy_deduplicate<br/>column_wise_merge<br/>golden_record_select"]
+    Dedup --> Enrich["S1 deterministic → S2 KNN → S3 RAG-LLM<br/>(primary_category only for S2/S3)"]
+    Enrich --> Post["dq_score_post + dq_delta"]
+    Post --> Silver[(Silver Parquet)]
+    Silver --> Gold[(Gold BigQuery)]
+```
 
 ---
 
-## Prerequisites
+## 3. Three-agent LangGraph
 
-- Python 3.11+, Poetry
-- Docker + Docker Compose
-- GCP: GCS buckets `mip-bronze-2024` / `mip-silver-2024`, BigQuery project `mip-platform-2024`
-- API keys: `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GROQ_API_KEY`
+```mermaid
+stateDiagram-v2
+    [*] --> load_source
+    load_source --> analyze_schema
+    analyze_schema --> critique_schema: with_critic + cache miss
+    analyze_schema --> check_registry: cache hit or critic off
+    critique_schema --> check_registry
+    check_registry --> plan_sequence
+    plan_sequence --> run_pipeline
+    run_pipeline --> save_output
+    save_output --> [*]
+```
+
+| Agent | Node | Model | Role |
+|---|---|---|---|
+| **Agent 1 — Orchestrator** | `analyze_schema` | `deepseek/deepseek-chat` | Map source columns to unified schema, emit `RENAME`/`CAST`/`FORMAT`/`DELETE`/`ADD`/`SPLIT`/`UNIFY`/`DERIVE` ops |
+| **Agent 2 — Critic** | `critique_schema` *(opt-in with `--with-critic`)* | `anthropic/claude-sonnet-4-6` | Reasoning-model review of Agent 1's plan against 7 deterministic rules |
+| **Agent 3 — Planner** | `plan_sequence` | `deepseek/deepseek-chat` | Reorder registered blocks — *cannot* add or remove; missing blocks auto-re-appended before `dq_score_post` |
+
+Redis YAML cache (30d TTL) short-circuits Agents 1–3 on schema-fingerprint hit. Full cacheable blob is written by `plan_sequence_node`, not Agent 1 — change what any of the three agents produce and update that write site, or replayed runs drop state.
+
+**No runtime Python codegen.** All transforms are declarative YAML executing a fixed action set (`set_null`, `type_cast`, `regex_extract`, `concat_columns`, …) via [`DynamicMappingBlock`](src/blocks/dynamic_mapping.py). This is a constitutional constraint — do not reintroduce `exec()`-based generation.
 
 ---
 
-## Setup
+## 4. Enrichment cascade (and the safety boundary)
+
+Three tiers for `primary_category`, plus deterministic-only populators for safety fields:
+
+1. **S1 deterministic** ([`src/enrichment/deterministic.py`](src/enrichment/deterministic.py)) — regex + keyword rules over the row's own text. Populates `allergens`, `dietary_tags`, `is_organic`, partial `primary_category`.
+2. **S2 KNN** ([`src/enrichment/embedding.py`](src/enrichment/embedding.py)) — FAISS `IndexFlatIP` cosine search against a persistent corpus. Votes neighbors' category above `VOTE_SIMILARITY_THRESHOLD=0.45`.
+3. **S3 RAG-LLM** ([`src/enrichment/llm_tier.py`](src/enrichment/llm_tier.py)) — Claude Haiku with S2's top-3 neighbors as context. Used when S2 confidence falls below `CONFIDENCE_THRESHOLD_CATEGORY=0.60`.
+
+> **Hard safety rule.** S2 and S3 touch only `primary_category`. `allergens`, `is_organic`, `dietary_tags` are *never* inferred — they are either extracted from the product's own text (S1) or stay null. A false positive here is a regulatory-grade mistake. See [`docs/DQ_SCORING.md §4`](docs/DQ_SCORING.md) for why nulls still count against completeness.
+
+Corpus persists across runs. S2 and S3 write resolved rows back into the FAISS index, so later runs improve.
+
+---
+
+## 5. Data quality scoring
+
+Per-row score 0–100 blending three signals:
+
+$$\mathrm{dq\_score} = (0.40 \cdot \mathrm{completeness} + 0.35 \cdot \mathrm{freshness} + 0.25 \cdot \mathrm{ingredient\_richness}) \times 100$$
+
+Two scores per row: `dq_score_pre` (before enrichment), `dq_score_post` (after). `dq_delta` is the lift. Reference columns are pinned at pre so enrichment-added columns don't artificially lower completeness at post. Full walkthrough with worked examples on real OFF rows: [`docs/DQ_SCORING.md`](docs/DQ_SCORING.md).
+
+---
+
+## 6. Guardrails
+
+Two layers, both already wired:
+
+- **Structural** — [`src/agents/guardrails.py`](src/agents/guardrails.py). Validates Agent 1/2/3 outputs (op shapes, referenced columns exist, no runtime-Python emit, S3 response schema). 95% coverage.
+- **LLM safety** — [`src/agents/safety_guardrails.py`](src/agents/safety_guardrails.py). Prompt-injection + PII-redaction guard on the UC2 RAG chatbot path. Default model `groq/llama-3.1-8b-instant`. 10 passing tests in `tests/unit/test_safety_guardrails.py`.
+
+Both run **fail-closed** on malformed LLM output (reject + retry) and **fail-open** on infrastructure outage (log warning + pass through). Pipeline runs never block on observability or guardrail service failure.
+
+---
+
+## 7. Use cases
+
+| # | What | Entry point | Notes |
+|---|---|---|---|
+| UC1 | 3-agent schema-driven ETL | `python -m src.pipeline.cli` / `app.py` | LangGraph, YAML cache, DQ scoring |
+| UC2 | Observability + RAG chatbot | `app.py` → Mode=Observability, `uvicorn src.uc2_observability.mcp_server:app --port 8001` | Prometheus 12 gauges, ChromaDB audit corpus, Isolation Forest anomalies |
+| UC3 | Hybrid search | `src/uc3_search/` | 99,666 products indexed; BM25 + sentence-transformers |
+| UC4 | Association-rule + graph recs | `src/uc4_recommendations/` | 49,688 products, 105 rules, 105 edges (50k Instacart orders) |
+
+---
+
+## 8. Data sources × domain schemas
+
+| Source | Domain | Bronze partitions | Silver rows | Role |
+|---|---|---|---|---|
+| USDA FoodData Central | `nutrition` | `usda/2026/04/{20,21,23}/` + `usda/bulk/2026/04/21/branded/` | ~447k | Primary nutrition catalog |
+| OpenFoodFacts | `nutrition` | `off/2026/04/{09 → 22}/` (14 days) | ~7k / day | Best freshness/incremental demo |
+| OpenFDA recalls | `safety` | `openfda/2026/04/20/` | ~25k | Safety-domain showcase |
+| Amazon ESCI | `retail` | `esci/2024/01/01/`, `esci/2026/04/20/` | ~1.08M | Retail domain + UC3 corpus |
+
+Full inventory with layout quirks and known gaps: [`docs/data_inventory.md`](docs/data_inventory.md).
+
+Canonical schemas live in `config/schemas/<domain>_schema.json` (`nutrition`, `safety`, `pricing`, `retail`, `finance`, `manufacturing`). `pricing`, `finance`, `manufacturing` are defined but no Bronze yet.
+
+---
+
+## 9. EDA highlights
+
+Precomputed across the four anchor tuples:
+
+| Source | Date | Bronze (sample) | Silver | DQ pre mean |
+|---|---|---|---|---|
+| usda | 2026/04/21 | 2,000 | 447,809 | 27.3 |
+| off | 2026/04/22 | 2,000 | 7,094 | 27.3 |
+| openfda | 2026/04/20 | 2,000 | 25,100 | 27.3 |
+| esci | 2026/04/20 | 2,000 | 1,087,502 | 27.3 |
+
+Full per-anchor artifacts: `output/eda/<source>_<date>/` — `summary.json`, `tables.csv`, `plots/*.png`. Rollup: [`output/eda/SUMMARY.md`](output/eda/SUMMARY.md).
+
+Rebuild or explore live in Streamlit (`Mode=EDA` sidebar option):
 
 ```bash
-git clone https://github.com/BigDataIA-Spring26-MIP/Marketplace-Intelligence-Platform.git
-cd Marketplace-Intelligence-Platform
+streamlit run app.py
+# then pick Mode=EDA → anchor selector → tabs for Shape / Schema diff / Nulls / DQ / Enrichment / Dedup / Categories / Telemetry / UC3-UC4
+```
 
-cp .env.example .env          # fill API keys + GOOGLE_APPLICATION_CREDENTIALS
+Regenerate artifacts from scratch:
 
+```bash
+python scripts/eda_full_report.py --no-bq --bronze-limit 2000
+```
+
+---
+
+## 10. Quick start
+
+```bash
+# Python 3.11, Poetry
 poetry install
+cp .env.example .env   # fill ANTHROPIC_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY
 
-docker-compose -p mip up -d   # Kafka, Airflow, Postgres, Prometheus, Pushgateway,
-                               # Grafana, ChromaDB, Redis, MLflow
+# Full stack (Kafka, Airflow, Postgres, Prometheus, Pushgateway, Grafana,
+#   ChromaDB, Redis, MLflow)
+docker-compose -p mip up -d
 
-# One-time: seed enrichment corpus from USDA FoodData Central
-poetry run python scripts/build_corpus.py --limit 10000
-```
+# Streamlit wizard (HITL gates + EDA + Observability chatbot)
+streamlit run app.py
 
----
+# CLI with checkpoint/resume
+python -m src.pipeline.cli --source data/usda_fooddata_sample.csv --domain nutrition
+python -m src.pipeline.cli --source gs://mip-bronze-2024/off/2026/04/22/*.jsonl --mode silver
+python -m src.pipeline.cli --source ... --with-critic    # enable Agent 2
 
-## Running
+# Gold layer — separate entry point (Silver Parquet → BigQuery)
+python -m src.pipeline.gold_pipeline --source off --date 2026/04/21
 
-### Demo (fastest way to see it work)
-
-```bash
-poetry run python demo.py
-# Runs USDA → FDA → FDA replay; third pass shows Redis cache skipping all 3 agents
-```
-
-### CLI — run any source
-
-```bash
-# Local CSV
-poetry run python -m src.pipeline.cli --source data/usda_fooddata_sample.csv --domain nutrition
-
-# GCS JSONL (silver mode — schema transform only, no enrichment)
-poetry run python -m src.pipeline.cli \
-    --source "gs://mip-bronze-2024/off/2026/04/22/*.jsonl" --mode silver
-
-# Resume after failure
-poetry run python -m src.pipeline.cli --source data/fda_recalls_sample.csv --domain safety --resume
-
-# Enable Agent 2 critic
-poetry run python -m src.pipeline.cli --source data/usda_fooddata_sample.csv --domain nutrition --with-critic
-```
-
-### Gold layer
-
-```bash
-poetry run python -m src.pipeline.gold_pipeline --source off --date 2026/04/21
-# Reads all Silver Parquet for source+date → dedup + enrichment → BigQuery mip_gold.products
-```
-
-### Streamlit wizard
-
-```bash
-poetry run streamlit run app.py
-# http://localhost:8501
-# Sidebar tabs: Pipeline (HITL gates) | Observability (RAG chatbot) | MLflow | EDA
-```
-
-### Services
-
-```bash
 # MCP observability API
 uvicorn src.uc2_observability.mcp_server:app --host 0.0.0.0 --port 8001
-# Swagger: http://localhost:8001/docs
 
-# REST API (pipeline + search + recommendations)
-uvicorn src.api.main:app --host 0.0.0.0 --port 8002
-# Swagger: http://localhost:8002/docs
+# One-time corpus build (USDA FoodData Central → FAISS)
+python scripts/build_corpus.py --limit 10000
 ```
 
-### Pipeline modes
+Endpoint cheat-sheet: [`ENDPOINTS.md`](ENDPOINTS.md) · [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
 
-| Mode | What runs | Output |
-|---|---|---|
-| `full` (default) | DQ pre → YAML transforms → clean → dedup → enrich → DQ post | CSV to `output/` |
-| `silver` | Schema transform only | Parquet to GCS |
-| `gold` | Dedup + enrichment + DQ on Silver Parquet | Append to BigQuery |
+---
 
-### Tests
+## 11. Testing
+
+| Metric | Value |
+|---|---|
+| Coverage (excl. UI/Streamlit) | **81.72%** |
+| Total statements | 6,678 (5,457 covered) |
+| Tests passing | 920 |
+| Test files | 43 (41 unit, 7 integration, 1 property-based) |
+
+Full per-module coverage breakdown: [`docs/TEST_COVERAGE_REPORT.md`](docs/TEST_COVERAGE_REPORT.md).
 
 ```bash
-poetry run pytest
-poetry run pytest -m "not integration"   # skip GCS-dependent tests
+poetry run pytest                                 # full suite
+poetry run pytest -m "not integration"            # skip GCS-dependent
+poetry run pytest tests/unit/test_safety_guardrails.py
 cd src && ruff check .
 ```
 
-Coverage: **81.72%** across 920 tests, 43 test files.
-
 ---
 
-## Live Endpoints
-
-| Service | URL | Credentials |
-|---|---|---|
-| Streamlit App | http://35.239.47.242:8502 | — |
-| Airflow | http://35.239.47.242:8080 | `admin` / `admin` |
-| Grafana | http://35.239.47.242:3000 | `admin` / `mip_admin` |
-| MLflow | http://35.239.47.242:5000 | — |
-| Prometheus | http://35.239.47.242:9090 | — |
-| MCP Server | http://35.239.47.242:8001/docs | — |
-| REST API | http://35.239.47.242:8002/docs | — |
-| ChromaDB | http://35.239.47.242:8000 | — |
-
----
-
-## Repo Layout
+## 12. Repo layout
 
 ```
 src/
-├── agents/              # LangGraph nodes, prompts, guardrails
-├── blocks/generated/    # YAML transforms per domain (auto-created on first run)
-├── cache/               # Redis + SQLite fallback
-├── enrichment/          # S1 deterministic · S2 KNN · S3 LLM-RAG + FAISS corpus
-├── models/              # LiteLLM wrappers (5 task getters)
-├── pipeline/            # runner, CLI, checkpoint manager
-├── uc2_observability/   # metrics, chunker, RAG chatbot, MCP server, MLflow bridge
-├── uc3_search/          # BM25 + FAISS hybrid search
-└── uc4_recommendations/ # association rules + graph recommender
+├── agents/                 # LangGraph nodes, prompts, guardrails
+├── blocks/
+│   ├── generated/<domain>/ # YAML transforms (declarative action set only)
+│   └── *.py                # static blocks: cleaning, dedup, enrichment, DQ
+├── cache/                  # Redis client + SQLite fallback
+├── consumers/              # Kafka → GCS sink
+├── eda/                    # EDA library + Streamlit page
+├── enrichment/             # S1 / S2 / S3 tiers + corpus + rate limiter
+├── models/                 # LiteLLM wrappers (single UC2 import gateway)
+├── pipeline/               # runner, CLI, checkpoint, loaders, writers
+├── producers/              # Kafka source producers (OFF, OpenFDA, …)
+├── registry/               # block registry + sentinel expansion
+├── schema/                 # analyzer, sampler, domain schema models
+├── uc2_observability/      # log writer, metrics, chunker, MCP server, chatbot
+├── uc3_search/             # hybrid_search, indexer, evaluator
+└── uc4_recommendations/    # association_rules, graph_store, recommender
 
-airflow/dags/            # 9 DAGs: ingest → Bronze → Silver → Gold → anomaly + chunker
-config/schemas/          # canonical target schemas (6 domains)
+airflow/dags/               # 7 scheduled DAGs (ingest → bronze-to-bq → silver → gold → anomaly)
+config/schemas/             # per-domain target schemas
+corpus/                     # FAISS index + metadata (persistent)
+docs/                       # DEPLOYMENT, ARCHITECTURE, DQ_SCORING, data_inventory, EDA plan, …
+scripts/                    # build_corpus, eda_full_report, …
+tests/                      # unit + integration + property-based
 ```
 
 ---
 
-## Work Disclosure
+## 13. Contributor notes
 
-> **WE ATTEST THAT WE HAVEN'T USED ANY OTHER STUDENTS' WORK IN OUR ASSIGNMENT AND ABIDE BY THE POLICIES LISTED IN THE STUDENT HANDBOOK.**
-
-| Member | Contribution | Share |
-|---|---|---|
-| **Bhavya Likhitha** | Three-agent LangGraph flow; YAML mapping I/O; Redis cache + SQLite fallback; chunked streaming runner; checkpoint/resume; MLflow integration; MCP server for Claude Desktop | **33.3%** |
-| **Aqeel** | UC2 observability plane (Prometheus, anomaly detection, ChromaDB chunker, Kafka→Postgres, MCP FastAPI server); three-tier enrichment cascade with allergen safety boundary; all 9 Airflow DAGs | **33.3%** |
-| **Deepika** | Domain schema design and registration; source bootstrap path; enrichment + DQ column extensions; hybrid search indexer and evaluator; association-rule and graph recommendation engine; project documentation | **33.3%** |
-
-**AI tools used:** Claude Code (architecture, scaffolding, MCP server, Streamlit UI, debugging), OpenGPT (prompt engineering, Airflow templates), GitHub Codex (boilerplate, test stubs), DeepSeek Chat (data processing utilities, cache client). All AI-generated code was reviewed and tested. Safety-field boundary violations suggested by AI were rejected and replaced with explicit guards.
+- **YAML-only transform constraint.** Do not reintroduce runtime Python codegen. The action set in [`src/blocks/dynamic_mapping.py`](src/blocks/dynamic_mapping.py) is the supported surface — extend it there, not by `exec`-ing strings.
+- **Safety invariant.** `allergens` / `is_organic` / `dietary_tags` must never be inferred by S2/S3. If the post-run assertion in [`src/blocks/llm_enrich.py`](src/blocks/llm_enrich.py) fires, fix the upstream cause — do not silence.
+- **YAML-cache write coherence.** `plan_sequence_node` writes the full cacheable blob. Add fields that any agent produces and update that write site, or replayed runs silently drop them.
+- **UC2 imports.** Route all UC2 observability symbols through [`src/models/llm.py`](src/models/llm.py), never directly from `src/uc2_observability/`. The import guard in `llm.py` keeps the pipeline working when UC2 deps are absent.
+- **UC2 emits are best-effort.** Wrap every new emit in `try/except`, log as warning, never raise. Observability must not block pipeline.
+- **Don't touch `final_project/`** if present — separate project with its own deps and `CLAUDE.md`.
