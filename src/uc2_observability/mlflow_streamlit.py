@@ -108,6 +108,23 @@ def render_mlflow_page() -> None:
         st.info("No runs logged for this experiment yet.")
         return
 
+    # Drop invalid runs silently
+    for col in ("dq_score_post", "rows_in", "rows_out"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    mask = pd.Series(True, index=df.index)
+    if "dq_score_post" in df.columns:
+        mask &= df["dq_score_post"].fillna(0) != 0.0
+    if "rows_in" in df.columns:
+        mask &= df["rows_in"].fillna(0) > 0
+    if {"rows_in", "rows_out"}.issubset(df.columns):
+        mask &= df["rows_out"].fillna(0) <= df["rows_in"].fillna(0)
+    df = df[mask].reset_index(drop=True)
+
+    if df.empty:
+        st.info("No valid runs for this experiment yet.")
+        return
+
     st.caption(f"{len(df)} runs — refreshes every 30s")
 
     # ── top KPI cards ──────────────────────────────────────────────────────────
