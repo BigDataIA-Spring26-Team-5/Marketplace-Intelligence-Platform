@@ -20,7 +20,7 @@
     "required": false
   },
   "serving_size": {
-    "status": "mapped",
+    "status": "derived",
     "required": false
   },
   "serving_size_unit": {
@@ -32,7 +32,7 @@
     "required": false
   },
   "data_source": {
-    "status": "mapped",
+    "status": "absent",
     "required": false
   },
   "allergens": {
@@ -44,11 +44,11 @@
     "required": false
   },
   "dietary_tags": {
-    "status": "derived",
+    "status": "enriched",
     "required": false
   },
   "is_organic": {
-    "status": "derived",
+    "status": "enriched",
     "required": false
   }
 }
