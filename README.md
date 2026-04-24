@@ -108,57 +108,83 @@ Six domains shipped: `nutrition` · `safety` · `retail` · `pricing` · `financ
 
 ## Agentic Flows
 
-### LangGraph — 3-agent schema analysis
+The three agents run inside LangGraph and produce **Domain Pack artifacts** — the YAML transform files and planned block sequences that all subsequent pipeline runs replay deterministically.
 
 ```mermaid
-stateDiagram-v2
-    [*] --> load_source
-    load_source --> analyze_schema
-    analyze_schema --> critique_schema : --with-critic + cache miss
-    analyze_schema --> check_registry  : cache hit or critic off
-    critique_schema --> check_registry
-    check_registry --> plan_sequence
-    plan_sequence --> run_pipeline
-    run_pipeline --> save_output
-    save_output --> [*]
+flowchart TD
+    subgraph Input
+        Src[Source schema sample\n~5K rows adaptive]
+        DS[Domain Pack schema\nconfig/schemas/domain_schema.json]
+        BSQ[Domain Pack block sequence\ndomain_packs/domain/block_sequence.yaml]
+    end
+
+    subgraph Agent1["Agent 1 — Schema Gap Analyzer  (Orchestrator)"]
+        GA[detect gap: source col ↔ canonical col mismatch\nemit ops: RENAME · CAST · FORMAT · ADD · DELETE\nSPLIT · UNIFY · DERIVE]
+        FW[first run: derive + write domain schema\nsubsequent: map to existing schema]
+    end
+
+    Cache[(Redis YAML Cache\nschema fingerprint · 30d TTL\ncache hit → skip all 3 agents)]
+
+    subgraph Agent2["Agent 2 — Schema Critic  (opt-in --with-critic)"]
+        CR[validate ops against 7 rules\nno duplicate renames · no CAST without type\nSPLIT arity matches source · no safety-field inference\nreject bad ops · propose amendments]
+    end
+
+    subgraph Agent3["Agent 3 — Sequence Planner"]
+        SP[reorder blocks from block_sequence.yaml\ncannot add or remove — only reorder\nauto-re-append any dropped block before dq_score_post]
+    end
+
+    subgraph Output["Domain Pack Artifacts  (written to disk + cached)"]
+        YAML[src/blocks/generated/domain/\nDYNAMIC_MAPPING_source.yaml]
+        VP[src/blocks/generated/domain/\nVALIDATION_PROFILE_source.json]
+        Seq[planned block sequence\nstored in Redis cache blob]
+    end
+
+    Src --> Agent1
+    DS --> Agent1
+    Agent1 <--> Cache
+    Agent1 --> Agent2
+    Agent2 --> Agent3
+    BSQ --> Agent3
+    Agent3 --> Output
 ```
 
-| Agent | Role | Model |
+| Agent | Model | What it produces |
 |---|---|---|
-| **Orchestrator** | Maps source columns → domain schema; emits YAML transform ops; writes `DYNAMIC_MAPPING_<source>.yaml` on first run | `deepseek/deepseek-chat` |
-| **Critic** *(opt-in `--with-critic`)* | Validates ops against 7 deterministic rules; rejects or amends bad ops | `claude-sonnet-4-6` |
-| **Planner** | Reorders block sequence from `block_sequence.yaml`; dropped blocks auto-re-appended before `dq_score_post` | `deepseek/deepseek-chat` |
+| **Schema Gap Analyzer** | `deepseek/deepseek-chat` | YAML op list; writes `DYNAMIC_MAPPING_<source>.yaml`; on first run derives and writes domain schema |
+| **Schema Critic** *(opt-in)* | `claude-sonnet-4-6` | Validated/amended op list; rejects ops that violate safety rules or structural constraints |
+| **Sequence Planner** | `deepseek/deepseek-chat` | Ordered block sequence; complete Redis cache blob (single write site in `plan_sequence_node`) |
 
-Redis caches the full YAML blob keyed on schema fingerprint (30-day TTL) — cache hit skips all three agents entirely.
+---
 
-### Enrichment — 3-tier agentic cascade
+## Enrichment Cascade
+
+Cost-ordered deterministic cascade — not agentic. Runs inside `LLMEnrichBlock` during Gold execution.
 
 ```mermaid
 flowchart LR
-    Row[unresolved row] --> E1
+    Row[row with missing fields] --> S1
 
-    subgraph E1["S1 — Deterministic"]
-        R1[regex + keyword rules\non the row's own text]
+    subgraph S1["S1 — Deterministic  (always runs)"]
+        D1[regex + keyword rules\non row's own text\nallergens · dietary_tags\nis_organic · primary_category]
     end
 
-    subgraph E2["S2 — KNN Agent"]
-        R2[embed product text\nFAISS cosine top-5 neighbors\nvote threshold 0.45]
+    subgraph S2["S2 — FAISS KNN  (primary_category only)"]
+        D2[embed product text\ncosine top-5 neighbors\nvote threshold 0.45\nconfidence floor 0.60]
     end
 
-    subgraph E3["S3 — LLM-RAG Agent"]
-        R3[Claude Haiku\ntop-3 S2 neighbors as context\nconfidence floor 0.60]
+    subgraph S3["S3 — LLM-RAG  (primary_category only)"]
+        D3[Claude Haiku\ntop-3 S2 neighbors as RAG context\nfallback when S2 below threshold]
     end
 
-    Corpus[(FAISS Corpus\npersists across runs)]
+    Corpus[(FAISS Corpus\npersists · grows each run\nS2 + S3 write resolved rows back)]
 
-    E1 -- "unresolved primary_category" --> E2
-    E2 -- "below confidence threshold" --> E3
-    E2 -- "resolved rows" --> Corpus
-    E3 -- "resolved rows" --> Corpus
-    E3 --> Done[enriched row]
+    S1 -- "primary_category still missing" --> S2
+    S2 -- "below confidence" --> S3
+    S2 --> Corpus
+    S3 --> Corpus
 ```
 
-> **Hard safety rule.** `allergens`, `is_organic`, `dietary_tags` — S1 extraction only, never inferred by S2 or S3. A false-positive allergen label is a regulatory-grade mistake. `LLMEnrichBlock` has a post-run assertion tripwire — if it fires, fix the upstream cause, do not silence it.
+> **Hard safety rule.** `allergens`, `is_organic`, `dietary_tags` — S1 extraction only, never touched by S2 or S3. `LLMEnrichBlock` post-run assertion fires if this is ever crossed — fix the cause, never silence it.
 
 ---
 

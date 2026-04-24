@@ -1,289 +1,485 @@
-# ETL Pipeline — Agentic Workflow Architecture
+# Architecture Diagrams
+
+## Table of Contents
+1. [DAG Workflow](#1-dag-workflow)
+2. [Bronze → Silver → Gold Workflow](#2-bronze--silver--gold-workflow)
+3. [System Data Flow](#3-system-data-flow)
+4. [Storage Diagram](#4-storage-diagram)
+5. [Agentic Workflow](#5-agentic-workflow-langgraph)
+6. [Logs Data Flow](#6-logs-data-flow--pipeline-runs--observability-dashboard)
+7. [Full Platform — Diagram Tool Prompt](#7-full-platform--diagram-tool-prompt)
+
+---
+
+## 1. DAG Workflow
 
 ```
-╔══════════════════════════════════════════════════════════════════════════════════════╗
-║                              INPUT DATA SOURCES                                      ║
-║                                                                                      ║
-║  ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────────────┐ ║
-║  │  usda_fooddata      │  │  fda_recalls        │  │  openfoodfacts (12 GB)      │ ║
-║  │  _sample.csv        │  │  _sample.csv        │  │  + synthetic_dataset_*.csv  │ ║
-║  │  (nutrition domain) │  │  (safety domain)    │  │  + usda_raw/                │ ║
-║  └──────────┬──────────┘  └──────────┬──────────┘  └─────────────┬───────────────┘ ║
-╚═════════════╪══════════════════════════╪══════════════════════════╪════════════════╝
-              └──────────────────────────┴──────────────────────────┘
-                                         │
-                                         ▼
-╔══════════════════════════════════════════════════════════════════════════════════════╗
-║  NODE 0 — load_source_node                             [orchestrator.py]            ║
-║                                                                                      ║
-║   • Auto-detect CSV delimiter (comma / tab / pipe)                                  ║
-║   • Recognize 25+ null sentinels  ("NA", "null", "unknown", …)                      ║
-║   • Adaptive sampling: profile ~5K rows  (full data streamed later in Node 5)       ║
-║                                                                                      ║
-║   OUT: source_df, source_schema, source_sep, sampling_strategy                      ║
-╚══════════════════════════════════════════════════════════════════════════════════════╝
-                                         │
-                                         ▼
-╔══════════════════════════════════════════════════════════════════════════════════════╗
-║  NODE 1 — analyze_schema_node          ┌─────────────────────────────────────┐     ║
-║                                        │  AGENT 1  (Orchestrator LLM)        │     ║
-║   • Diff source schema vs.             │  model: deepseek/deepseek-chat      │     ║
-║     config/unified_schema.json (14 cols│  via LiteLLM  [src/models/llm.py]  │     ║
-║                                        └─────────────────────────────────────┘     ║
-║   8-Primitive Classification per column:                                            ║
-║   ┌────────┐ ┌──────┐ ┌────────┐ ┌────────┐ ┌─────┐ ┌───────┐ ┌───────┐ ┌───────┐║
-║   │ RENAME │ │ CAST │ │ FORMAT │ │ DELETE │ │ ADD │ │ SPLIT │ │ UNIFY │ │DERIVE ││║
-║   └────────┘ └──────┘ └────────┘ └────────┘ └─────┘ └───────┘ └───────┘ └───────┘║
-║                                                                                      ║
-║   OUT: operations[], column_mapping, enrichment_columns_to_generate                 ║
-╚══════════════════════════════════════════════════════════════════════════════════════╝
-                                         │
-                                         ▼
-╔══════════════════════════════════════════════════════════════════════════════════════╗
-║  NODE 2 — critique_schema_node         ┌─────────────────────────────────────┐     ║
-║                                        │  AGENT 2  (Critic LLM)              │     ║
-║   • Validates Agent 1 operations       │  model: deepseek/deepseek-reasoner  │     ║
-║   • Applies 7 deterministic rules:     │  (fallback: deepseek-chat)          │     ║
-║     R4: RENAME w/ incompatible type    └─────────────────────────────────────┘     ║
-║         → CAST                                                                       ║
-║     R6: Uncovered source cols → DELETE                                              ║
-║     R7: Identity cols → normalize_before_dedup=true                                 ║
-║     + 4 additional semantic rules                                                   ║
-║                                                                                      ║
-║   OUT: revised_operations, critique_notes (audit trail)                             ║
-╚══════════════════════════════════════════════════════════════════════════════════════╝
-                                         │
-                                         ▼
-╔══════════════════════════════════════════════════════════════════════════════════════╗
-║  NODE 3 — check_registry_node                          [orchestrator.py]            ║
-║                                                                                      ║
-║   Block Registry scan  [src/registry/block_registry.py]                            ║
-║   13 static blocks:                                                                  ║
-║   ┌──────────────────────┬────────────────────────┬──────────────────────────────┐  ║
-║   │ CLEANING             │ ENRICHMENT             │ DEDUP / QUALITY              │  ║
-║   │ strip_whitespace     │ extract_allergens      │ fuzzy_deduplicate            │  ║
-║   │ lowercase_brand      │ extract_quantity_col   │ column_wise_merge            │  ║
-║   │ remove_noise_words   │ keep_quantity_in_name  │ golden_record_select         │  ║
-║   │ strip_punctuation    │ llm_enrich             │ dq_score_pre / dq_score_post │  ║
-║   └──────────────────────┴────────────────────────┴──────────────────────────────┘  ║
-║                                                                                      ║
-║   + Dynamic blocks discovered from:                                                  ║
-║     src/blocks/generated/<domain>/DYNAMIC_MAPPING_*.yaml                            ║
-║                                                                                      ║
-║   HITL gate (Streamlit UI) ─── user approves missing-column decisions               ║
-║                                                                                      ║
-║   Generates/updates mapping YAML ──► src/blocks/generated/<domain>/                 ║
-║                                                                                      ║
-║   OUT: block_registry_hits, mapping_yaml_path, enrich_alias_ops                     ║
-╚══════════════════════════════════════════════════════════════════════════════════════╝
-                                         │
-                                         ▼
-╔══════════════════════════════════════════════════════════════════════════════════════╗
-║  NODE 4 — plan_sequence_node           ┌─────────────────────────────────────┐     ║
-║                                        │  AGENT 3  (Orchestrator LLM)        │     ║
-║   • Receives default block pool        │  model: deepseek/deepseek-chat      │     ║
-║     (domain-specific)                  └─────────────────────────────────────┘     ║
-║   • Reorders blocks for optimal                                                      ║
-║     execution (cannot add/remove)                                                   ║
-║   • Ensures DQ scoring at correct positions                                         ║
-║                                                                                      ║
-║   OUT: block_sequence[], sequence_reasoning                                         ║
-╚══════════════════════════════════════════════════════════════════════════════════════╝
-                                         │
-                                         ▼
-╔══════════════════════════════════════════════════════════════════════════════════════╗
-║  NODE 5 — run_pipeline_node   (CHUNKED STREAMING — 10K rows/chunk)                 ║
-║                                                [src/pipeline/runner.py]             ║
-║                                                                                      ║
-║  ┌────────────────────────────────────────────────────────────────────────────────┐ ║
-║  │  For each chunk:                                                               │ ║
-║  │                                                                                │ ║
-║  │  column_mapping (RENAME ops)                                                   │ ║
-║  │         │                                                                      │ ║
-║  │         ▼                                                                      │ ║
-║  │  DynamicMappingBlock  ◄── mapping YAML  (CAST / FORMAT / SPLIT / UNIFY /      │ ║
-║  │         │                                DERIVE / ADD / DELETE ~30 handlers)  │ ║
-║  │         ▼                                                                      │ ║
-║  │  strip_whitespace ──► lowercase_brand ──► remove_noise_words                  │ ║
-║  │         │                                                                      │ ║
-║  │         ▼                                                                      │ ║
-║  │  strip_punctuation ──► extract_quantity_column ──► keep_quantity_in_name       │ ║
-║  │         │                                                                      │ ║
-║  │         ▼                                                                      │ ║
-║  │  fuzzy_deduplicate ──► column_wise_merge ──► golden_record_select              │ ║
-║  │         │                                                                      │ ║
-║  │         ▼                                                                      │ ║
-║  │  dq_score_pre  (baseline quality score)                                        │ ║
-║  │         │                                                                      │ ║
-║  │         ▼                                                                      │ ║
-║  │  ┌──────────────────────────────────────────────────────────────────────────┐ │ ║
-║  │  │  LLMEnrichBlock  [src/blocks/llm_enrich.py]                             │ │ ║
-║  │  │                                                                          │ │ ║
-║  │  │   S1: Deterministic  ──► rule-based  (allergens, dietary_tags,          │ │ ║
-║  │  │       [enrichment/deterministic.py]    is_organic)                      │ │ ║
-║  │  │              │  (if null after S1)                                      │ │ ║
-║  │  │              ▼                                                           │ │ ║
-║  │  │   S2: KNN Embedding  ──► FAISS corpus search  (primary_category)        │ │ ║
-║  │  │       [enrichment/embedding.py]   ◄── corpus/faiss_index.bin            │ │ ║
-║  │  │              │  (if low confidence after S2)                            │ │ ║
-║  │  │              ▼                                                           │ │ ║
-║  │  │   S3: LLM  ──► LLM + retrieved context  (primary_category)         │ │ ║
-║  │  │       [enrichment/llm_tier.py]   model: deepseek/deepseek-chat          │ │ ║
-║  │  └──────────────────────────────────────────────────────────────────────────┘ │ ║
-║  │         │                                                                      │ ║
-║  │         ▼                                                                      │ ║
-║  │  dq_score_post  (post-enrichment quality score + delta)                        │ ║
-║  │                                                                                │ ║
-║  │  Audit log: rows_in / rows_out per block                                      │ ║
-║  └────────────────────────────────────────────────────────────────────────────────┘ ║
-║                                                                                      ║
-║  Post-enrichment validation: quarantine rows with nulls in required fields          ║
-║                                                                                      ║
-║  OUT: working_df, quarantined_df, audit_log, dq_score_pre/post, enrichment_stats    ║
-╚══════════════════════════════════════════════════════════════════════════════════════╝
-                                         │
-                         ┌───────────────┴───────────────┐
-                         ▼                               ▼
-              ┌─────────────────────┐        ┌──────────────────────┐
-              │  CLEAN DATA         │        │  QUARANTINED ROWS    │
-              │  (working_df)       │        │  (quarantined_df)    │
-              └──────────┬──────────┘        └──────────┬───────────┘
-                         │                              │
-                         ▼                              ▼
-╔══════════════════════════════════╗      ┌─────────────────────────────┐
-║  NODE 6 — save_output_node       ║      │  Quarantine log displayed   │
-║                                  ║      │  in Streamlit UI            │
-║  Writes to:                      ║      │  (row indices + reasons)    │
-║  output/{dataset}_unified.csv    ║      └─────────────────────────────┘
-╚══════════════════════════════════╝
-                         │
-                         ▼
-╔══════════════════════════════════════════════════════════════════════════════════════╗
-║                              OUTPUT DESTINATIONS                                     ║
-║                                                                                      ║
-║  ┌────────────────────────┐  ┌────────────────────────┐  ┌──────────────────────┐  ║
-║  │ /output/               │  │ /src/blocks/generated/ │  │ /corpus/             │  ║
-║  │ {dataset}_unified.csv  │  │ <domain>/DYNAMIC_      │  │ faiss_index.bin      │  ║
-║  │ (14-column schema)     │  │ MAPPING_*.yaml         │  │ corpus_metadata.json │  ║
-║  │                        │  │ (reusable mappings)    │  │ (KNN embeddings)     │  ║
-║  └────────────────────────┘  └────────────────────────┘  └──────────────────────┘  ║
-╚══════════════════════════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                        1. DAG WORKFLOW (Airflow, UTC)                          ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
+
+  02:00  ┌─────────────────────┐
+         │ usda_incremental    │──────────────────────────────────────────────┐
+         └─────────────────────┘                                              │
+  04:00  ┌─────────────────────┐                                              │
+         │ off_incremental     │──────────────────────────────────────────┐   │
+         └─────────────────────┘                                          │   │
+  05:00  ┌─────────────────────┐                                          │   │
+         │ openfda_incremental │──────────────────────────────────────┐   │   │
+         └─────────────────────┘                                      │   │   │
+                                                                      ▼   ▼   ▼
+  03:00  ┌─────────────┐   ┌─────────────┐   ┌──────────────┐   ┌──────────────┐
+  05:00  │bronze_to_bq │   │bronze_to_bq │   │ bronze_to_bq │   │  Kafka GCS   │
+  06:00  │   (usda)    │   │   (off)     │   │  (openfda)   │   │  Sink JSONL  │
+         └──────┬──────┘   └──────┬──────┘   └──────┬───────┘   └──────────────┘
+                │                 │                  │
+  07:00         └─────────────────┴──────────────────┘
+                                  │
+                                  ▼
+                    ┌─────────────────────────────┐
+                    │     bronze_to_silver_dag     │
+                    │  watermark → list partitions │
+                    │  silver_off  silver_usda     │
+                    │  silver_openfda  (parallel)  │
+                    │  update watermark            │
+                    └──────────────┬──────────────┘
+                                   │  ExternalTaskSensor waits
+  09:00                            ▼
+                    ┌─────────────────────────────┐
+                    │      silver_to_gold_dag      │
+                    │  gold_off  gold_usda         │
+                    │  gold_openfda  (parallel)    │
+                    │  ──────────────────────────  │
+                    │  gold_gcs_nutrition (fan-in) │
+                    │  gold_gcs_safety    (fan-in) │
+                    └─────────────────────────────┘
+
+  Hourly ┌─────────────────────┐
+         │  uc2_anomaly_dag    │  Isolation Forest on Prometheus metrics
+         └─────────────────────┘
+  5-min  ┌─────────────────────┐
+         │  uc2_chunker_dag    │  audit_events → ChromaDB embeddings
+         └─────────────────────┘
 ```
 
 ---
 
-## Execution Modes
+## 2. Bronze → Silver → Gold Workflow
 
 ```
-                         ┌─────────────────────────────────────┐
-                         │            app.py (Streamlit)        │
-                         │  5-step HITL Wizard                  │
-                         │                                       │
-                         │  Step 0: Source selection            │
-                         │  Step 1: Schema analysis review      │
-                         │  Step 2: Agent 2 corrections +       │
-                         │          missing column decisions     │
-                         │  Step 3: Pipeline execution          │
-                         │  Step 4: Results + quarantine view   │
-                         └─────────────────┬───────────────────┘
-                                           │
-                               ┌───────────┴───────────┐
-                               ▼                       ▼
-                     ┌──────────────────┐   ┌──────────────────┐
-                     │  demo.py (CLI)   │   │ LangGraph DAG    │
-                     │  3 sequential    │   │ [agents/graph.py]│
-                     │  demo runs:      │   │                  │
-                     │  - USDA          │   │  load_source     │
-                     │  - FDA           │   │       │          │
-                     │  - FDA replay    │   │  analyze_schema  │
-                     └──────────────────┘   │       │          │
-                                            │  critique_schema │
-                                            │       │          │
-                                            │  check_registry  │
-                                            │       │          │
-                                            │  plan_sequence   │
-                                            │       │          │
-                                            │  run_pipeline    │
-                                            │       │          │
-                                            │  save_output     │
-                                            │       │          │
-                                            │      END         │
-                                            └──────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                      2. BRONZE → SILVER → GOLD WORKFLOW                        ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
+
+  SOURCES          BRONZE (GCS)              SILVER (GCS)           GOLD
+  ──────────       ─────────────────────     ──────────────────     ──────────────
+  USDA API    ──► usda/bulk/YYYY/MM/DD/  ──► nutrition/usda/    ─┐
+  OFF  API    ──► off/YYYY/MM/DD/        ──► nutrition/off/     ─┼──► mip-gold-2024/
+  openFDA API ──► openfda/YYYY/MM/DD/    ──► safety/openfda/   ─┘    domain/date/
+                                                                │     (Parquet)
+               ┌── Kafka producer                               │
+               │   JSONL part files                             │         │
+               │                          watermark gate:       │         ▼
+               │                          _watermarks/*.json    │   BigQuery
+               │                                                │   mip_gold.products
+               │   bronze_to_bq_dag ──────────────────────────►│   (append)
+               │   BigQuery staging                             │
+               │                          ETL Pipeline (silver mode):│
+               │                          column_mapping        │
+               │                          __generated__ block   │
+               │                          _silver_normalize()   │
+               │                          → enforce schema      │
+               │                          → write Parquet       │
+               │                                                │
+               │                          Gold blocks:          │
+               │                          dedup + enrichment    │
+               │                          DQ scoring            │
+               └────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Agent + Model Summary
+## 3. System Data Flow
 
 ```
- ┌────────────────┬──────────────────────────────┬──────────────────────────────┐
- │ Agent          │ Role                         │ Model                        │
- ├────────────────┼──────────────────────────────┼──────────────────────────────┤
- │ Agent 1        │ Schema gap detection,        │ deepseek/deepseek-chat       │
- │ (Orchestrator) │ 8-primitive classification,  │ via LiteLLM                  │
- │                │ confidence scoring           │                              │
- ├────────────────┼──────────────────────────────┼──────────────────────────────┤
- │ Agent 2        │ Validate + correct Agent 1   │ deepseek/deepseek-reasoner   │
- │ (Critic)       │ ops, apply 7 rules           │ (fallback: deepseek-chat)    │
- ├────────────────┼──────────────────────────────┼──────────────────────────────┤
- │ Agent 3        │ Block sequence ordering      │ deepseek/deepseek-chat       │
- │ (Orchestrator) │ from available registry      │ via LiteLLM                  │
- ├────────────────┼──────────────────────────────┼──────────────────────────────┤
- │ LLMEnrich S3   │ RAG-augmented enrichment     │ deepseek/deepseek-chat       │
- │ (Enrichment)   │ for primary_category         │ via LiteLLM                  │
- └────────────────┴──────────────────────────────┴──────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                            3. SYSTEM DATA FLOW                                 ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
+
+  ┌───────────────────────────────────────────────────────────────────┐
+  │  ETL PIPELINE                                                     │
+  │                                                                   │
+  │  CLI / Streamlit / REST :8002                                     │
+  │          │                                                        │
+  │          ▼                                                        │
+  │  LangGraph 7-node graph ──► PipelineRunner (10K-row chunks)       │
+  │          │                          │                             │
+  │          │                          ▼                             │
+  │          │                  output/ CSV + Parquet                 │
+  │          │                  GCS Silver / Gold                     │
+  │          │                  BigQuery mip_gold.products            │
+  │          │                                                        │
+  └──────────┼────────────────────────────────────────────────────────┘
+             │ _emit_event (try/except, non-blocking)
+             │ MetricsExporter → Pushgateway
+             │ RunLogWriter   → output/run_logs/
+             ▼
+  ┌───────────────────────────────────────────────────────────────────┐
+  │  OBSERVABILITY                                                    │
+  │                                                                   │
+  │  Kafka pipeline.events                                            │
+  │      │                                                            │
+  │      ├──► kafka_to_pg ──► Postgres (audit_events, block_trace,    │
+  │      │                             quarantine_rows, dedup_clusters)│
+  │      │                       │                                    │
+  │      │                       ▼                                    │
+  │      │                   ChromaDB (embeddings via chunker)        │
+  │      │                       │                                    │
+  │      │                       ▼                                    │
+  │      │                   ObservabilityChatbot (RAG)               │
+  │      │                       │                                    │
+  │      ├──► Prometheus ──► Grafana :3000                            │
+  │      │         │                                                  │
+  │      │         └──► AnomalyDetector (Isolation Forest)            │
+  │      │                                                            │
+  │      └──► MCP Server :8001 (7 tool endpoints)                     │
+  │               │                                                   │
+  │               └──► Streamlit app.py (Observability sidebar)       │
+  └──────────────────────────────────┬────────────────────────────────┘
+                                     │ product catalog
+                    ┌────────────────┴────────────────┐
+                    ▼                                 ▼
+  ┌──────────────────────────────────┐   ┌──────────────────────────────────────┐
+  │  HYBRID SEARCH                   │   │  RECOMMENDATIONS                     │
+  │  src/uc3_search/                 │   │  src/uc4_recommendations/             │
+  │  BM25 + ChromaDB semantic        │   │  AssociationRuleMiner (mlxtend)       │
+  │  Reciprocal Rank Fusion (k=60)   │   │  ProductGraph (networkx)              │
+  │  indexer · evaluator             │   │  Recommender (also-bought + graph)    │
+  │  REST /v1/search                 │   │  BigQuery instacart transactions       │
+  └──────────────────────────────────┘   │  REST /v1/recommendations             │
+                                         └──────────────────────────────────────┘
 ```
 
 ---
 
-## Key File Map
+## 4. Storage Diagram
 
 ```
-ETL/
-├── app.py                          ← Streamlit HITL UI (5-step wizard)
-├── demo.py                         ← CLI demo runner
-├── config/
-│   ├── unified_schema.json         ← Target 14-column schema + DQ weights
-│   └── litellm_config.yaml         ← LLM provider routing
-├── data/                           ← Input CSV sources
-├── output/                         ← Unified CSV outputs
-├── corpus/
-│   ├── faiss_index.bin             ← KNN vector index
-│   └── corpus_metadata.json
-└── src/
-    ├── agents/
-    │   ├── graph.py                ← LangGraph DAG definition
-    │   ├── orchestrator.py         ← Agent 1 (nodes 0, 1, 3)
-    │   ├── critic.py               ← Agent 2 (node 2)
-    │   ├── state.py                ← PipelineState TypedDict (100+ fields)
-    │   └── prompts.py              ← LLM prompts
-    ├── blocks/
-    │   ├── base.py                 ← Block ABC
-    │   ├── dynamic_mapping.py      ← YAML-driven ops (~30 handlers)
-    │   ├── llm_enrich.py           ← 3-tier enrichment orchestrator
-    │   ├── dq_score.py             ← Pre/post quality scoring
-    │   ├── fuzzy_deduplicate.py
-    │   ├── golden_record_select.py
-    │   └── generated/              ← Auto-generated YAML mappings
-    │       ├── nutrition/
-    │       ├── safety/
-    │       └── test/
-    ├── enrichment/
-    │   ├── deterministic.py        ← S1: rule-based
-    │   ├── embedding.py            ← S2: KNN FAISS
-    │   ├── llm_tier.py             ← S3: LLM
-    │   └── corpus.py               ← FAISS index management
-    ├── pipeline/
-    │   ├── runner.py               ← Chunked block sequencing + audit log
-    │   └── checkpoint/manager.py  ← Checkpoint save/resume
-    ├── registry/
-    │   └── block_registry.py       ← 13 static + dynamic blocks
-    ├── schema/
-    │   ├── analyzer.py             ← DataFrame profiling
-    │   └── sampling.py             ← Adaptive sampling
-    ├── models/
-    │   └── llm.py                  ← LiteLLM wrapper
-    └── ui/
-        ├── components.py           ← Streamlit renderers
-        └── styles.py               ← CSS styles
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                           4. STORAGE DIAGRAM                                   ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
+
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │  LOCAL / IN-PROCESS                                                          │
+  │                                                                              │
+  │  ┌──────────────────┐  ┌──────────────────┐  ┌────────────────────────────┐ │
+  │  │ SQLite           │  │ SQLite           │  │ ChromaDB :8000             │ │
+  │  │ output/cache.db  │  │ checkpoints.db   │  │ product_corpus collection  │ │
+  │  │ Redis fallback   │  │ SHA256 + chunks  │  │ S2 KNN enrichment          │ │
+  │  │ WAL-mode         │  │ resume state     │  │ audit_corpus collection    │ │
+  │  └──────────────────┘  └──────────────────┘  │ observability log embeds   │ │
+  │                                               └────────────────────────────┘ │
+  │                                                                              │
+  │  ┌──────────────────┐  ┌──────────────────┐  ┌────────────────────────────┐ │
+  │  │ output/run_logs/ │  │ output/*.csv     │  │ src/blocks/generated/      │ │
+  │  │ atomic JSON      │  │ full-mode output │  │ DYNAMIC_MAPPING_*.yaml     │ │
+  │  │ per run          │  │                  │  │ declarative transforms     │ │
+  │  └──────────────────┘  └──────────────────┘  └────────────────────────────┘ │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │  DOCKER SERVICES                                                             │
+  │                                                                              │
+  │  ┌──────────────────┐  ┌──────────────────┐  ┌────────────────────────────┐ │
+  │  │ Redis :6379      │  │ Postgres :5432   │  │ ChromaDB                   │ │
+  │  │ yaml:  30 days   │  │ db=uc2           │  │ audit_corpus collection    │ │
+  │  │ llm:    7 days   │  │ audit_events     │  │ MiniLM-L6-v2 embeddings    │ │
+  │  │ emb:   30 days   │  │ block_trace      │  └────────────────────────────┘ │
+  │  │ dedup: 14 days   │  │ quarantine_rows  │                                  │
+  │  └──────────────────┘  │ dedup_clusters   │  ┌────────────────────────────┐ │
+  │                         │ anomaly_reports  │  │ Prometheus + Pushgateway   │ │
+  │  ┌──────────────────┐  └──────────────────┘  │ :9091  12 labelled gauges  │ │
+  │  │ MLflow           │                         └────────────────────────────┘ │
+  │  │ experiment track │  ┌──────────────────┐                                  │
+  │  └──────────────────┘  │ Grafana :3000    │                                  │
+  │                         │ Prometheus src   │                                  │
+  │                         └──────────────────┘                                 │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │  GCS + BIGQUERY                                                              │
+  │                                                                              │
+  │  mip-bronze-2024/                mip-silver-2024/        mip-gold-2024/      │
+  │  ├─ usda/bulk/YYYY/MM/DD/        ├─ nutrition/off/       ├─ nutrition/date/  │
+  │  ├─ off/YYYY/MM/DD/              ├─ nutrition/usda/      └─ safety/date/     │
+  │  ├─ openfda/YYYY/MM/DD/          └─ safety/openfda/                          │
+  │  └─ _watermarks/*.json                                                       │
+  │                                                                              │
+  │  BigQuery                                                                    │
+  │  ├─ staging tables (bronze load)                                             │
+  │  └─ mip_gold.products (append, schema auto-detect)                           │
+  └──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5. Agentic Workflow (LangGraph)
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                          5. AGENTIC WORKFLOW (LangGraph)                       ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
+
+  [START]
+     │
+     ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  load_source                                                            │
+  │  read CSV / GCS JSONL  ·  detect domain schema                         │
+  └───────────────────────────────────┬─────────────────────────────────────┘
+                                      │
+                                      ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  analyze_schema  ── AGENT 1 ── claude-sonnet-4-5                        │
+  │  RENAME · CAST · FORMAT · ADD · SPLIT · UNIFY · DERIVE ops              │
+  │  emit column_mapping + operations → YAML                                │
+  └───────────────────────────────────┬─────────────────────────────────────┘
+                                      │
+                            ┌─────────┴──────────┐
+                            │  Redis cache hit?   │
+                            └─────────┬──────────┘
+                      YES (skip 2+3)  │  NO
+                            ┌─────────┴──────────┐
+                            │    with_critic?     │
+                            └─────────┬──────────┘
+                          YES         │  NO
+                           ▼          │
+  ┌──────────────────────────┐        │
+  │  critique_schema         │        │
+  │  AGENT 2 (off by default)│        │
+  │  claude-sonnet-4-6       │        │
+  │  reasoning model review  │        │
+  └──────────┬───────────────┘        │
+             └────────────────────────┘
+                                      │
+                                      ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  check_registry                                                         │
+  │  load domain_packs/<domain>/block_sequence.yaml                         │
+  └───────────────────────────────────┬─────────────────────────────────────┘
+                                      │
+                                      ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  plan_sequence  ── AGENT 3 ── claude-sonnet-4-5                         │
+  │  reorder only (cannot add/remove)  ·  re-append dropped blocks          │
+  │  write full cacheable blob → Redis (yaml + sequence)                    │
+  └───────────────────────────────────┬─────────────────────────────────────┘
+                                      │
+                                      ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  run_pipeline  ·  PipelineRunner.run_chunked (10K rows/chunk)           │
+  │                                                                         │
+  │  apply column_mapping  →  expand block sequence:                        │
+  │                                                                         │
+  │  dq_score_pre                                                           │
+  │      │                                                                  │
+  │      ▼                                                                  │
+  │  __generated__  ←── DynamicMappingBlock (YAML actions)                  │
+  │      │              set_null · type_cast · rename · coalesce            │
+  │      │              concat_columns · regex_replace · ...                │
+  │      ▼                                                                  │
+  │  cleaning                                                               │
+  │      │                                                                  │
+  │      ▼                                                                  │
+  │  dedup_stage  →  fuzzy_deduplicate → column_wise_merge                  │
+  │                  → golden_record_select                                 │
+  │      │                                                                  │
+  │      ▼                                                                  │
+  │  <domain>__extract_allergens  (custom block)                            │
+  │      │                                                                  │
+  │      ▼                                                                  │
+  │  llm_enrich                                                             │
+  │      │  S1 deterministic  regex/keyword                                 │
+  │      │      allergens · is_organic · dietary_tags  (S1 ONLY, safety)    │
+  │      │  S2 KNN ChromaDB  cosine similarity                              │
+  │      │      primary_category  only                                      │
+  │      │  S3 RAG-LLM  Groq llama-3.3-70b  top-3 neighbors                │
+  │      │      primary_category  only                                      │
+  │      │                                                                  │
+  │      ▼                                                                  │
+  │  dq_score_post                                                          │
+  └───────────────────────────────────┬─────────────────────────────────────┘
+                                      │
+                                      ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  save_output                                                            │
+  │  CSV → output/  ·  Parquet → output/silver/<domain>/                   │
+  │  RunLogWriter → output/run_logs/  ·  MetricsExporter → Pushgateway     │
+  └───────────────────────────────────┬─────────────────────────────────────┘
+                                      │
+                                    [END]
+```
+
+---
+
+## 6. Logs Data Flow — Pipeline Runs → Observability Dashboard
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║              6. LOGS DATA FLOW — Pipeline Runs → Observability Dashboard       ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
+
+  PIPELINE RUN
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  PipelineRunner.run_chunked()                                            │
+  │      │                                                                   │
+  │      ├── run_started         ─┐                                          │
+  │      ├── block_start/end      │  _emit_event()  try/except non-blocking  │
+  │      │   rows_in/out          ├─────────────────────────────────────────►│
+  │      │   null_rates           │                                          │
+  │      ├── quarantine           │                                          │
+  │      ├── dedup_cluster        │                                          │
+  │      └── run_completed       ─┘                                          │
+  └──────────────────────────────────────────────────────────────────────────┘
+       │                    │                    │
+       ▼                    ▼                    ▼
+  ┌──────────┐      ┌──────────────┐     ┌────────────────┐
+  │  Kafka   │      │MetricsExport │     │ RunLogWriter   │
+  │ pipeline │      │er → Push-   │     │ output/        │
+  │ .events  │      │gateway:9091  │     │ run_logs/      │
+  └────┬─────┘      └──────┬───────┘     │ *.json atomic  │
+       │                   │             └───────┬────────┘
+       ▼                   ▼                     │
+  ┌─────────────┐   ┌─────────────┐             │
+  │ kafka_to_pg │   │ Prometheus  │             │
+  │ consumer    │   │ scrapes     │             │
+  │             │   │ Pushgateway │             │
+  │ audit_events│   └──────┬──────┘             │
+  │ block_trace │          │                    │
+  │ quarantine_ │          ├──────────────────► Grafana :3000
+  │   rows      │          │                    (dq_score, row counts,
+  │ dedup_      │          │                     anomaly flags)
+  │   clusters  │          │
+  └──────┬──────┘          │
+         │                 ▼
+         │          ┌────────────────────┐
+         │          │ uc2_anomaly_dag    │
+         │          │ Isolation Forest   │
+         │          │ ≥5 runs/source     │
+         │          │ → anomaly_reports  │
+         │          │   (Postgres)       │
+         │          │ → etl_anomaly_flag │
+         │          │   (Pushgateway)    │
+         │          └────────────────────┘
+         │
+         ▼
+  ┌─────────────────────────────────────┐
+  │  uc2_chunker_dag (every 5 min)      │
+  │  new audit_events rows              │
+  │  → MiniLM-L6-v2 embeddings          │
+  │  → ChromaDB audit_corpus            │
+  └──────────────────┬──────────────────┘
+                     │
+                     ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  ObservabilityChatbot                                                   │
+  │                                                                         │
+  │  query                                                                  │
+  │    │                                                                    │
+  │    ├── structured retrieval ──► output/run_logs/*.json                  │
+  │    │   (filter by source, status, date range)                           │
+  │    │                                                                    │
+  │    └── semantic retrieval   ──► ChromaDB audit_corpus                   │
+  │        (MiniLM embeddings)                                              │
+  │                │                                                        │
+  │                ▼                                                        │
+  │        Groq llama-3.1-8b-instant                                        │
+  │                │                                                        │
+  │                ▼                                                        │
+  │        ChatResponse(answer, cited_run_ids, context_run_count)           │
+  └──────────────────────────────────┬──────────────────────────────────────┘
+                                     │
+                    ┌────────────────┴────────────────┐
+                    ▼                                 ▼
+  ┌───────────────────────────┐      ┌──────────────────────────────────────┐
+  │  MCP Server :8001         │      │  app.py Streamlit                    │
+  │  7 tool endpoints         │      │  Observability sidebar               │
+  │  Redis cache 15-30s       │      │  multi-turn chat UI                  │
+  │  Prometheus + Postgres    │      │  cited run_id expanders              │
+  └───────────────────────────┘      └──────────────────────────────────────┘
+```
+
+---
+
+## 7. Full Platform — Diagram Tool Prompt
+
+```
+Create a large enterprise architecture diagram for a food intelligence ETL platform
+called MIP. Organize into six horizontal swim lanes top to bottom:
+
+LANE 1 "Data Sources": three boxes — USDA API, Open Food Facts API, openFDA API.
+Each connects via a Kafka Producer arrow to Lane 2.
+
+LANE 2 "Bronze Layer (GCS mip-bronze-2024)": three JSONL partition paths
+(usda/bulk/YYYY/MM/DD, off/YYYY/MM/DD, openfda/YYYY/MM/DD), a watermark store
+(_watermarks/*.json), and a branch arrow to BigQuery staging via bronze_to_bq_dag.
+
+LANE 3 "ETL Pipeline (LangGraph)": the main processing engine. Show a sub-diagram
+of the LangGraph state machine with 7 nodes in sequence:
+load_source → analyze_schema (Agent 1, claude-sonnet-4-5, RENAME/CAST/FORMAT/ADD ops)
+→ critique_schema (Agent 2, claude-sonnet-4-6, off by default) → check_registry
+→ plan_sequence (Agent 3, claude-sonnet-4-5, reorder only) → run_pipeline → save_output.
+Show a Redis cache bypass arrow from analyze_schema directly to check_registry labeled
+"cache hit — skip Agents 1-3". Inside run_pipeline show the block sequence:
+dq_score_pre → __generated__ DynamicMappingBlock → cleaning → dedup_stage
+(fuzzy_deduplicate → column_wise_merge → golden_record_select) →
+domain__extract_allergens → llm_enrich (S1 regex, S2 ChromaDB KNN, S3 RAG-LLM Groq)
+→ dq_score_post. Entry points feeding the pipeline from the side: CLI, Streamlit :8501,
+REST API :8002, Airflow DAGs.
+
+LANE 4 "Silver / Gold Layers": two GCS buckets side by side.
+Silver (mip-silver-2024): nutrition/off, nutrition/usda, safety/openfda Parquet —
+gated by watermark, schema enforced by _silver_normalize().
+Gold (mip-gold-2024): canonical Parquet by domain/date after dedup+enrichment+DQ.
+BigQuery mip_gold.products (append mode) receiving from Gold.
+
+LANE 5 "Observability": Kafka pipeline.events → kafka_to_pg →
+Postgres (audit_events, block_trace, quarantine_rows, dedup_clusters, anomaly_reports).
+anomaly_dag (hourly, Isolation Forest, needs ≥5 runs/source) reads Prometheus →
+anomaly_reports in Postgres + etl_anomaly_flag gauge on Pushgateway.
+chunker_dag (every 5 min) pulls new Postgres rows → ChromaDB audit_corpus (MiniLM-L6-v2).
+MetricsExporter → Prometheus Pushgateway :9091 → Grafana :3000.
+RunLogWriter writes output/run_logs/*.json.
+ObservabilityChatbot pulls from run_logs (structured filter by source/status/date) AND
+ChromaDB audit_corpus (semantic) → Groq llama-3.1-8b-instant → ChatResponse with
+cited_run_ids. MCP Server :8001 (7 endpoints, Redis cache 15-30s) reads Postgres +
+Prometheus. Streamlit app.py Observability sidebar consumes Chatbot and MCP Server.
+
+LANE 6 "Search & Recommendations": two boxes side by side.
+Left "Hybrid Search" (src/uc3_search/): BM25 top-50 + ChromaDB semantic top-50 →
+Reciprocal Rank Fusion (k=60) → unified ranking. Served at REST /v1/search.
+Right "Recommendations" (src/uc4_recommendations/): AssociationRuleMiner (mlxtend Apriori)
++ ProductGraph (networkx cross-category traversal) → unified Recommender.
+Loads transactions from BigQuery instacart dataset. Served at REST /v1/recommendations.
+Both receive product catalog arrow from ETL Pipeline output.
+
+STORAGE LEGEND box in bottom-right corner:
+Redis :6379 (yaml 30d / llm 7d / emb 30d / dedup 14d, SQLite fallback output/cache.db)
+Postgres :5432 (audit_events, block_trace, quarantine_rows, dedup_clusters, anomaly_reports)
+ChromaDB :8000 (product_corpus — S2 KNN enrichment · audit_corpus — observability embeds)
+SQLite checkpoints.db (SHA256 + chunk resume state)
+GCS mip-bronze-2024 / mip-silver-2024 / mip-gold-2024
+BigQuery (staging tables · mip_gold.products append · instacart dataset)
+MLflow (experiment tracking)
+
+AIRFLOW SCHEDULE sidebar on right as a timeline:
+02:00 usda_incremental → 04:00 off_incremental → 05:00 openfda_incremental
+→ 07:00 bronze_to_silver (watermark-gated, 3 parallel tasks)
+→ 09:00 silver_to_gold (ExternalTaskSensor, parallel per-source then domain fan-in)
+Hourly: anomaly_dag (Isolation Forest on Prometheus metrics)
+Every 5 min: chunker_dag (Postgres audit_events → ChromaDB embeddings)
+
+Style: blue arrows for data flow, orange for LLM agent boxes, green for storage nodes,
+purple for Kafka/streaming. Add safety callout near llm_enrich:
+"allergens / dietary_tags / is_organic — S1 extraction only, never inferred by KNN or LLM."
 ```
