@@ -1,5 +1,7 @@
 domain: nutrition
 
+text_columns: [product_name, ingredients, category]
+
 fields:
   # Safety fields — S1-only, never passed to S2/S3
   - name: allergens

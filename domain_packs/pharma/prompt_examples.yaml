@@ -1,0 +1,43 @@
+column_mapping_examples:
+  - source_col: drug_name
+    target_col: drug_name
+    operation: RENAME
+  - source_col: ndc_code
+    target_col: ndc_code
+    operation: RENAME
+  - source_col: dosage_form
+    target_col: dosage_form
+    operation: RENAME
+  - source_col: active_ingredient
+    target_col: active_ingredient
+    operation: RENAME
+  - source_col: strength
+    target_col: strength
+    operation: RENAME
+  - source_col: manufacturer
+    target_col: manufacturer
+    operation: RENAME
+  - source_col: approval_status
+    target_col: fda_approval_status
+    operation: RENAME
+  - source_col: route_of_administration
+    target_col: route_of_administration
+    operation: RENAME
+  - source_col: therapeutic_class
+    target_col: therapeutic_class
+    operation: RENAME
+  - source_col: market_status
+    target_col: market_status
+    operation: RENAME
+  - source_col: ndc_code
+    target_col: ndc_code
+    operation: FORMAT
+  - source_col: strength
+    target_col: strength_value
+    operation: CAST
+  - source_col: strength
+    target_col: strength_unit
+    operation: CAST
+  - source_col: drug_name
+    target_col: drug_name_lower
+    operation: FORMAT

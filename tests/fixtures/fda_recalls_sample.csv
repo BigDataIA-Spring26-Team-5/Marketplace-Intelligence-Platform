@@ -1,0 +1,26 @@
+recall_number,product_description,reason_for_recall,recalling_firm,classification,status,distribution_pattern,product_type,recall_initiation_date
+F-0001-2024,"Peanut Butter Smooth 16oz, UPC 012345678901","Undeclared allergen: tree nuts (cashews) detected in peanut butter product",Sunrise Foods LLC,Class I,Ongoing,"Nationwide","Food",20240115
+F-0002-2024,"Organic Whole Milk 1 gallon, Best By 2024-03-01","Possible Listeria monocytogenes contamination detected during routine testing",Valley Dairy Co,Class I,Terminated,"CA, OR, WA","Food",20240120
+F-0003-2024,"Wheat Flour All Purpose 5lb Bag","Undeclared allergen: milk. Contains casein not listed in ingredients",Best Bake Inc,Class II,Ongoing,"TX, OK, LA, AR","Food",20240202
+F-0004-2024,"Salmon Sushi Rolls 8-piece, refrigerated","Elevated histamine levels above FDA action level. Potential scombrotoxin formation",Pacific Sushi Corp,Class I,Terminated,"HI, CA","Food",20240210
+F-0005-2024,"Gluten-Free Pasta 12oz","Undeclared gluten: cross-contamination with wheat during manufacturing",NaturalPath Foods,Class II,Ongoing,"Nationwide","Food",20240215
+F-0006-2024,"Baby Formula Powder Step 1","Cronobacter sakazakii detected in environmental samples at manufacturing facility",BabyNutrition Inc,Class I,Ongoing,"Nationwide","Food",20240301
+F-0007-2024,"Shrimp Cocktail Frozen 12oz","Undeclared allergen: shellfish labeling error — product contains lobster not declared",SeaHarvest LLC,Class II,Terminated,"FL, GA, SC","Food",20240305
+F-0008-2024,"Soy Sauce Low Sodium 10oz","Undeclared allergen: wheat (soy sauce contains wheat per standard recipe, not declared)",Asian Kitchen Foods,Class II,Ongoing,"NY, NJ, CT, MA","Food",20240312
+F-0009-2024,"Vegan Cheese Shreds 8oz","Undeclared dairy: casein protein detected — product marketed as vegan",PlantBased Foods Co,Class I,Ongoing,"Nationwide","Food",20240320
+F-0010-2024,"Organic Granola Bars 6-pack","Undeclared sesame: tahini used in binding not listed on allergen statement",GoodMorning Organics,Class II,Ongoing,"CO, UT, AZ, NM","Food",20240401
+F-0011-2024,"Hazelnut Spread 13oz","Labeling error: almond content understated. Significant nut allergen concern",European Imports LLC,Class I,Terminated,"Nationwide","Food",20240410
+F-0012-2024,"Chicken Broth Low Sodium 32oz","Metal shavings detected from processing equipment malfunction",HomeStyle Soups Inc,Class I,Ongoing,"Nationwide","Food",20240415
+F-0013-2024,"Kosher Beef Hot Dogs 12oz","Non-kosher pork DNA detected via PCR testing during third-party audit",Heritage Meats Corp,Class II,Terminated,"NY, NJ, PA, MD","Food",20240420
+F-0014-2024,"Egg Noodles Wide 12oz","Undeclared allergen: egg omitted from label despite egg content in product",Pasta House LLC,Class III,Terminated,"Midwest region","Food",20240425
+F-0015-2024,"Kombucha Original 16oz","Elevated alcohol content above 0.5% threshold — mislabeled as non-alcoholic beverage",BrewedWell Co,Class II,Ongoing,"CA, NY, TX","Food",20240501
+F-0016-2024,"Infant Rice Cereal 8oz Stage 1","Elevated inorganic arsenic levels above FDA guidance for infant rice cereal",BabyFirst Foods,Class II,Ongoing,"Nationwide","Food",20240510
+F-0017-2024,"Tilapia Fillets Frozen 2lb","Undeclared allergen: fish sauce used in marinade not listed. Potential fish allergen",FreshCatch Imports,Class II,Terminated,"FL, TX, GA","Food",20240515
+F-0018-2024,"Oat Milk Original 64oz","Undeclared allergen: gluten cross-contamination. Not certified gluten-free as labeled",Meadow Oats Co,Class II,Ongoing,"Nationwide","Food",20240520
+F-0019-2024,"Halal Lamb Chops Fresh","Non-halal processing violation detected. Animal not slaughtered per halal standards",MediterraneanMeats,Class II,Terminated,"NY, NJ, MI","Food",20240601
+F-0020-2024,"Walnut Pieces 8oz Bag","Aflatoxin contamination exceeding FDA action level of 20 ppb",NutHarvest Supply Co,Class I,Ongoing,"Nationwide","Food",20240605
+F-0021-2024,"Protein Powder Whey Vanilla 2lb","Undeclared allergen: milk. Label states dairy-free but contains whey protein isolate",SportsFuel Nutrition,Class I,Ongoing,"Nationwide","Food",20240610
+F-0022-2024,"Frozen Edamame 10oz","Pesticide residue levels exceeding EPA tolerances for chlorpyrifos",Pacific Imports Corp,Class II,Terminated,"CA, OR, WA, AK","Food",20240615
+F-0023-2024,"Soft Pretzels Frozen 6-pack","Undeclared allergen: sesame seeds on exterior not listed in allergen statement",Auntie's Pretzels Inc,Class II,Ongoing,"Nationwide","Food",20240620
+F-0024-2024,"Canned Tuna in Water 5oz","Elevated mercury levels above FDA advisory threshold for albacore tuna",OceanChoice Seafood,Class II,Terminated,"Nationwide","Food",20240625
+F-0025-2024,"Greek Yogurt Strawberry 5.3oz","Undeclared allergen: peanut cross-contamination from shared equipment",FreshCulture Dairy,Class I,Ongoing,"Nationwide","Food",20240701

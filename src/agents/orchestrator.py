@@ -13,7 +13,7 @@ from typing import Optional
 import pandas as pd
 
 from src.agents.state import PipelineState
-from src.agents.prompts import SCHEMA_ANALYSIS_PROMPT, build_schema_analysis_prompt
+from src.agents.prompts import build_schema_analysis_prompt
 from src.models.llm import call_llm_json, get_orchestrator_llm, reset_llm_counter
 from src.schema.analyzer import (
     profile_dataframe,
