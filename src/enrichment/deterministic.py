@@ -23,6 +23,7 @@ def deterministic_enrich(
     enrich_cols: list[str],
     needs_enrichment: "pd.Series",
     rules: list | None = None,
+    domain: str = "nutrition",
 ) -> "tuple[pd.DataFrame, pd.Series, dict]":
     """Apply rule-based enrichment using compiled FieldRule objects.
 
@@ -39,7 +40,8 @@ def deterministic_enrich(
     if not rules:
         return df, needs_enrichment, {"resolved": 0}
 
-    text_cols = ["product_name", "ingredients", "category"]
+    from src.enrichment.rules_loader import EnrichmentRulesLoader
+    text_cols = EnrichmentRulesLoader(domain).text_columns
     existing_text_cols = [c for c in text_cols if c in df.columns]
 
     if not existing_text_cols:
@@ -65,12 +67,14 @@ def deterministic_enrich(
                 df.at[idx, rule.name] = matched
 
         elif output_type == "multi":
-            # dietary_tags-style: scan product_name + dedicated label columns only
-            label_cols = ["product_name"]
+            # scan domain text cols + dedicated label columns
+            label_cols = list(existing_text_cols)
             for opt_col in ["labels", f"{rule.name}_raw"]:
-                if opt_col in df.columns:
+                if opt_col in df.columns and opt_col not in label_cols:
                     label_cols.append(opt_col)
-            label_text = df[label_cols].fillna("").astype(str).agg(" ".join, axis=1)
+            if not label_cols:
+                label_cols = [c for c in ["product_name"] if c in df.columns]
+            label_text = df[label_cols].fillna("").astype(str).agg(" ".join, axis=1) if label_cols else combined_text
 
             mask = needs_enrichment & df[rule.name].isna()
             for idx in df.index[mask]:

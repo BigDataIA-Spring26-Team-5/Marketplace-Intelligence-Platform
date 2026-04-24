@@ -862,7 +862,7 @@ def main() -> None:
 
     # Sidebar: mode selector + cache controls + live log feed
     with st.sidebar:
-        mode = st.radio("Mode", ["Pipeline", "Search", "Recommendations", "Observability"], key="app_mode")
+        mode = st.radio("Mode", ["Pipeline", "Observability", "Domain Packs"], key="app_mode")
         st.markdown("---")
         st.markdown("### Cache Controls")
         no_cache = st.checkbox(
@@ -933,6 +933,9 @@ def main() -> None:
         _render_recommendations_page()
     elif mode == "Observability":
         _render_observability_page()
+    elif mode == "Domain Packs":
+        from src.ui.domain_kits import render_domain_kits_page
+        render_domain_kits_page()
 
 
 if __name__ == "__main__":

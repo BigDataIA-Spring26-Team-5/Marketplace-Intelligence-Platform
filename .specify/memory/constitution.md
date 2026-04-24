@@ -1,24 +1,19 @@
 <!--
 Sync Impact Report:
-- Version: 1.4.0 -> 2.0.0
-- Modified principles:
-  - I. Schema-First Gap Analysis: replaced `config/unified_schema.json` with `config/schemas/<domain>_schema.json`; domain is operator-supplied, never inferred
-  - III. Declarative YAML Execution Only: removed unified_schema.json reference (no changes to YAML execution rules)
-- Added sections: IX. Domain-Scoped Schemas, Silver Normalization, and Gold Concatenation
-- Retired artifacts: `config/unified_schema.json` — no longer a governance artifact; domain schema file is sole schema contract
+- Version: 2.0.0 -> 2.1.0
+- Modified principles: None (existing principles unchanged)
+- Added sections:
+    - Principle X: Domain Packs as the Extension Layer
 - Removed sections: None
-- Templates requiring review:
-  - ⚠️ `.specify/templates/plan-template.md` — check for any "unified-schema alignment" gate referencing unified_schema.json; update to domain schema gate
-  - ⚠️ `.specify/templates/spec-template.md` — check schema alignment sections for unified_schema.json references
-  - ⚠️ `src/agents/prompts.py` — SCHEMA_ANALYSIS_PROMPT and FIRST_RUN_SCHEMA_PROMPT reference unified_schema.json; must be updated to load config/schemas/<domain>_schema.json
-  - ⚠️ `README.md` — architecture section describes unified_schema.json as canonical target schema; must be updated
-  - ⚠️ `CLAUDE.md` — "Unified schema is auto-generated once, then reused" section references config/unified_schema.json; must be updated
-- Rationale for MAJOR bump: Principle I redefines the schema contract — a non-negotiable rule about which artifact governs gap analysis — in a backward-incompatible way. All existing runs that read config/unified_schema.json break unless migrated. Principle IX adds mandatory non-negotiable concatenation and normalization behavior.
-- Follow-up TODOs:
-  - Create config/schemas/ directory with domain schema files (nutrition_schema.json, safety_schema.json, pricing_schema.json)
-  - Migrate config/unified_schema.json content into appropriate domain schema files
-  - Update analyze_schema_node and derive_unified_schema_from_source() to load domain schema
-  - Update Development Workflow quality gate "unified-schema alignment" to "domain-schema alignment"
+- Templates requiring updates:
+    - ✅ `.specify/templates/plan-template.md` — stale `config/unified_schema.json` reference in
+      Constitution Check gate corrected to `config/schemas/<domain>_schema.json`; Domain Pack
+      extension compliance gate added
+    - ✅ `.specify/templates/spec-template.md` — no domain-pack references present; no change needed
+    - ✅ `.specify/templates/tasks-template.md` — no stale references; no change needed
+- Rationale for MINOR bump: Principle X adds a mandatory governance rule about the Domain Pack
+  extension layer. No existing principles were redefined or removed.
+- Follow-up TODOs: None — all Domain Pack artifacts are implemented and verified.
 -->
 # Schema-Driven ETL Pipeline Constitution
 
@@ -85,11 +80,17 @@ Enrichment MUST proceed in cost order:
 2. `S2` KNN corpus search
 3. `S3` RAG-assisted LLM categorization
 
-`primary_category` MAY be resolved by `S1`, `S2`, or `S3`. `allergens`,
-`dietary_tags`, and `is_organic` are safety fields and MUST remain
-deterministic-only. They MUST NOT be inferred or modified by `S2` or `S3`.
+`primary_category` MAY be resolved by `S1`, `S2`, or `S3`. Safety fields
+(`allergens`, `dietary_tags`, `is_organic`, and any field a domain declares as
+safety-only) MUST remain deterministic-only. They MUST NOT be inferred or
+modified by `S2` or `S3`.
+
+The set of safety fields is domain-defined via `EnrichmentRulesLoader`. The
+kernel MUST query `safety_field_names()` at runtime — it MUST NOT hardcode
+field names from any specific domain.
 
 Rationale: category tolerates probabilistic inference; safety fields do not.
+Hardcoding food-domain field names in kernel code violates domain isolation.
 
 ### VI. Self-Extending Mapping Memory
 When a dataset-specific mapping is generated, it MUST be persisted and
@@ -169,6 +170,45 @@ distinct ingestion flows. Enforcing identical column sets at the Silver layer
 makes Gold concatenation a safe append with no schema resolution required at
 merge time.
 
+### X. Domain Packs as the Extension Layer
+All domain-specific behavior MUST be encapsulated in a Domain Pack located at
+`domain_packs/<domain>/`. Adding a new domain MUST require zero edits to any
+file under `src/`. The kernel MUST remain domain-agnostic.
+
+A Domain Pack MUST provide:
+- `enrichment_rules.yaml` — `text_columns`, `fields` list with `strategy`,
+  `output_type`, and `patterns`; LLM fields additionally provide
+  `classification_classes` and `rag_context_field`
+- `block_sequence.yaml` — ordered block names including the `__generated__`
+  sentinel; may also define `silver_sequence` and `gold_sequence` keys
+- `prompt_examples.yaml` — few-shot column mapping examples for Agent 1
+
+A Domain Pack MAY provide:
+- `custom_blocks/*.py` — `Block` subclasses auto-discovered by `BlockRegistry`
+  at init time via `importlib`; MUST follow the naming convention
+  `<domain>__<block_name>` for the `name` attribute
+
+The following kernel components MUST be fully parameterized by domain at
+runtime — they MUST NOT contain hardcoded field names from any specific domain:
+- `EnrichmentRulesLoader` — sole source of `text_columns`, enrichment column
+  names, safety field names, LLM categories, and RAG context field
+- `LLMEnrichBlock` — derives `enrich_cols` and `safety_fields` from
+  `EnrichmentRulesLoader` at runtime
+- `deterministic_enrich()` — derives `text_cols` from `EnrichmentRulesLoader`
+  at runtime
+- `llm_enrich()` — builds prompts from `EnrichmentRulesLoader` at runtime
+- `validate_enrichment_output()` in `guardrails.py` — derives safety columns
+  and valid categories from `EnrichmentRulesLoader` at runtime
+
+**SC-002 invariant**: running the pipeline with `--domain <non-food-domain>`
+MUST produce an output that contains zero columns from any other domain's
+enrichment schema. This MUST be enforced by test.
+
+Rationale: domain isolation is what makes the pipeline reusable across
+healthcare, pharma, e-commerce, and other domains without forking `src/`. Any
+leakage of domain-specific constants into kernel code re-introduces coupling
+that SC-002 is designed to catch.
+
 ## Technology Stack
 
 - **Language**: Python 3.11
@@ -204,6 +244,10 @@ Quality gates for any feature or refactor:
 - enrichment safety fields remain deterministic-only
 - replayed mappings under `src/blocks/generated/` still load correctly
 - quarantine behavior and DQ scoring remain intact
+- new domain support requires only `domain_packs/<domain>/` additions — zero
+  `src/` edits
+- SC-002: a test asserts zero foreign-domain enrichment columns in output when
+  using a non-food domain
 - README, templates, and agent guidance stay consistent with the architecture
 
 ## Governance
@@ -231,13 +275,22 @@ Compliance review expectations:
   relevant
 - tasks MUST include the work needed to preserve YAML mappings, DQ logic, and
   documentation consistency
+- tasks for any new domain MUST include Domain Pack artifacts and SC-002
+  compliance verification
 - runtime guidance MUST not describe deprecated architecture such as runtime
-  code generation
+  code generation or hardcoded domain field names in kernel code
 
-**Version**: 2.0.0 | **Ratified**: 2026-04-17 | **Last Amended**: 2026-04-22
+**Version**: 2.1.0 | **Ratified**: 2026-04-17 | **Last Amended**: 2026-04-24
 
 <!--
 Changelog:
+- 2.1.0 (2026-04-24): MINOR bump. Principle X added — Domain Packs as the Extension Layer.
+  Establishes the zero-src-edit contract for new domains, mandates kernel parameterization
+  via EnrichmentRulesLoader, defines SC-002 as a testable invariant, and lists the four
+  required and one optional Domain Pack artifact types. Principle V amended: safety field
+  set is now domain-defined via EnrichmentRulesLoader; hardcoding food-domain field names
+  in kernel code explicitly prohibited. Development Workflow quality gates updated to
+  include Domain Pack gate and SC-002 test gate.
 - 2.0.0 (2026-04-22): MAJOR bump. Principle I amended — schema contract changed from
   config/unified_schema.json (single global file) to config/schemas/<domain>_schema.json
   (per-domain files); domain is always operator-supplied, never agent-inferred.

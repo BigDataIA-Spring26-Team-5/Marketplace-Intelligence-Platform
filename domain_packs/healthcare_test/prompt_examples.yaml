@@ -1,0 +1,22 @@
+domain: healthcare_test
+
+column_mapping_examples:
+  - source_col: patient_id
+    target_col: data_source
+    operation: CAST
+    cast_to: string
+  - source_col: discharge_date
+    target_col: published_date
+    operation: FORMAT
+  - source_col: diagnosis_text
+    target_col: description
+    operation: RENAME
+  - source_col: facility_code
+    target_col: brand_owner
+    operation: RENAME
+  - source_col: medications
+    target_col: ingredients
+    operation: RENAME
+  - source_col: procedures
+    target_col: category
+    operation: RENAME
