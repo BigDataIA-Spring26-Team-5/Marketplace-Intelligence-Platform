@@ -3,10 +3,11 @@
 ## Table of Contents
 1. [DAG Workflow](#1-dag-workflow)
 2. [Bronze → Silver → Gold Workflow](#2-bronze--silver--gold-workflow)
-3. [Data Flow UC1 → UC2 → UC3 → UC4](#3-data-flow-uc1--uc2--uc3--uc4)
+3. [System Data Flow](#3-system-data-flow)
 4. [Storage Diagram](#4-storage-diagram)
 5. [Agentic Workflow](#5-agentic-workflow-langgraph)
 6. [Logs Data Flow](#6-logs-data-flow--pipeline-runs--observability-dashboard)
+7. [Full Platform — Diagram Tool Prompt](#7-full-platform--diagram-tool-prompt)
 
 ---
 
@@ -83,7 +84,7 @@
                │                                                │   mip_gold.products
                │   bronze_to_bq_dag ──────────────────────────►│   (append)
                │   BigQuery staging                             │
-               │                          UC1 ETL (silver mode):│
+               │                          ETL Pipeline (silver mode):│
                │                          column_mapping        │
                │                          __generated__ block   │
                │                          _silver_normalize()   │
@@ -98,15 +99,15 @@
 
 ---
 
-## 3. Data Flow UC1 → UC2 → UC3 → UC4
+## 3. System Data Flow
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════════╗
-║                        3. DATA FLOW  UC1 → UC2 → UC3 → UC4                    ║
+║                            3. SYSTEM DATA FLOW                                 ║
 ╚══════════════════════════════════════════════════════════════════════════════════╝
 
   ┌───────────────────────────────────────────────────────────────────┐
-  │  UC1 — ETL Pipeline                                               │
+  │  ETL PIPELINE                                                     │
   │                                                                   │
   │  CLI / Streamlit / REST :8002                                     │
   │          │                                                        │
@@ -124,7 +125,7 @@
              │ RunLogWriter   → output/run_logs/
              ▼
   ┌───────────────────────────────────────────────────────────────────┐
-  │  UC2 — Observability                                              │
+  │  OBSERVABILITY                                                    │
   │                                                                   │
   │  Kafka pipeline.events                                            │
   │      │                                                            │
@@ -148,11 +149,15 @@
                                      │ product catalog
                     ┌────────────────┴────────────────┐
                     ▼                                 ▼
-  ┌──────────────────────────┐   ┌──────────────────────────────┐
-  │  UC3 — Search            │   │  UC4 — Recommendations       │
-  │  src/uc3_search/         │   │  src/uc4_recommendations/     │
-  │  🚧 NotImplementedError  │   │  🚧 NotImplementedError       │
-  └──────────────────────────┘   └──────────────────────────────┘
+  ┌──────────────────────────────────┐   ┌──────────────────────────────────────┐
+  │  HYBRID SEARCH                   │   │  RECOMMENDATIONS                     │
+  │  src/uc3_search/                 │   │  src/uc4_recommendations/             │
+  │  BM25 + ChromaDB semantic        │   │  AssociationRuleMiner (mlxtend)       │
+  │  Reciprocal Rank Fusion (k=60)   │   │  ProductGraph (networkx)              │
+  │  indexer · evaluator             │   │  Recommender (also-bought + graph)    │
+  │  REST /v1/search                 │   │  BigQuery instacart transactions       │
+  └──────────────────────────────────┘   │  REST /v1/recommendations             │
+                                         └──────────────────────────────────────┘
 ```
 
 ---
@@ -172,7 +177,7 @@
   │  │ output/cache.db  │  │ checkpoints.db   │  │ product_corpus collection  │ │
   │  │ Redis fallback   │  │ SHA256 + chunks  │  │ S2 KNN enrichment          │ │
   │  │ WAL-mode         │  │ resume state     │  │ audit_corpus collection    │ │
-  │  └──────────────────┘  └──────────────────┘  │ UC2 log embeddings         │ │
+  │  └──────────────────┘  └──────────────────┘  │ observability log embeds   │ │
   │                                               └────────────────────────────┘ │
   │                                                                              │
   │  ┌──────────────────┐  ┌──────────────────┐  ┌────────────────────────────┐ │
@@ -402,4 +407,79 @@
   │  Redis cache 15-30s       │      │  multi-turn chat UI                  │
   │  Prometheus + Postgres    │      │  cited run_id expanders              │
   └───────────────────────────┘      └──────────────────────────────────────┘
+```
+
+---
+
+## 7. Full Platform — Diagram Tool Prompt
+
+```
+Create a large enterprise architecture diagram for a food intelligence ETL platform
+called MIP. Organize into six horizontal swim lanes top to bottom:
+
+LANE 1 "Data Sources": three boxes — USDA API, Open Food Facts API, openFDA API.
+Each connects via a Kafka Producer arrow to Lane 2.
+
+LANE 2 "Bronze Layer (GCS mip-bronze-2024)": three JSONL partition paths
+(usda/bulk/YYYY/MM/DD, off/YYYY/MM/DD, openfda/YYYY/MM/DD), a watermark store
+(_watermarks/*.json), and a branch arrow to BigQuery staging via bronze_to_bq_dag.
+
+LANE 3 "ETL Pipeline (LangGraph)": the main processing engine. Show a sub-diagram
+of the LangGraph state machine with 7 nodes in sequence:
+load_source → analyze_schema (Agent 1, claude-sonnet-4-5, RENAME/CAST/FORMAT/ADD ops)
+→ critique_schema (Agent 2, claude-sonnet-4-6, off by default) → check_registry
+→ plan_sequence (Agent 3, claude-sonnet-4-5, reorder only) → run_pipeline → save_output.
+Show a Redis cache bypass arrow from analyze_schema directly to check_registry labeled
+"cache hit — skip Agents 1-3". Inside run_pipeline show the block sequence:
+dq_score_pre → __generated__ DynamicMappingBlock → cleaning → dedup_stage
+(fuzzy_deduplicate → column_wise_merge → golden_record_select) →
+domain__extract_allergens → llm_enrich (S1 regex, S2 ChromaDB KNN, S3 RAG-LLM Groq)
+→ dq_score_post. Entry points feeding the pipeline from the side: CLI, Streamlit :8501,
+REST API :8002, Airflow DAGs.
+
+LANE 4 "Silver / Gold Layers": two GCS buckets side by side.
+Silver (mip-silver-2024): nutrition/off, nutrition/usda, safety/openfda Parquet —
+gated by watermark, schema enforced by _silver_normalize().
+Gold (mip-gold-2024): canonical Parquet by domain/date after dedup+enrichment+DQ.
+BigQuery mip_gold.products (append mode) receiving from Gold.
+
+LANE 5 "Observability": Kafka pipeline.events → kafka_to_pg →
+Postgres (audit_events, block_trace, quarantine_rows, dedup_clusters, anomaly_reports).
+anomaly_dag (hourly, Isolation Forest, needs ≥5 runs/source) reads Prometheus →
+anomaly_reports in Postgres + etl_anomaly_flag gauge on Pushgateway.
+chunker_dag (every 5 min) pulls new Postgres rows → ChromaDB audit_corpus (MiniLM-L6-v2).
+MetricsExporter → Prometheus Pushgateway :9091 → Grafana :3000.
+RunLogWriter writes output/run_logs/*.json.
+ObservabilityChatbot pulls from run_logs (structured filter by source/status/date) AND
+ChromaDB audit_corpus (semantic) → Groq llama-3.1-8b-instant → ChatResponse with
+cited_run_ids. MCP Server :8001 (7 endpoints, Redis cache 15-30s) reads Postgres +
+Prometheus. Streamlit app.py Observability sidebar consumes Chatbot and MCP Server.
+
+LANE 6 "Search & Recommendations": two boxes side by side.
+Left "Hybrid Search" (src/uc3_search/): BM25 top-50 + ChromaDB semantic top-50 →
+Reciprocal Rank Fusion (k=60) → unified ranking. Served at REST /v1/search.
+Right "Recommendations" (src/uc4_recommendations/): AssociationRuleMiner (mlxtend Apriori)
++ ProductGraph (networkx cross-category traversal) → unified Recommender.
+Loads transactions from BigQuery instacart dataset. Served at REST /v1/recommendations.
+Both receive product catalog arrow from ETL Pipeline output.
+
+STORAGE LEGEND box in bottom-right corner:
+Redis :6379 (yaml 30d / llm 7d / emb 30d / dedup 14d, SQLite fallback output/cache.db)
+Postgres :5432 (audit_events, block_trace, quarantine_rows, dedup_clusters, anomaly_reports)
+ChromaDB :8000 (product_corpus — S2 KNN enrichment · audit_corpus — observability embeds)
+SQLite checkpoints.db (SHA256 + chunk resume state)
+GCS mip-bronze-2024 / mip-silver-2024 / mip-gold-2024
+BigQuery (staging tables · mip_gold.products append · instacart dataset)
+MLflow (experiment tracking)
+
+AIRFLOW SCHEDULE sidebar on right as a timeline:
+02:00 usda_incremental → 04:00 off_incremental → 05:00 openfda_incremental
+→ 07:00 bronze_to_silver (watermark-gated, 3 parallel tasks)
+→ 09:00 silver_to_gold (ExternalTaskSensor, parallel per-source then domain fan-in)
+Hourly: anomaly_dag (Isolation Forest on Prometheus metrics)
+Every 5 min: chunker_dag (Postgres audit_events → ChromaDB embeddings)
+
+Style: blue arrows for data flow, orange for LLM agent boxes, green for storage nodes,
+purple for Kafka/streaming. Add safety callout near llm_enrich:
+"allergens / dietary_tags / is_organic — S1 extraction only, never inferred by KNN or LLM."
 ```
