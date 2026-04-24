@@ -35,6 +35,7 @@ def embedding_enrich(
     enrich_cols: list[str],
     needs_enrichment: pd.Series,
     cache_client=None,
+    collection_name: str | None = None,
 ) -> tuple[pd.DataFrame, pd.Series, dict]:
     """
     Use KNN corpus search to assign primary_category to unmatched rows.
@@ -61,7 +62,7 @@ def embedding_enrich(
         df["_knn_neighbors"] = None
 
     # Load corpus, evict stale vectors, augment from S1 results
-    index, metadata = load_corpus()
+    index, metadata = load_corpus(collection_name)
 
     if index is None:
         logger.warning("S2 KNN: ChromaDB unavailable, skipping Strategy 2")

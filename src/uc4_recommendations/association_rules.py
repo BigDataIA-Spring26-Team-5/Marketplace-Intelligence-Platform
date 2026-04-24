@@ -22,9 +22,10 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-MIN_SUPPORT    = 0.005   # 0.5% — low enough for sparse food catalogs
+MIN_SUPPORT    = 0.005   # 0.5% — safe with max_len=2; combinatorial explosion needs unbounded max_len, not low support
 MIN_CONFIDENCE = 0.10
 MIN_LIFT       = 1.2     # only keep rules that beat random baseline
+MAX_VOCAB      = 15_000  # cap unique products before encoding; dense matrix = n_baskets × vocab
 
 
 class AssociationRuleMiner:
@@ -51,6 +52,7 @@ class AssociationRuleMiner:
         min_support: float = MIN_SUPPORT,
         min_confidence: float = MIN_CONFIDENCE,
         min_lift: float = MIN_LIFT,
+        max_products: int = MAX_VOCAB,
     ) -> pd.DataFrame:
         """
         Run FP-Growth and extract association rules.
@@ -65,20 +67,43 @@ class AssociationRuleMiner:
         if self._transactions is None or self._transactions.empty:
             raise ValueError("No transaction data loaded")
 
+        # Cap vocabulary to top-N most purchased products.
+        # Dense basket matrix = n_baskets × n_unique_products; 50K orders × 49K products
+        # = ~2.3 GB bool array before any FP-Growth work — OOMs small VMs.
+        product_counts = self._transactions["product_id"].value_counts()
+        if len(product_counts) > max_products:
+            top_products = set(product_counts.head(max_products).index)
+            tx = self._transactions[self._transactions["product_id"].isin(top_products)]
+            logger.info(
+                "Vocab capped: %d → %d unique products (dropped tail)", len(product_counts), max_products
+            )
+        else:
+            tx = self._transactions
+
         # Build basket matrix
         baskets = (
-            self._transactions
+            tx
             .groupby("transaction_id")["product_id"]
             .apply(list)
             .tolist()
         )
+        # Remove single-item baskets — they can't produce rules and inflate support counts
+        baskets = [b for b in baskets if len(b) > 1]
+        if not baskets:
+            logger.warning("No multi-item baskets after vocab cap — lowering max_products or min_support may help")
+            self._rules = pd.DataFrame()
+            return self._rules
 
         te = TransactionEncoder()
         te_array = te.fit(baskets).transform(baskets)
         basket_df = pd.DataFrame(te_array, columns=te.columns_)
+        del te_array  # free dense bool array before FP-Growth allocates its own structures
 
+        # max_len=2: only mine pairs. Without this, fpgrowth enumerates all k-itemsets
+        # (pairs, triplets, quadruplets...) — combinatorial explosion that blows past 31 GB RAM.
+        # Association rules for "also-bought" only need antecedent=1 item → consequent=1 item anyway.
         frequent_items = fpgrowth(
-            basket_df, min_support=min_support, use_colnames=True
+            basket_df, min_support=min_support, use_colnames=True, max_len=2
         )
         if frequent_items.empty:
             logger.warning("No frequent itemsets found — lower min_support")
