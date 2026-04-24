@@ -1014,6 +1014,7 @@ def main() -> None:
 
     # Sidebar: mode selector + cache controls + live log feed
     with st.sidebar:
+        mode = st.radio("Mode", ["Pipeline", "Search", "Recommendations", "Observability", "MLflow", "EDA", "Test Coverage"], key="app_mode")
         _modes = ["Pipeline", "Observability", "Domain Packs"]
         _current_mode_idx = _modes.index(st.session_state.get("app_mode", "Pipeline"))
         mode = st.radio("Mode", _modes, index=_current_mode_idx, key="app_mode")
@@ -1087,6 +1088,9 @@ def main() -> None:
         _render_recommendations_page()
     elif mode == "Observability":
         _render_observability_page()
+    elif mode == "MLflow":
+        from src.uc2_observability.mlflow_streamlit import render_mlflow_page
+        render_mlflow_page()
     elif mode == "Domain Packs":
         from src.ui.domain_kits import render_domain_kits_page
         render_domain_kits_page()
