@@ -13,7 +13,7 @@ from typing import Optional
 import pandas as pd
 
 from src.agents.state import PipelineState
-from src.agents.prompts import SCHEMA_ANALYSIS_PROMPT
+from src.agents.prompts import SCHEMA_ANALYSIS_PROMPT, build_schema_analysis_prompt
 from src.models.llm import call_llm_json, get_orchestrator_llm, reset_llm_counter
 from src.schema.analyzer import (
     profile_dataframe,
@@ -33,12 +33,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 import os as _os
 _SCHEMA_SAMPLE_ROWS = int(_os.environ.get("SCHEMA_SAMPLE_ROWS", "5000"))
 
-_BLOCK_COLUMN_PROVIDERS: dict[str, str] = {
-    "allergens": "extract_allergens",
-    "primary_category": "llm_enrich",
-    "dietary_tags": "llm_enrich",
-    "is_organic": "llm_enrich",
-}
+def _get_block_column_providers(domain: str) -> dict[str, str]:
+    """Return enrichment-column → provider-block mapping for the given domain.
+
+    Derived from the domain schema's enrichment columns at call time so no
+    food-specific column names are hardcoded in the kernel.
+    """
+    from src.schema.analyzer import get_domain_schema as _get_schema
+    try:
+        schema = _get_schema(domain)
+        providers: dict[str, str] = {}
+        for col_name in schema.enrichment_columns:
+            providers[col_name] = "llm_enrich"
+        return providers
+    except Exception:
+        return {}
+
+
+# Module-level fallback used in contexts where domain isn't yet known
+_BLOCK_COLUMN_PROVIDERS: dict[str, str] = {}
 
 # Primitives that map 1-source → N-target (no single 'target' key)
 _SPLIT_PRIMITIVES = {"SPLIT"}
@@ -228,6 +241,7 @@ def analyze_schema_node(state: PipelineState) -> dict:
     model = get_orchestrator_llm()
 
     unified = get_domain_schema(domain)  # raises FileNotFoundError if schema absent
+    _providers = _get_block_column_providers(domain)
 
     # ── YAML cache check ─────────────────────────────────────────────────────
     cache_client = state.get("cache_client")
@@ -272,7 +286,7 @@ def analyze_schema_node(state: PipelineState) -> dict:
         messages=[
             {
                 "role": "user",
-                "content": SCHEMA_ANALYSIS_PROMPT.format(
+                "content": build_schema_analysis_prompt(domain).format(
                     source_schema=json.dumps(columns_only, indent=2),
                     source_meta=json.dumps(meta_block, indent=2),
                     unified_schema=json.dumps(unified_for_prompt, indent=2),
@@ -379,7 +393,7 @@ def analyze_schema_node(state: PipelineState) -> dict:
         f"{len(missing_columns)} missing columns"
     )
     if unresolvable:
-        provider_cols = set(_BLOCK_COLUMN_PROVIDERS.keys())
+        provider_cols = set(_providers.keys())
         alias_targets = {a["target"] for a in enrich_alias_ops}
         truly_unresolvable = [
             u
@@ -464,7 +478,7 @@ def analyze_schema_node(state: PipelineState) -> dict:
         )
 
     if missing_columns:
-        provider_cols = set(_BLOCK_COLUMN_PROVIDERS.keys())
+        provider_cols = set(_providers.keys())
         alias_targets = {a["target"] for a in enrich_alias_ops}
         truly_missing = [
             mc
@@ -551,6 +565,7 @@ def _deterministic_corrections(
     column_mapping: dict,
     source_schema: dict,
     unified_schema: UnifiedSchema,
+    block_column_providers: dict | None = None,
 ) -> list[dict]:
     """Apply Rules 4, 6, 7 deterministically — no LLM needed.
 
@@ -586,14 +601,15 @@ def _deterministic_corrections(
     operations = corrected
 
     # Guard: never DELETE columns that downstream pipeline blocks consume
-    _protected = set(_BLOCK_COLUMN_PROVIDERS.keys())
+    _providers_local = block_column_providers or {}
+    _protected = set(_providers_local.keys())
     operations = [
         op for op in operations
         if not (op.get("primitive") == "DELETE" and op.get("source_column") in _protected)
     ]
 
     # --- Rule 6: DELETE completeness ---
-    consumed_sources: set[str] = set(column_mapping.keys()) | set(_BLOCK_COLUMN_PROVIDERS.keys())
+    consumed_sources: set[str] = set(column_mapping.keys()) | set(_providers_local.keys())
     for op in operations:
         src = op.get("source_column")
         if src:
@@ -656,6 +672,7 @@ def check_registry_node(state: PipelineState) -> dict:
 
     block_reg = BlockRegistry.instance()
     domain = state.get("domain", "nutrition")
+    _providers = _get_block_column_providers(domain)
     _raw_source = state.get("source_path", "unknown")
     dataset_name = state.get("resolved_source_name") or Path(_raw_source).stem
     if "*" in dataset_name:
@@ -672,7 +689,8 @@ def check_registry_node(state: PipelineState) -> dict:
     # Apply deterministic corrections (Rules 4, 6, 7) regardless of which agent produced operations
     source_schema = state.get("source_schema", {})
     operations = _deterministic_corrections(
-        operations, column_mapping, source_schema, get_domain_schema(domain)
+        operations, column_mapping, source_schema, get_domain_schema(domain),
+        block_column_providers=_get_block_column_providers(domain),
     )
 
     block_hits: dict[str, str] = {}
@@ -718,7 +736,7 @@ def check_registry_node(state: PipelineState) -> dict:
                 continue
 
             # Check if enrichment block handles this column
-            provider = _BLOCK_COLUMN_PROVIDERS.get(target_col)
+            provider = _providers.get(target_col)
             if provider and provider in block_reg.blocks:
                 logger.info(f"Block provider for '{target_col}': {provider}")
                 block_hits[target_col] = provider
@@ -782,7 +800,7 @@ def check_registry_node(state: PipelineState) -> dict:
             target_col = mc["target_column"]
             target_type = mc.get("target_type", "string")
 
-            provider = _BLOCK_COLUMN_PROVIDERS.get(target_col)
+            provider = _providers.get(target_col)
             if provider and provider in block_reg.blocks:
                 logger.info(
                     f"Block provider for missing column '{target_col}': {provider}"
@@ -829,7 +847,7 @@ def check_registry_node(state: PipelineState) -> dict:
                     logger.info(f"DELETE '{source_col}' → YAML drop_column")
                 continue
 
-            provider = _BLOCK_COLUMN_PROVIDERS.get(target_col)
+            provider = _providers.get(target_col)
             if provider and provider in block_reg.blocks:
                 logger.info(f"Block registry hit for gap '{target_col}': {provider}")
                 block_hits[target_col] = provider

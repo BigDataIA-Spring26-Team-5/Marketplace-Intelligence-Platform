@@ -1,4 +1,11 @@
 column_operations:
+- target: serving_size_unit
+  type: string
+  action: value_map
+  source: serving_size_unit
+  mapping:
+    GRM: g
+    g: g
 - source: fdc_id
   action: drop_column
 - source: gtin_upc
@@ -7,10 +14,3 @@ column_operations:
   action: drop_column
 - source: search_term
   action: drop_column
-- target: serving_size_unit
-  type: string
-  action: value_map
-  source: serving_size_unit
-  mapping:
-    GRM: g
-    g: g

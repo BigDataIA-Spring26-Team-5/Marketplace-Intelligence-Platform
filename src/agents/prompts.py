@@ -1,5 +1,76 @@
 """Prompt templates for Agent 1 (Orchestrator) and Agent 3 (Sequence Planner)."""
 
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+import yaml
+
+logger = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_DOMAIN_PACKS_DIR = _PROJECT_ROOT / "domain_packs"
+
+_GENERIC_PROMPT_EXAMPLES = [
+    {"source_col": "name", "target_col": "product_name", "operation": "RENAME"},
+    {"source_col": "description", "target_col": "product_name", "operation": "RENAME"},
+    {"source_col": "brand", "target_col": "brand_name", "operation": "RENAME"},
+    {"source_col": "manufacturer", "target_col": "brand_owner", "operation": "RENAME"},
+    {"source_col": "category", "target_col": "category", "operation": "RENAME"},
+    {"source_col": "date", "target_col": "published_date", "operation": "FORMAT"},
+    {"source_col": "id", "target_col": "data_source", "operation": "CAST", "cast_to": "string"},
+]
+
+
+def load_prompt_examples(domain: str) -> list[dict]:
+    """Load few-shot column mapping examples from domain_packs/<domain>/prompt_examples.yaml.
+
+    Returns generic placeholder examples when the file is absent.
+    """
+    examples_path = _DOMAIN_PACKS_DIR / domain / "prompt_examples.yaml"
+    if not examples_path.exists():
+        logger.info("No prompt_examples.yaml for domain '%s' — using generic examples", domain)
+        return list(_GENERIC_PROMPT_EXAMPLES)
+    try:
+        with open(examples_path) as f:
+            data = yaml.safe_load(f)
+        return data.get("column_mapping_examples", list(_GENERIC_PROMPT_EXAMPLES))
+    except Exception as exc:
+        logger.warning("Failed to load prompt_examples.yaml for domain '%s': %s — using generic examples", domain, exc)
+        return list(_GENERIC_PROMPT_EXAMPLES)
+
+
+def _format_examples(examples: list[dict]) -> str:
+    lines = []
+    for ex in examples:
+        op = ex.get("operation", "RENAME")
+        src = ex.get("source_col", "")
+        tgt = ex.get("target_col", "")
+        cast = ex.get("cast_to", "")
+        if cast:
+            lines.append(f'- "{src}" → "{tgt}" (operation: {op}, cast_to: {cast})')
+        else:
+            lines.append(f'- "{src}" → "{tgt}" (operation: {op})')
+    return "\n".join(lines)
+
+
+def build_schema_analysis_prompt(domain: str) -> str:
+    """Build Agent 1's schema analysis prompt with domain-specific few-shot examples.
+
+    Returns a string still containing {source_schema}, {source_meta}, {unified_schema}
+    placeholders so callers can apply .format(...) as usual.
+    """
+    examples = load_prompt_examples(domain)
+    example_block = _format_examples(examples)
+    return SCHEMA_ANALYSIS_PROMPT_TEMPLATE.replace("<<<DOMAIN_EXAMPLES>>>", example_block)
+
+
+def build_first_run_prompt(domain: str) -> str:
+    """Build Agent 1's first-run prompt. Domain examples are not used here."""
+    return FIRST_RUN_SCHEMA_PROMPT
+
+
 SCHEMA_ANALYSIS_PROMPT = """You are a schema analysis agent for a data enrichment pipeline.
 
 You are given:
@@ -246,6 +317,30 @@ ENRICH_ALIAS goes in operations[], not unresolvable[].
 """
 
 
+SCHEMA_ANALYSIS_PROMPT_TEMPLATE = SCHEMA_ANALYSIS_PROMPT.replace(
+    """## Semantic Mapping Examples
+Map source columns to unified columns based on SEMANTIC meaning, not just name:
+- "product_description" / "item_name" / "name" → "product_name"
+- "recalling_firm" / "manufacturer" → "brand_owner"
+- "brand" → "brand_name"
+- "product_type" → "category"
+- "recall_initiation_date" / "report_date" → "published_date"
+- "event_id" / "code_info" → "data_source"
+- "brand_owner" / "brandOwner" / "manufacturer" → "brand_owner"
+- "brand_name" / "brandName" / "brand" → "brand_name"
+- "serving_size" / "servingSize" → "serving_size"
+- "serving_size_unit" / "servingSizeUnit" → "serving_size_unit"
+- "ingredient_statement" / "ingredientStatement" / "ingredients" → "ingredients"
+
+Note: Source columns may use camelCase (brandOwner), snake_case (brand_owner), or PascalCase — treat these as semantically equivalent and map to the corresponding snake_case unified column.""",
+    """## Semantic Mapping Examples
+Map source columns to unified columns based on SEMANTIC meaning, not just name:
+<<<DOMAIN_EXAMPLES>>>
+
+Note: Source columns may use camelCase, snake_case, or PascalCase — treat these as semantically equivalent and map to the corresponding snake_case unified column.""",
+)
+
+
 FIRST_RUN_SCHEMA_PROMPT = """You are a schema analysis agent. This is the FIRST data source for this pipeline.
 There is no domain schema yet for this source — you must derive one.
 
@@ -360,17 +455,16 @@ Your job is to select which optional blocks to run and determine the optimal exe
 - lowercase_brand: include if brand_name or brand_owner columns are present and non-trivially populated
 - remove_noise_words: include if product_name likely contains legal suffixes, language filler words, or marketing noise (e.g. OpenFoodFacts multilingual data). Skip for clean structured sources like USDA.
 - strip_punctuation: include if product_name or ingredients contain excessive punctuation noise. Skip for clean structured sources.
-- extract_quantity_column: include if product_name likely embeds quantity/weight info (e.g. "Coca Cola 330ml"). Skip if product names are plain descriptors.
-- enrich_stage: include if the domain has enrichment columns (allergens, primary_category, dietary_tags, is_organic) and the source has ingredients or product text to enrich from.
+- Domain-specific quantity extraction block (e.g., a custom block): include if product_name likely embeds quantity/weight info. Skip if product names are plain descriptors.
+- Domain enrichment blocks (e.g., llm_enrich): include only if the domain pack sequence contains them — respect the block_sequence.yaml order.
 
 ## Ordering Rules
 - Mandatory blocks keep their fixed positions (dq_score_pre first, __generated__ second, schema_enforce or dq_score_post last)
 - Normalization blocks (strip_whitespace, lowercase_brand, remove_noise_words, strip_punctuation) run before deduplication
-- extract_allergens runs before llm_enrich
+- Custom domain extraction blocks run before llm_enrich
 - Deduplication (dedup_stage) runs after all normalization
-- enrich_stage runs after dedup_stage
+- Enrichment blocks run after dedup_stage
 - Stage names: "dedup_stage" = [fuzzy_deduplicate, column_wise_merge, golden_record_select]
-- Stage names: "enrich_stage" = [extract_allergens, llm_enrich]
 
 Return ONLY a JSON object:
 {{

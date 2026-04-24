@@ -17,19 +17,19 @@ BIG_9_ALLERGENS = [
 # Expanded patterns to catch common variants
 ALLERGEN_PATTERNS = {
     "milk": re.compile(r"\b(milk|dairy|lactose|casein|whey|cream|butter)\b", re.I),
-    "egg": re.compile(r"\b(egg|albumin|lysozyme|mayonnaise)\b", re.I),
-    "fish": re.compile(r"\b(fish|cod|salmon|tuna|anchov|bass|tilapia)\b", re.I),
-    "shellfish": re.compile(r"\b(shellfish|shrimp|crab|lobster|crawfish|prawn)\b", re.I),
-    "tree nut": re.compile(r"\b(almond|cashew|walnut|pecan|pistachio|macadamia|hazelnut|brazil\s*nut)\b", re.I),
-    "peanut": re.compile(r"\b(peanut)\b", re.I),
+    "egg": re.compile(r"\b(eggs?|albumin|lysozyme|mayonnaise)\b", re.I),
+    "fish": re.compile(r"\b(fish|cod|salmon|tuna|anchovies?|bass|tilapia)\b", re.I),
+    "shellfish": re.compile(r"\b(shellfish|shrimps?|crabs?|lobsters?|crawfish|prawns?)\b", re.I),
+    "tree nut": re.compile(r"\b(almonds?|cashews?|walnuts?|pecans?|pistachios?|macadamia|hazelnuts?|brazil\s*nuts?)\b", re.I),
+    "peanut": re.compile(r"\b(peanuts?)\b", re.I),
     "wheat": re.compile(r"\b(wheat|flour|gluten|semolina|durum|spelt)\b", re.I),
-    "soybean": re.compile(r"\b(soy|soybean|soya|tofu|edamame|lecithin)\b", re.I),
+    "soybean": re.compile(r"\b(soy|soybeans?|soya|tofu|edamame|lecithin)\b", re.I),
     "sesame": re.compile(r"\b(sesame|tahini)\b", re.I),
 }
 
 
 class ExtractAllergensBlock(Block):
-    name = "extract_allergens"
+    name = "nutrition__extract_allergens"
     domain = "nutrition"
     description = "Scan ingredients for FDA Big-9 allergens using keyword patterns"
     inputs = ["ingredients"]

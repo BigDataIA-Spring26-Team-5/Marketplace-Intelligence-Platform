@@ -522,10 +522,13 @@ def validate_sequence_planner_output(
                 "Normalization blocks must run before deduplication blocks"
             )
 
-    # extract_allergens before llm_enrich
-    if "extract_allergens" in sequence and "llm_enrich" in sequence:
-        if sequence.index("extract_allergens") > sequence.index("llm_enrich"):
-            errors.append("extract_allergens must run before llm_enrich")
+    # Any allergen-extraction block must run before llm_enrich
+    allergen_blocks = [b for b in sequence if "extract_allergens" in b]
+    if allergen_blocks and "llm_enrich" in sequence:
+        llm_idx = sequence.index("llm_enrich")
+        for ab in allergen_blocks:
+            if sequence.index(ab) > llm_idx:
+                errors.append(f"{ab} must run before llm_enrich")
 
     return GuardrailResult(
         passed=len(errors) == 0,
