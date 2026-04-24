@@ -1,0 +1,52 @@
+domain: healthcare_test
+
+text_columns:
+  - diagnosis_text
+  - medications
+  - procedures
+
+fields:
+  - name: diabetes_flag
+    strategy: deterministic
+    output_type: single
+    patterns:
+      - regex: '\b(E11\.\d+|E10\.\d+|E13\.\d+|E14\.\d+)\b'
+        label: diabetes_present
+      - regex: '\b(metformin|insulin|glipizide|glyburide)\b'
+        label: diabetes_medication_present
+
+  - name: hypertension_flag
+    strategy: deterministic
+    output_type: single
+    patterns:
+      - regex: '\b(I10|I11\.\d+|I12\.\d+|I13\.\d+|I15\.\d+)\b'
+        label: hypertension_present
+      - regex: '\b(lisinopril|amlodipine|hydrochlorothiazide|losartan)\b'
+        label: hypertension_medication_present
+
+  - name: cardiac_procedure_flag
+    strategy: deterministic
+    output_type: single
+    patterns:
+      - regex: '\b(EKG|echocardiogram|stress test|angiogram|cardiac catheterization)\b'
+        label: cardiac_procedure_present
+
+  - name: mental_health_flag
+    strategy: deterministic
+    output_type: single
+    patterns:
+      - regex: '\b(F\d{2}\.\d+|depressive disorder|anxiety|bipolar|schizophrenia)\b'
+        label: mental_health_condition_present
+      - regex: '\b(escitalopram|sertraline|fluoxetine|gabapentin|psychiatric evaluation)\b'
+        label: mental_health_treatment_present
+
+  - name: primary_diagnosis_category
+    strategy: llm
+    output_type: single
+    classification_classes:
+      - Endocrine/Metabolic
+      - Cardiovascular
+      - Respiratory
+      - Mental Health
+      - Other
+    rag_context_field: diagnosis_text

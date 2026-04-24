@@ -51,11 +51,11 @@ ON CONFLICT DO NOTHING;
 _INSERT_BLOCK_TRACE = """
 INSERT INTO block_trace
     (run_id, source, block_name, event_type, rows_in, rows_out,
-     null_rates, duration_ms, ts)
+     null_rates, duration_ms, dq_score, block_seq, ts)
 VALUES
     (%(run_id)s, %(source)s, %(block_name)s, %(event_type)s,
      %(rows_in)s, %(rows_out)s, %(null_rates)s, %(duration_ms)s,
-     to_timestamp(%(ts)s))
+     %(dq_score)s, %(block_seq)s, to_timestamp(%(ts)s))
 ON CONFLICT DO NOTHING;
 """
 
@@ -86,13 +86,26 @@ def _safe_json(obj: Any) -> str:
         return "{}"
 
 
+def _ts_to_epoch(ts: Any) -> float:
+    """Accept ISO8601 string or epoch float; return epoch seconds for to_timestamp()."""
+    if ts is None:
+        return time.time()
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return time.time()
+
+
 def _handle_audit(cur: Any, event: dict) -> None:
     cur.execute(_INSERT_AUDIT, {
         "run_id":     event.get("run_id", ""),
         "source":     event.get("source", ""),
         "event_type": event.get("event_type", ""),
         "status":     event.get("status", ""),
-        "ts":         event.get("ts", time.time()),
+        "ts":         _ts_to_epoch(event.get("ts")),
         "payload":    _safe_json(event),
     })
 
@@ -107,7 +120,9 @@ def _handle_block_trace(cur: Any, event: dict) -> None:
         "rows_out":    event.get("rows_out", None),
         "null_rates":  _safe_json(event.get("null_rates", {})),
         "duration_ms": event.get("duration_ms", None),
-        "ts":          event.get("ts", time.time()),
+        "dq_score":    event.get("dq_score", None),
+        "block_seq":   event.get("block_seq", None),
+        "ts":          _ts_to_epoch(event.get("ts")),
     })
 
 
@@ -118,7 +133,7 @@ def _handle_quarantine(cur: Any, event: dict) -> None:
         "row_hash": event.get("row_hash", ""),
         "reason":   event.get("reason", ""),
         "row_data": _safe_json(event.get("row_data", {})),
-        "ts":       event.get("ts", time.time()),
+        "ts":       _ts_to_epoch(event.get("ts")),
     })
 
 
@@ -130,7 +145,7 @@ def _handle_dedup(cur: Any, event: dict) -> None:
         "canonical":       event.get("canonical", ""),
         "members":         _safe_json(event.get("members", [])),
         "merge_decisions": _safe_json(event.get("merge_decisions", {})),
-        "ts":              event.get("ts", time.time()),
+        "ts":              _ts_to_epoch(event.get("ts")),
     })
 
 

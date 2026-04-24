@@ -1,0 +1,26 @@
+patient_id,discharge_date,diagnosis_text,medications,procedures,facility_code
+P001,2024-01-15,E11.9 Type 2 diabetes mellitus without complications,metformin 500mg twice daily,HbA1c test,HOSP-001
+P002,2024-01-16,I10 Essential (primary) hypertension,lisinopril 10mg daily,blood pressure monitoring,HOSP-001
+P003,2024-01-17,J45.909 Unspecified asthma uncomplicated,albuterol inhaler as needed,spirometry,HOSP-002
+P004,2024-01-18,I25.10 Atherosclerotic heart disease of native coronary artery,atorvastatin 40mg daily amlodipine 5mg,EKG stress test,HOSP-001
+P005,2024-01-19,F32.1 Major depressive disorder single episode moderate,gabapentin 300mg escitalopram 10mg,psychiatric evaluation,HOSP-003
+P006,2024-01-20,G40.909 Epilepsy unspecified not intractable without status epilepticus,gabapentin 600mg levetiracetam,EEG brain MRI,HOSP-002
+P007,2024-01-21,E11.65 Type 2 diabetes mellitus with hyperglycemia,metformin 1000mg insulin glargine,glucose monitoring fingerstick,HOSP-001
+P008,2024-01-22,I50.9 Heart failure unspecified,metoprolol 25mg losartan 50mg furosemide,echocardiogram BNP test,HOSP-002
+P009,2024-01-23,K21.0 Gastro-esophageal reflux disease with esophagitis,omeprazole 20mg daily,upper endoscopy,HOSP-003
+P010,2024-01-24,M54.5 Low back pain,ibuprofen 400mg cyclobenzaprine,physical therapy X-ray lumbar,HOSP-001
+P011,2024-01-25,J18.9 Pneumonia unspecified organism,azithromycin 500mg amoxicillin-clavulanate,chest X-ray sputum culture,HOSP-002
+P012,2024-01-26,I63.9 Cerebral infarction unspecified,aspirin 81mg clopidogrel atorvastatin,brain MRI carotid ultrasound,HOSP-003
+P013,2024-01-27,E03.9 Hypothyroidism unspecified,levothyroxine 50mcg,TSH thyroid panel,HOSP-001
+P014,2024-01-28,N18.3 Chronic kidney disease stage 3,lisinopril 20mg,creatinine BMP renal ultrasound,HOSP-002
+P015,2024-01-29,C18.9 Malignant neoplasm of colon unspecified,oxaliplatin leucovorin fluorouracil,colonoscopy CEA level,HOSP-003
+P016,2024-01-30,I10 Essential (primary) hypertension E78.5 Hyperlipidemia,amlodipine 10mg atorvastatin 20mg,lipid panel renal function test,HOSP-001
+P017,2024-02-01,J44.1 Chronic obstructive pulmonary disease with acute exacerbation,albuterol prednisone 40mg tiotropium,pulmonary function test,HOSP-002
+P018,2024-02-02,M06.9 Rheumatoid arthritis unspecified,methotrexate 15mg folic acid hydroxychloroquine,joint X-ray RF anti-CCP,HOSP-003
+P019,2024-02-03,F41.1 Generalized anxiety disorder,sertraline 50mg,mental status exam,HOSP-001
+P020,2024-02-04,E11.9 Type 2 diabetes mellitus I10 Essential hypertension,metformin 500mg lisinopril 5mg,HbA1c BMP,HOSP-002
+P021,2024-02-05,I48.91 Unspecified atrial fibrillation,warfarin 5mg metoprolol 25mg,INR check EKG Holter monitor,HOSP-001
+P022,2024-02-06,K57.30 Diverticulosis of large intestine without perforation or abscess without bleeding,ciprofloxacin metronidazole,CT abdomen colonoscopy,HOSP-003
+P023,2024-02-07,G43.909 Migraine unspecified not intractable without status migrainosus,sumatriptan 100mg topiramate,neurological exam MRI brain,HOSP-002
+P024,2024-02-08,B20 Human immunodeficiency virus HIV disease,tenofovir emtricitabine dolutegravir,CD4 count viral load,HOSP-003
+P025,2024-02-09,E11.9 Type 2 diabetes mellitus without complications,glipizide 5mg metformin 500mg,HbA1c retinal exam,HOSP-001

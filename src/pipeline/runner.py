@@ -12,8 +12,7 @@ import pandas as pd
 from src.registry.block_registry import BlockRegistry
 from src.schema.models import UnifiedSchema
 from src.utils.csv_stream import CsvStreamReader, DEFAULT_CHUNK_SIZE
-
-NULL_RATE_COLUMNS: list[str] = ["product_name", "brand_name", "ingredients", "primary_category"]
+from src.schema.analyzer import get_domain_schema
 
 try:
     from src.models.llm import _UC2_AVAILABLE, _emit_event  # noqa: PLC0415
@@ -22,15 +21,6 @@ except ImportError:
     _emit_event = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
-
-_DQ_COLS = ["product_name", "brand_name", "primary_category", "ingredients"]
-
-
-def _compute_block_dq(df: pd.DataFrame) -> float:
-    cols = [c for c in _DQ_COLS if c in df.columns]
-    if not cols or len(df) == 0:
-        return 0.0
-    return round(float(df[cols].notna().mean().mean()), 4)
 
 
 class PipelineRunner:
@@ -42,8 +32,24 @@ class PipelineRunner:
     - Stage names: expanded to constituent blocks (e.g., "dedup_stage" -> 3 blocks)
     """
 
-    def __init__(self, block_registry: BlockRegistry):
+    def __init__(self, block_registry: BlockRegistry, domain: str = "nutrition"):
         self.block_registry = block_registry
+        self.domain = domain
+
+    def _get_null_rate_columns(self) -> list[str]:
+        """Derive null-rate columns from required columns in the domain schema."""
+        try:
+            schema = get_domain_schema(self.domain)
+            return [name for name, col in schema.columns.items() if col.required]
+        except Exception as exc:
+            logger.warning("Could not load domain schema for null-rate columns (%s): %s", self.domain, exc)
+            return []
+
+    def _compute_block_dq(self, df: pd.DataFrame) -> float:
+        cols = [c for c in self._get_null_rate_columns() if c in df.columns]
+        if not cols or len(df) == 0:
+            return 0.0
+        return round(float(df[cols].notna().mean().mean()), 4)
 
     def run(
         self,
@@ -135,9 +141,10 @@ class PipelineRunner:
             if _UC2_AVAILABLE and run_id:
                 try:
                     duration_ms = int((time.perf_counter() - ts_start) * 1000)
+                    null_rate_cols = self._get_null_rate_columns()
                     null_rates = {
                         col: float(df[col].isna().mean())
-                        for col in NULL_RATE_COLUMNS
+                        for col in null_rate_cols
                         if col in df.columns
                     }
                     _emit_event({
@@ -149,6 +156,8 @@ class PipelineRunner:
                         "rows_out": len(df),
                         "duration_ms": duration_ms,
                         "null_rates": null_rates,
+                        "dq_score": _compute_block_dq(df),
+                        "block_seq": len(audit_log),
                         "ts": datetime.now(timezone.utc).isoformat(),
                     })
                 except Exception as e:
@@ -158,13 +167,15 @@ class PipelineRunner:
             if _UC2_AVAILABLE and run_id and source_name:
                 try:
                     from src.uc2_observability.metrics_collector import MetricsCollector
+                    dq_score = self._compute_block_dq(df)
                     MetricsCollector().push_block_dq(
                         run_id=run_id,
                         source=source_name,
                         block_name=block_name,
                         block_seq=len(audit_log),
-                        dq_score=_compute_block_dq(df),
+                        dq_score=dq_score,
                         rows=len(df),
+                        duration_ms=int((time.perf_counter() - ts_start) * 1000),
                     )
                 except Exception as e:
                     logger.warning(f"UC2 block DQ push failed ({block_name}): {e}")

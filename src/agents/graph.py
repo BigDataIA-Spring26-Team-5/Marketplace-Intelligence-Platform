@@ -31,7 +31,7 @@ from src.models.llm import (
     get_llm_call_count,
 )
 from src.registry.block_registry import BlockRegistry
-from src.pipeline.runner import PipelineRunner, DEFAULT_CHUNK_SIZE, NULL_RATE_COLUMNS
+from src.pipeline.runner import PipelineRunner, DEFAULT_CHUNK_SIZE
 from src.schema.analyzer import get_domain_schema
 
 logger = logging.getLogger(__name__)
@@ -146,16 +146,17 @@ def plan_sequence_node(state: PipelineState) -> dict:
     # Mandatory blocks per mode — always forced into the sequence
     if pipeline_mode == "silver":
         mandatory = ["dq_score_pre", "__generated__", "schema_enforce"]
-        optional_names = [
-            "strip_whitespace", "lowercase_brand", "remove_noise_words",
-            "strip_punctuation", "extract_quantity_column",
-        ]
+        _mandatory_set = set(mandatory)
+        seq_key = "silver_sequence"
     else:
         mandatory = ["dq_score_pre", "__generated__", "dedup_stage", "dq_score_post"]
-        optional_names = [
-            "strip_whitespace", "lowercase_brand", "remove_noise_words",
-            "strip_punctuation", "extract_quantity_column", "enrich_stage",
-        ]
+        _mandatory_set = set(mandatory)
+        seq_key = "gold_sequence" if pipeline_mode == "gold" else "sequence"
+
+    # Derive optional blocks from the domain pack so no food-specific names are hardcoded
+    from src.registry.block_registry import _load_domain_sequence
+    _domain_seq = _load_domain_sequence(domain, sequence_key=seq_key)
+    optional_names = [b for b in _domain_seq if b not in _mandatory_set and b != "__generated__"]
 
     # Build metadata for mandatory and optional blocks separately
     mandatory_metadata = block_reg.get_blocks_with_metadata(mandatory)
@@ -272,9 +273,8 @@ def run_pipeline_node(state: PipelineState) -> dict:
     if state.get("working_df") is not None:
         return {}
     block_registry = BlockRegistry.instance()
-    runner = PipelineRunner(block_registry)
-
     domain = state.get("domain", "nutrition")
+    runner = PipelineRunner(block_registry, domain=domain)
     unified = get_domain_schema(domain)
     block_sequence = state.get("block_sequence") or block_registry.get_default_sequence(
         domain=domain,
@@ -618,9 +618,12 @@ def save_output_node(state: PipelineState) -> dict:
                 rows_in = len(source_df) if source_df is not None else 0
                 rows_out = len(df)
 
+                _domain_for_nr = state.get("domain", "nutrition")
+                _runner_for_nr = PipelineRunner(BlockRegistry.instance(), domain=_domain_for_nr)
+                _nr_cols = _runner_for_nr._get_null_rate_columns()
                 null_rate = float(
-                    df[NULL_RATE_COLUMNS].isna().mean().mean()
-                ) if all(c in df.columns for c in NULL_RATE_COLUMNS) else 0.0
+                    df[_nr_cols].isna().mean().mean()
+                ) if _nr_cols and all(c in df.columns for c in _nr_cols) else 0.0
 
                 enrichment_stats = state.get("enrichment_stats") or {}
                 llm_calls = get_llm_call_count()
@@ -667,6 +670,13 @@ def save_output_node(state: PipelineState) -> dict:
 
         # Write structured run log
         log_path = RunLogWriter().save(state, status="success", start_time=_run_start)
+
+        # Log to MLflow (best-effort, never blocks pipeline)
+        try:
+            from src.uc2_observability.mlflow_bridge import log_run_to_mlflow
+            log_run_to_mlflow(state)
+        except Exception as e:
+            logger.warning(f"MLflow logging failed: {e}")
 
         # Push Prometheus metrics via Pushgateway + Postgres audit_events
         if log_path is not None:

@@ -1,0 +1,70 @@
+domain: nutrition
+
+column_mapping_examples:
+  - source_col: product_description
+    target_col: product_name
+    operation: RENAME
+  - source_col: item_name
+    target_col: product_name
+    operation: RENAME
+  - source_col: name
+    target_col: product_name
+    operation: RENAME
+  - source_col: brand
+    target_col: brand_name
+    operation: RENAME
+  - source_col: brandName
+    target_col: brand_name
+    operation: RENAME
+  - source_col: brand_owner
+    target_col: brand_name
+    operation: RENAME
+  - source_col: brandOwner
+    target_col: brand_name
+    operation: RENAME
+  - source_col: manufacturer
+    target_col: brand_owner
+    operation: RENAME
+  - source_col: recalling_firm
+    target_col: brand_owner
+    operation: RENAME
+  - source_col: ingredient_statement
+    target_col: ingredients
+    operation: RENAME
+  - source_col: ingredientStatement
+    target_col: ingredients
+    operation: RENAME
+  - source_col: ingredients
+    target_col: ingredients
+    operation: RENAME
+  - source_col: serving_size
+    target_col: serving_size
+    operation: RENAME
+  - source_col: servingSize
+    target_col: serving_size
+    operation: RENAME
+  - source_col: serving_size_unit
+    target_col: serving_size_unit
+    operation: RENAME
+  - source_col: servingSizeUnit
+    target_col: serving_size_unit
+    operation: RENAME
+  - source_col: product_type
+    target_col: category
+    operation: RENAME
+  - source_col: recall_initiation_date
+    target_col: published_date
+    operation: FORMAT
+  - source_col: event_id
+    target_col: data_source
+    operation: RENAME
+  - source_col: fdcId
+    target_col: data_source
+    operation: CAST
+    cast_to: string
+  - source_col: gtinUpc
+    target_col: gtinUpc
+    operation: DELETE
+  - source_col: serving_size_unit
+    target_col: serving_size_unit
+    operation: FORMAT

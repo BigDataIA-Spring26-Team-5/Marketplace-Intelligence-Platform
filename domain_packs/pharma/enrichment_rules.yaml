@@ -1,0 +1,151 @@
+domain: pharma
+
+text_columns: [drug_name, active_ingredient, dosage_form, route_of_administration, therapeutic_class]
+
+fields:
+  # Safety fields — S1-only, never passed to S2/S3
+  - name: fda_approval_status
+    strategy: deterministic
+    output_type: single
+    patterns:
+      - regex: "\\b(approved|discontinued|withdrawn|tentative|pending)\\b"
+        label: ""
+
+  - name: market_status
+    strategy: deterministic
+    output_type: single
+    patterns:
+      - regex: "\\b(marketed|active|inactive|discontinued|not marketed)\\b"
+        label: ""
+
+  - name: dosage_form_category
+    strategy: deterministic
+    output_type: single
+    patterns:
+      - regex: "\\b(tablet|tab|caplet)\\b"
+        label: solid_oral
+      - regex: "\\b(capsule|caps|cap)\\b"
+        label: solid_oral
+      - regex: "\\b(injection|injectable|shot|vial|syringe)\\b"
+        label: injectable
+      - regex: "\\b(cream|ointment|gel|lotion|topical|patch)\\b"
+        label: topical
+      - regex: "\\b(liquid|solution|suspension|syrup|elixir|drops)\\b"
+        label: liquid_oral
+      - regex: "\\b(inhaler|aerosol|spray|nebulizer)\\b"
+        label: inhalation
+      - regex: "\\b(suppository|enema)\\b"
+        label: rectal
+      - regex: "\\b(implant|insert|ring)\\b"
+        label: implant
+
+  - name: route_category
+    strategy: deterministic
+    output_type: single
+    patterns:
+      - regex: "\\b(oral|po|by mouth)\\b"
+        label: oral
+      - regex: "\\b(intravenous|iv|intravenous infusion)\\b"
+        label: intravenous
+      - regex: "\\b(intramuscular|im)\\b"
+        label: intramuscular
+      - regex: "\\b(subcutaneous|sc|subq)\\b"
+        label: subcutaneous
+      - regex: "\\b(topical|cutaneous|dermal|transdermal)\\b"
+        label: topical
+      - regex: "\\b(inhalation|inhaled|respiratory)\\b"
+        label: inhalation
+      - regex: "\\b(ophthalmic|eye|ocular)\\b"
+        label: ophthalmic
+      - regex: "\\b(otic|ear|aural)\\b"
+        label: otic
+      - regex: "\\b(nasal|intranasal)\\b"
+        label: nasal
+      - regex: "\\b(rectal|rectally)\\b"
+        label: rectal
+      - regex: "\\b(vaginal|intravaginal)\\b"
+        label: vaginal
+
+  # LLM field — S1 patterns attempt first, then S2/S3 cascade
+  - name: therapeutic_class
+    strategy: llm
+    output_type: single
+    patterns:
+      - regex: "\\b(antidiabetic|diabetes|insulin|metformin|sulfonylurea|dpp-4|glp-1|sglt2)\\b"
+        label: Antidiabetic
+      - regex: "\\b(ace inhibitor|lisinopril|enalapril|ramipril|captopril)\\b"
+        label: ACE Inhibitor
+      - regex: "\\b(statin|atorvastatin|simvastatin|rosuvastatin|pravastatin|lipid lowering)\\b"
+        label: Statin
+      - regex: "\\b(antibiotic|penicillin|amoxicillin|cephalosporin|macrolide|fluoroquinolone|tetracycline)\\b"
+        label: Antibiotic
+      - regex: "\\b(proton pump inhibitor|ppi|omeprazole|pantoprazole|esomeprazole|lansoprazole)\\b"
+        label: Proton Pump Inhibitor
+      - regex: "\\b(antihypertensive|beta blocker|atenolol|metoprolol|propranolol|calcium channel blocker|amlodipine|nifedipine)\\b"
+        label: Antihypertensive
+      - regex: "\\b(antidepressant|ssri|snri|fluoxetine|sertraline|escitalopram|duloxetine|venlafaxine)\\b"
+        label: Antidepressant
+      - regex: "\\b(antipsychotic|olanzapine|risperidone|quetiapine|aripiprazole|haloperidol)\\b"
+        label: Antipsychotic
+      - regex: "\\b(anticoagulant|blood thinner|warfarin|heparin|enoxaparin|rivaroxaban|apixaban)\\b"
+        label: Anticoagulant
+      - regex: "\\b(antiplatelet|aspirin|clopidogrel|ticagrelor|prasugrel)\\b"
+        label: Antiplatelet
+      - regex: "\\b(nsaid|ibuprofen|naproxen|diclofenac|celecoxib|meloxicam|anti-inflammatory)\\b"
+        label: NSAID
+      - regex: "\\b(analgesic|pain|opioid|morphine|oxycodone|hydrocodone|fentanyl|tramadol|acetaminophen)\\b"
+        label: Analgesic
+      - regex: "\\b(benzodiazepine|diazepam|alprazolam|lorazepam|clonazepam|anxiolytic)\\b"
+        label: Benzodiazepine
+      - regex: "\\b(antihistamine|cetirizine|loratadine|fexofenadine|diphenhydramine|allergy)\\b"
+        label: Antihistamine
+      - regex: "\\b(corticosteroid|prednisone|prednisolone|dexamethasone|hydrocortisone|steroid)\\b"
+        label: Corticosteroid
+      - regex: "\\b(antiviral|acyclovir|valacyclovir|oseltamivir|remdesivir|hiv|antiretroviral)\\b"
+        label: Antiviral
+      - regex: "\\b(antifungal|fluconazole|clotrimazole|miconazole|terbinafine|nystatin)\\b"
+        label: Antifungal
+      - regex: "\\b(chemotherapy|antineoplastic|oncology|cancer|cytotoxic|targeted therapy)\\b"
+        label: Antineoplastic
+      - regex: "\\b(vaccine|immunization|vaccination|mRNA|influenza|covid)\\b"
+        label: Vaccine
+      - regex: "\\b(hormone|estrogen|progesterone|testosterone|thyroid|levothyroxine|contraceptive)\\b"
+        label: Hormone Therapy
+      - regex: "\\b(bronchodilator|albuterol|salbutamol|salmeterol|formoterol|asthma|copd)\\b"
+        label: Bronchodilator
+      - regex: "\\b(diuretic|furosemide|hydrochlorothiazide|spironolactone|water pill)\\b"
+        label: Diuretic
+      - regex: "\\b(antiepileptic|anticonvulsant|seizure|phenytoin|valproate|levetiracetam|lamotrigine)\\b"
+        label: Antiepileptic
+      - regex: "\\b(muscle relaxant|cyclobenzaprine|methocarbamol|baclofen|tizanidine)\\b"
+        label: Muscle Relaxant
+      - regex: "\\b(antiemetic|nausea|ondansetron|metoclopramide|promethazine)\\b"
+        label: Antiemetic
+    classification_classes:
+      - Antidiabetic
+      - ACE Inhibitor
+      - Statin
+      - Antibiotic
+      - Proton Pump Inhibitor
+      - Antihypertensive
+      - Antidepressant
+      - Antipsychotic
+      - Anticoagulant
+      - Antiplatelet
+      - NSAID
+      - Analgesic
+      - Benzodiazepine
+      - Antihistamine
+      - Corticosteroid
+      - Antiviral
+      - Antifungal
+      - Antineoplastic
+      - Vaccine
+      - Hormone Therapy
+      - Bronchodilator
+      - Diuretic
+      - Antiepileptic
+      - Muscle Relaxant
+      - Antiemetic
+      - Other
+    rag_context_field: drug_name
