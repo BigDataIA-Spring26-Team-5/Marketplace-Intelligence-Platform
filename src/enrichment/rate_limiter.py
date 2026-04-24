@@ -84,6 +84,7 @@ class RateLimiter:
                 oldest_tok = self._token_times[0][0] if self._token_times else now
                 wait = min(oldest_req, oldest_tok) + 60.0 - now
                 wait = max(wait, 0.01)
+                break
 
         # Release lock while sleeping so other coroutines can check
         await asyncio.sleep(wait)
