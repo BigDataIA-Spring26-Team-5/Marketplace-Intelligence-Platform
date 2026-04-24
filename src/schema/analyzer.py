@@ -51,7 +51,9 @@ _PARSE_THRESHOLD = 0.6
 def _try_parse_json(value: str) -> Any | None:
     """Try to parse a string as JSON. Returns parsed value or None."""
     try:
-        return json.loads(value)
+        result = json.loads(value)
+        if isinstance(result, (dict, list)):
+            return result
     except (ValueError, TypeError):
         pass
     # Python single-quote dicts/lists (e.g. from repr())
