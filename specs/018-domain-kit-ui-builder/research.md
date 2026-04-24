@@ -91,6 +91,12 @@
 
 ---
 
+## Environment
+
+`domain_packs/` is writable by the Streamlit process on this VM (`os.access(domain_packs/, os.W_OK)` returns `True`). No permission issues for kit creation or deletion flows.
+
+---
+
 ## Resolved Unknowns
 
 | Unknown | Resolution |
