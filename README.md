@@ -12,33 +12,110 @@ The food catalog (USDA, OpenFoodFacts, OpenFDA, Amazon ESCI) is the **reference 
 
 ## Architecture
 
+Every source flows through a **Domain Pack** (schema + block sequence) into a three-agent LangGraph pipeline, producing Silver Parquet per source. Gold runs in two stages: per-source dedup+enrich → BigQuery, then cross-source concat+dedup → GCS canonical Parquet.
+
 ```mermaid
-flowchart LR
-    subgraph Sources
-      CSV[CSV / GCS URI]
-      Kafka[Kafka]
+flowchart TD
+    subgraph DP["Domain Pack  (domain_packs/<domain>/)"]
+        Schema[canonical schema\nconfig/schemas/domain_schema.json]
+        BSeq[block_sequence.yaml\nsilver_sequence · gold_sequence]
+        CB[custom_blocks/*.py\noptional domain extensions]
     end
-    Sources --> Bronze[(Bronze GCS)]
-    Bronze --> LG[3-Agent LangGraph\nanalyze · critique · plan]
-    LG --> Silver[(Silver GCS\nParquet)]
-    Silver --> Gold[(Gold BigQuery)]
-    Gold --> Obs[Observability\nPrometheus · Grafana · RAG]
-    Gold --> Search[Hybrid Search\nBM25 + FAISS]
-    Gold --> Recs[Recommendations\nRules + Graph]
+
+    subgraph Sources["Data Sources (reference: food catalog)"]
+        S1[USDA Branded]
+        S2[USDA Foundation]
+        S3[OpenFoodFacts]
+        S4[OpenFDA Recalls]
+        S5[Amazon ESCI]
+    end
+
+    subgraph Bronze["Bronze  gs://mip-bronze-2024/"]
+        B[source/YYYY/MM/DD/  JSONL part files]
+    end
+
+    subgraph AgentETL["3-Agent LangGraph  (per source × domain)"]
+        Cache[(Redis YAML Cache\nschema fingerprint · 30d TTL)]
+        A1[Agent 1 – Orchestrator\nmap source cols → domain schema\nemit RENAME·CAST·FORMAT·DERIVE ops]
+        A2[Agent 2 – Critic  opt-in\nvalidate ops · reject bad ones]
+        A3[Agent 3 – Planner\nreorder block sequence\ncannot add or remove blocks]
+        YAML[DYNAMIC_MAPPING_source.yaml\nsrc/blocks/generated/domain/]
+    end
+
+    subgraph Silver["Silver  gs://mip-silver-2024/  (per source+date)"]
+        SP[N Parquet part files\nschema-conformed to domain]
+    end
+
+    subgraph PSourceGold["Per-Source Gold  run_gold_pipeline"]
+        CatP[concat part files\npd.concat frames]
+        Ded1[fuzzy dedup\ncolumn_wise_merge\ngolden_record_select]
+        EnrA["Enrichment Cascade  ↓"]
+        BQ[(BigQuery  mip_gold.products\nappend-mode per source)]
+    end
+
+    subgraph EnrFlow["Enrichment Agents  (Agentic Cascade)"]
+        E1[S1 – Deterministic\nregex · keyword rules\nallergens · dietary_tags · is_organic]
+        E2[S2 – KNN Agent\nFAISS IndexFlatIP cosine top-5\nprimary_category only]
+        E3[S3 – LLM-RAG Agent\nClaude Haiku + top-3 neighbors\nprimary_category only]
+        Corpus[(FAISS Corpus\ngrows each run\nS2+S3 write resolved rows back)]
+        E1 --> E2 --> E3
+        E2 <--> Corpus
+        E3 --> Corpus
+    end
+
+    subgraph CrossGold["Cross-Source Gold  run_domain_gold_gcs  --domain-gcs"]
+        BQR[read all domain sources from BQ\nnutrition: usda-branded + usda-foundation + off\nsafety: openfda    retail: esci]
+        CatBQ[pd.concat all source frames]
+        XDed[cross-source fuzzy dedup\nskipped for single-source domains]
+        SJoin[LEFT JOIN OpenFDA Silver\nnutrition only\nrecall_class · recall_reason · allergen override]
+        DQR[recompute dq_score_post + dq_delta\non merged canonical columns]
+        GCS[(GCS  mip-gold-2024/domain/date/\nParquet in 500k-row chunks)]
+    end
+
+    Sources --> Bronze
+    DP --> AgentETL
+    Bronze --> AgentETL
+    A1 <--> Cache
+    Cache -- "hit: skip A1·A2·A3" --> YAML
+    A1 --> A2 --> A3 --> YAML
+    YAML --> Silver
+
+    Silver --> CatP --> Ded1 --> EnrA --> BQ
+    EnrA -. drives .-> EnrFlow
+
+    BQ --> BQR --> CatBQ --> XDed --> SJoin --> DQR --> GCS
+
+    GCS --> Obs[Observability\nPrometheus · Grafana · RAG]
+    GCS --> Search[Hybrid Search\nBM25 + FAISS · 99k products]
+    GCS --> Recs[Recommendations\nRules + Graph · 105 rules]
 ```
 
-**Domain Packs** (`config/schemas/<domain>_schema.json`) are the extension point. Define a schema, run the CLI — the orchestrator generates YAML transforms on first contact. Six domains shipped: `nutrition`, `safety`, `retail`, `pricing`, `finance`, `manufacturing`.
+### Domain Pack structure
+
+```
+domain_packs/<domain>/
+├── block_sequence.yaml      # silver_sequence · sequence · gold_sequence
+└── custom_blocks/*.py       # optional domain-specific Block subclasses
+
+config/schemas/<domain>_schema.json   # canonical column definitions
+src/blocks/generated/<domain>/        # DYNAMIC_MAPPING_<source>.yaml  (auto-generated)
+                                      # VALIDATION_PROFILE_<source>.json
+```
+
+Six domains shipped: `nutrition` · `safety` · `retail` · `pricing` · `finance` · `manufacturing`. Add a new domain → author a schema JSON + block_sequence.yaml, run the CLI once.
 
 ---
 
-## How It Works
+## Agentic Flows
+
+### LangGraph — 3-agent schema analysis
 
 ```mermaid
 stateDiagram-v2
     [*] --> load_source
     load_source --> analyze_schema
     analyze_schema --> critique_schema : --with-critic + cache miss
-    analyze_schema --> check_registry : cache hit
+    analyze_schema --> check_registry  : cache hit or critic off
     critique_schema --> check_registry
     check_registry --> plan_sequence
     plan_sequence --> run_pipeline
@@ -48,11 +125,40 @@ stateDiagram-v2
 
 | Agent | Role | Model |
 |---|---|---|
-| **Orchestrator** | Maps source → canonical schema, emits YAML transform ops | `deepseek/deepseek-chat` |
-| **Critic** *(opt-in)* | Validates ops against 7 rules, rejects/amends bad ones | `claude-sonnet-4-6` |
-| **Planner** | Reorders block sequence (cannot add/remove blocks) | `deepseek/deepseek-chat` |
+| **Orchestrator** | Maps source columns → domain schema; emits YAML transform ops; writes `DYNAMIC_MAPPING_<source>.yaml` on first run | `deepseek/deepseek-chat` |
+| **Critic** *(opt-in `--with-critic`)* | Validates ops against 7 deterministic rules; rejects or amends bad ops | `claude-sonnet-4-6` |
+| **Planner** | Reorders block sequence from `block_sequence.yaml`; dropped blocks auto-re-appended before `dq_score_post` | `deepseek/deepseek-chat` |
 
-Redis caches the full YAML blob on schema fingerprint (30-day TTL) — replay runs skip all three agents.
+Redis caches the full YAML blob keyed on schema fingerprint (30-day TTL) — cache hit skips all three agents entirely.
+
+### Enrichment — 3-tier agentic cascade
+
+```mermaid
+flowchart LR
+    Row[unresolved row] --> E1
+
+    subgraph E1["S1 — Deterministic"]
+        R1[regex + keyword rules\non the row's own text]
+    end
+
+    subgraph E2["S2 — KNN Agent"]
+        R2[embed product text\nFAISS cosine top-5 neighbors\nvote threshold 0.45]
+    end
+
+    subgraph E3["S3 — LLM-RAG Agent"]
+        R3[Claude Haiku\ntop-3 S2 neighbors as context\nconfidence floor 0.60]
+    end
+
+    Corpus[(FAISS Corpus\npersists across runs)]
+
+    E1 -- "unresolved primary_category" --> E2
+    E2 -- "below confidence threshold" --> E3
+    E2 -- "resolved rows" --> Corpus
+    E3 -- "resolved rows" --> Corpus
+    E3 --> Done[enriched row]
+```
+
+> **Hard safety rule.** `allergens`, `is_organic`, `dietary_tags` — S1 extraction only, never inferred by S2 or S3. A false-positive allergen label is a regulatory-grade mistake. `LLMEnrichBlock` has a post-run assertion tripwire — if it fires, fix the upstream cause, do not silence it.
 
 ---
 
