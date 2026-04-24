@@ -170,12 +170,10 @@ class CacheClient:
                 if value is not None:
                     self._stats.record_hit(prefix)
                     return value
-                self._stats.record_miss(prefix)
                 # Redis miss — fall through to SQLite if available
             except Exception as e:
                 logger.warning(f"Cache GET error [{prefix}]: {e}")
                 self._available = False
-                self._stats.record_miss(prefix)
 
         if self._sqlite is not None:
             value = self._sqlite.get(key)
