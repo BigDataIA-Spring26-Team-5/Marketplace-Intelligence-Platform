@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 CHROMA_HOST       = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT       = int(os.getenv("CHROMA_PORT", "8000"))
 COLLECTION_NAME   = "uc3_products"
-BM25_INDEX_PATH   = Path("/tmp/uc3_bm25_index.pkl")
+BM25_INDEX_PATH   = Path(__file__).resolve().parent.parent.parent / "output" / "uc3" / "bm25_index.pkl"
 
 
 def _build_text(row: dict) -> str:
@@ -155,6 +155,7 @@ class ProductIndexer:
         doc_ids = df["_doc_id"].tolist()
 
         bm25 = BM25Okapi(corpus)
+        BM25_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(BM25_INDEX_PATH, "wb") as f:
             pickle.dump((bm25, doc_ids, df.to_dict("records")), f)
         logger.info("BM25 index saved to %s", BM25_INDEX_PATH)

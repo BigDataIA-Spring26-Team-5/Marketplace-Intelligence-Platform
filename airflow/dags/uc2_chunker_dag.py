@@ -29,8 +29,8 @@ default_args = {
 
 
 def run_chunker(**kwargs):
-    from src.uc2_observability.chunker import chunk_new_events
-    rows_processed = chunk_new_events()
+    from src.uc2_observability.chunker import Chunker
+    rows_processed = Chunker().run_once()
     print(f"Chunker: embedded {rows_processed} new audit events into ChromaDB.")
     return rows_processed
 
