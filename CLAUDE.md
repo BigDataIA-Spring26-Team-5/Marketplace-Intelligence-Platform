@@ -243,9 +243,13 @@ UC2 event emission from the graph (`run_started`, `run_completed`, `block_start`
 
 `app.py` has a sidebar Mode radio (Pipeline / Observability). `grafana/docker-compose.yml` runs a local Prometheus + Pushgateway + Grafana stack; the full platform `docker-compose.yml` at the repo root adds Kafka, Airflow, Postgres, ChromaDB, Redis, and MLflow. Service endpoints live in [ENDPOINTS.md](ENDPOINTS.md).
 
-### UC3 / UC4 are scaffolding only
+### UC3 / UC4 are fully implemented
 
-[src/uc3_search/](src/uc3_search/) and [src/uc4_recommendations/](src/uc4_recommendations/) contain **placeholder classes that all raise `NotImplementedError`**. They are not wired into `demo.py`, `app.py`, the graph, or the CLI. Don't assume they work.
+[src/uc3_search/](src/uc3_search/) — BM25 + ChromaDB semantic search with Reciprocal Rank Fusion (RRF k=60). Files: `indexer.py` (builds BM25 + ChromaDB product collection), `hybrid_search.py` (query → BM25 top-50 + semantic top-50 → RRF → unified ranking), `evaluator.py` (precision/recall metrics). Wired into REST API under `/v1/search`.
+
+[src/uc4_recommendations/](src/uc4_recommendations/) — association rules + graph traversal recommender. Files: `association_rules.py` (mlxtend Apriori, loads transactions from BigQuery `instacart.transactions_with_names`), `graph_store.py` (networkx cross-category graph), `recommender.py` (unified interface: also-bought via rules + cross-category via graph; before/after lift demo using UC1 canonical IDs). Wired into REST API under `/v1/recommendations`.
+
+Both are registered in `src/api/main.py` and health-checked at `/v1/health`.
 
 ### Airflow orchestration
 
@@ -270,7 +274,11 @@ UC2 event emission from the graph (`run_started`, `run_completed`, `block_start`
 - Python 3.11 (Poetry) + FastAPI (already in stack via mcp_server.py), Uvicorn, Pydantic v2 (016-kernel-domain-separation)
 - SQLite via CheckpointManager (run state); Postgres (observability queries); Redis + SQLite fallback (cache) (016-kernel-domain-separation)
 - Python 3.11 + Streamlit (UI), LangGraph 0.4, LiteLLM 1.55, pandas 2.2, PyYAML, pathlib (stdlib), ast (stdlib), subprocess (stdlib) (018-domain-kit-ui-builder)
-- Local VM filesystem (`domain_packs/`), `output/kit_audit.jsonl` (append-only log) (018-domain-kit-ui-builder)
+- Local VM filesystem (`domain_packs/`), `domain_packs/<domain>/.audit.jsonl` per-domain audit log (018-domain-kit-ui-builder)
+- `src/ui/domain_kits.py` — Domain Packs Streamlit panel (4 tabs: Generate Pack, Block Scaffold, Preview/Validate, Manage Packs) (018-domain-kit-ui-builder)
+- `src/ui/kit_generator.py` — `generate_domain_kit(domain_name, description, csv_content)` → 3 YAML files via LLM (018-domain-kit-ui-builder)
+- `src/ui/block_scaffolder.py` — `generate_block_scaffold(domain_name, description)` → Python Block scaffold via LLM + ast.parse() (018-domain-kit-ui-builder)
+- app.py sidebar radio now has three modes: "Pipeline", "Observability", "Domain Packs" (018-domain-kit-ui-builder)
 
 - Python 3.11 (Poetry). pandas 2.2, LangGraph 0.4, LiteLLM 1.55, sentence-transformers, rapidfuzz, pyarrow, redis-py, streamlit, structlog, prometheus_client, chromadb, networkx, mlxtend, rank-bm25.
 - Redis at `localhost:6379` (SQLite fallback at `output/cache.db`).
