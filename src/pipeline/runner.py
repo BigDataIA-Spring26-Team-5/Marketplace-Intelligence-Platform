@@ -167,6 +167,7 @@ class PipelineRunner:
                         block_seq=len(audit_log),
                         dq_score=_compute_block_dq(df),
                         rows=len(df),
+                        duration_ms=int((time.perf_counter() - ts_start) * 1000),
                     )
                 except Exception as e:
                     logger.warning(f"UC2 block DQ push failed ({block_name}): {e}")
