@@ -59,7 +59,7 @@ class LLMEnrichBlock(Block):
         }
 
         # Strategy 2: KNN corpus search (primary_category only)
-        df, needs_enrichment, s2_stats = embedding_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"))
+        df, needs_enrichment, s2_stats = embedding_enrich(df, enrich_cols, needs_enrichment, cache_client=config.get("cache_client"), collection_name=config.get("corpus_collection"))
         stats["embedding"] = s2_stats["resolved"]
         stats["corpus_augmented"] = s2_stats.get("corpus_augmented", 0)
         stats["corpus_size_after"] = s2_stats.get("corpus_size_after", 0)

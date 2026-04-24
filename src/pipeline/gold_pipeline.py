@@ -71,19 +71,36 @@ def _enrich_with_safety_signals(gold_df: pd.DataFrame, date: str) -> pd.DataFram
     Non-fatal — on any failure returns gold_df with is_recalled=False.
     """
     try:
-        prefix = f"openfda/{date}/"
         client = _gcs_client()
         bucket = client.bucket(SILVER_BUCKET)
+
+        # Try requested date first; fall back to latest available OpenFDA partition
+        prefix = f"openfda/{date}/"
         blobs = [
             b for b in bucket.list_blobs(prefix=prefix)
             if b.name.endswith(".parquet") and not b.name.split("/")[-1].startswith("sample")
         ]
         if not blobs:
-            logger.warning("No safety Silver Parquet found at gs://%s/%s — skipping safety join", SILVER_BUCKET, prefix)
-            gold_df["is_recalled"]    = False
-            gold_df["recall_class"]   = None
-            gold_df["recall_reason"]  = None
-            gold_df["published_date"] = None
+            logger.warning("No safety Silver at gs://%s/%s — scanning for latest partition", SILVER_BUCKET, prefix)
+            all_blobs = [
+                b for b in bucket.list_blobs(prefix="openfda/")
+                if b.name.endswith(".parquet") and not b.name.split("/")[-1].startswith("sample")
+            ]
+            if all_blobs:
+                # Pick latest by blob name (lexicographic = chronological for YYYY/MM/DD)
+                latest = sorted(all_blobs, key=lambda b: b.name)[-1]
+                latest_date = "/".join(latest.name.split("/")[1:4])
+                prefix = f"openfda/{latest_date}/"
+                blobs = [b for b in all_blobs if b.name.startswith(prefix)]
+                logger.info("Using latest OpenFDA silver partition: %s (%d files)", prefix, len(blobs))
+
+        if not blobs:
+            logger.warning("No safety Silver Parquet found anywhere under openfda/ — skipping safety join")
+            gold_df["is_recalled"]  = False
+            gold_df["recall_class"] = None
+            gold_df["recall_reason"] = None
+            if "published_date" not in gold_df.columns:
+                gold_df["published_date"] = None
             return gold_df
 
         frames = []
@@ -200,6 +217,9 @@ def _write_gold_bq(df: pd.DataFrame, source_name: str) -> int:
 
     df = df.copy()
     df["source_name"] = source_name
+    # Always normalize data_source to the canonical source label so downstream
+    # queries never see raw barcodes / file paths that silver may carry.
+    df["data_source"] = source_name
 
     # Force-cast expected string columns to object (str) so BQ autodetect
     # never infers INTEGER/FLOAT for null-only columns in sparse sources.
@@ -287,6 +307,7 @@ def run_gold_pipeline(
     cache_client=None,
     skip_enrichment: bool = False,
     limit: int | None = None,
+    corpus_collection: str | None = None,
 ) -> int:
     """
     Read Silver Parquet for source_name/date, run gold block sequence, write to BQ.
@@ -467,6 +488,19 @@ def _save_gold_run_log(run_log: dict) -> Path | None:
 def _push_gold_metrics(run_log: dict) -> None:
     """Push metrics to Prometheus Pushgateway via MetricsExporter (source_name label → Grafana)."""
     try:
+        import os, urllib.parse, urllib.request
+        source = run_log.get("source_name", "")
+        pgw = os.getenv("UC2_PUSHGATEWAY_URL", "localhost:9091")
+        # Delete all previous runs for this source so Grafana shows only the latest
+        try:
+            src_enc = urllib.parse.quote(source, safe='')
+            req = urllib.request.Request(
+                f"http://{pgw}/metrics/job/etl_pipeline/source/{src_enc}",
+                method="DELETE"
+            )
+            urllib.request.urlopen(req, timeout=3)
+        except Exception:
+            pass
         from src.uc2_observability.metrics_exporter import MetricsExporter
         MetricsExporter().push(run_log)
         logger.info("Prometheus metrics pushed for run_id=%s", run_log["run_id"])
@@ -516,6 +550,13 @@ def _read_domain_from_bq(sources: list[str]) -> pd.DataFrame:
             f"No rows found in BQ for source_name IN ({sources_sql}). "
             "Run per-source gold pipelines first."
         )
+    # Cast StringDtype → object (same defensive cast as _read_silver_parquet)
+    # prevents pick_best in column_wise_merge from falling through to first-value
+    # path instead of longest-string path for string columns.
+    string_cols = [c for c in df.columns if str(df[c].dtype) == "string"]
+    if string_cols:
+        df[string_cols] = df[string_cols].astype(object)
+        logger.debug("Cast %d StringDtype columns to object: %s", len(string_cols), string_cols)
     logger.info("BQ read: %d rows for sources %s", len(df), sources)
     return df
 
@@ -542,36 +583,73 @@ def run_domain_gold_gcs(
     from src.blocks.dq_score import _SKIP_ALWAYS
     from src.pipeline.writers.gcs_gold_writer import GCSGoldWriter
 
-    if cache_client is None:
-        try:
-            from src.cache.client import CacheClient
-            cache_client = CacheClient()
-            if not cache_client._available:
-                logger.warning("Redis unavailable — running without cache for domain GCS gold")
-        except Exception as e:
-            logger.warning("Cache init failed for domain GCS gold: %s", e)
-
+    # Cross-source dedup must NOT use the per-source Redis dedup cache.
+    # Per-source runs cache cluster IDs in high numeric ranges; reusing them
+    # causes the union-find counter to exceed row count → every row gets a
+    # unique cluster ID → nothing merges. Always run cache-free here.
     combined = _read_domain_from_bq(sources)
     logger.info("Domain GCS gold: %d rows from BQ for domain=%s sources=%s", len(combined), domain, sources)
 
+    unified = get_domain_schema(domain)
+
+    # Drop columns not in the domain schema to prevent schema bleed
+    # (e.g. retail product_id/locale/color columns appearing in nutrition gold
+    # and dragging DQ completeness scores down via always-null fields).
+    domain_cols = set(unified.columns.keys())
+    # Always keep pipeline-internal columns even if not in schema
+    _KEEP_ALWAYS = {"source_name", "data_source", "duplicate_group_id", "canonical",
+                    "enriched_by_llm", "dq_score_pre", "dq_score_post", "dq_delta",
+                    "is_recalled", "recall_class", "recall_reason", "recall_number",
+                    "recall_status", "distribution_pattern"}
+    keep_cols = [c for c in combined.columns if c in domain_cols or c in _KEEP_ALWAYS]
+    dropped = [c for c in combined.columns if c not in keep_cols]
+    if dropped:
+        logger.info("Dropping %d non-domain columns from combined df: %s", len(dropped), dropped)
+    combined = combined[keep_cols].copy()
+
     combined.attrs["dq_reference_columns"] = [c for c in combined.columns if c not in _SKIP_ALWAYS]
 
-    # Cross-source dedup only — enrichment already done per-source before BQ write
-    _DEDUP_BLOCKS = ["fuzzy_deduplicate", "column_wise_merge", "golden_record_select"]
+    # Cross-source dedup only for multi-source domains (nutrition: USDA+OFF).
+    # Single-source domains (safety, retail) are already deduped per-source —
+    # skip fuzzy dedup entirely and write BQ rows straight to GCS.
+    if len(sources) > 1:
+        _DEDUP_BLOCKS = ["fuzzy_deduplicate", "column_wise_merge", "golden_record_select"]
+        config = {
+            "dq_weights": unified.dq_weights.model_dump(),
+            "domain": domain,
+            "unified_schema": unified,
+            "cache_client": None,  # never use Redis cache for cross-source dedup
+        }
+        block_reg = BlockRegistry.instance()
+        runner = PipelineRunner(block_reg)
+        result_df, _ = runner.run(df=combined, block_sequence=_DEDUP_BLOCKS, config=config)
+        logger.info("Domain GCS gold: %d canonical rows after cross-source dedup (domain=%s)", len(result_df), domain)
+    else:
+        result_df = combined
+        logger.info("Domain GCS gold: single-source domain=%s — skipping dedup, %d rows pass through", domain, len(result_df))
 
-    unified = get_domain_schema(domain)
-    config = {
-        "dq_weights": unified.dq_weights.model_dump(),
-        "domain": domain,
-        "unified_schema": unified,
-        "cache_client": cache_client,
-    }
+    # Recall join for nutrition — LEFT JOIN with OpenFDA safety silver
+    if domain == "nutrition":
+        result_df = _enrich_with_safety_signals(result_df, date)
 
-    block_reg = BlockRegistry.instance()
-    runner = PipelineRunner(block_reg)
-    result_df, _ = runner.run(df=combined, block_sequence=_DEDUP_BLOCKS, config=config)
-
-    logger.info("Domain GCS gold: %d canonical rows after cross-source dedup (domain=%s)", len(result_df), domain)
+    # Recompute dq_score_post on the final merged df using clean domain columns.
+    # Per-source dq_score_post was computed with the attrs bug (column_wise_merge
+    # cleared attrs → sparse enrichment cols dragged completeness down).
+    # Recomputing here on the correctly-filtered domain column set gives a fair delta.
+    try:
+        from src.blocks.dq_score import compute_dq_score, _SKIP_ALWAYS as _DQ_SKIP
+        ref_cols = [c for c in result_df.columns if c not in _DQ_SKIP]
+        weights = unified.dq_weights.model_dump()
+        result_df["dq_score_post"] = compute_dq_score(result_df, weights=weights, reference_columns=ref_cols)
+        result_df["dq_delta"] = (result_df["dq_score_post"] - result_df["dq_score_pre"]).round(4)
+        logger.info(
+            "Recomputed dq_score_post: mean=%.2f pre=%.2f delta=%.2f",
+            result_df["dq_score_post"].mean(),
+            result_df["dq_score_pre"].mean(),
+            result_df["dq_delta"].mean(),
+        )
+    except Exception as exc:
+        logger.warning("dq_score_post recompute failed (non-fatal): %s", exc)
 
     writer = GCSGoldWriter()
     rows_written = 0
@@ -590,12 +668,44 @@ def run_domain_gold_gcs(
 
 def main():
     parser = argparse.ArgumentParser(description="Silver → Gold pipeline (dedup + enrichment → BQ)")
-    parser.add_argument("--source", required=True, help="Source name (e.g. off, usda/branded, usda/survey)")
+    parser.add_argument("--source", default=None, help="Source name for per-source BQ run (e.g. off, usda/branded)")
     parser.add_argument("--date",   required=True, help="Silver partition date YYYY/MM/DD")
     parser.add_argument("--domain", default="nutrition", choices=["nutrition", "safety", "pricing", "retail"])
     parser.add_argument("--skip-enrichment", action="store_true", help="Skip enrichment blocks (dedup-only run)")
     parser.add_argument("--limit", type=int, default=None, help="Random sample N rows from Silver before processing")
+    parser.add_argument("--corpus-collection", default=None, help="ChromaDB collection name for S2 KNN (default: product_corpus)")
+    parser.add_argument(
+        "--domain-gcs",
+        action="store_true",
+        help=(
+            "Read all sources for --domain from BQ, run cross-source dedup, "
+            "write canonical Parquet to gs://mip-gold-2024/{domain}/{date}/. "
+            "Per-source BQ runs must already be complete. "
+            "For nutrition: sources=usda/branded,usda/foundation,off. "
+            "For safety: sources=openfda. For retail: sources=esci."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.domain_gcs:
+        _DOMAIN_SOURCES = {
+            "nutrition": ["usda/branded", "usda/foundation", "off"],
+            "safety":    ["openfda"],
+            "retail":    ["esci"],
+        }
+        sources = _DOMAIN_SOURCES.get(args.domain)
+        if not sources:
+            raise ValueError(f"No sources configured for domain '{args.domain}'")
+        rows = run_domain_gold_gcs(
+            domain=args.domain,
+            date=args.date,
+            sources=sources,
+        )
+        logger.info("Domain GCS gold complete: %d rows → gs://mip-gold-2024/%s/%s/", rows, args.domain, args.date)
+        return
+
+    if not args.source:
+        parser.error("--source is required unless --domain-gcs is set")
 
     rows = run_gold_pipeline(
         source_name=args.source,
@@ -603,6 +713,7 @@ def main():
         domain=args.domain,
         skip_enrichment=args.skip_enrichment,
         limit=args.limit,
+        corpus_collection=args.corpus_collection,
     )
     logger.info(f"Gold pipeline complete: {rows} rows written to BQ {BQ_GOLD_DATASET}.{BQ_GOLD_TABLE}")
 
