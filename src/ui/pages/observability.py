@@ -3,7 +3,8 @@ from __future__ import annotations
 import streamlit as st
 from src.ui.utils.api_client import load_run_logs
 
-GRAFANA_URL  = "http://localhost:3000"
+import os
+GRAFANA_URL  = os.getenv("GRAFANA_BASE_URL", "http://35.239.47.242:3000")
 GRAFANA_DASH = f"{GRAFANA_URL}/d/etl-pipeline-observability/etl-pipeline-observability?orgId=1&refresh=10s&theme=light&kiosk"
 
 
@@ -236,15 +237,19 @@ def render_observability():
 
         # Suggested prompts
         if not st.session_state.chat_history:
-            sp1, sp2, sp3 = st.columns(3)
             suggestions = [
-                "What was the avg DQ delta this week?",
-                "Which source has the most quarantined rows?",
-                "Show me runs with DQ score below 50",
+                ("📊", "What's the overall pipeline success rate?"),
+                ("🔴", "Which source has the most quarantined rows?"),
+                ("📈", "Which source improved DQ the most?"),
+                ("💰", "What was the total LLM cost across all runs?"),
+                ("⚠️",  "Show me all failed runs and their errors"),
+                ("🧬", "How many rows were enriched via S3 LLM?"),
             ]
-            for col, prompt in zip([sp1, sp2, sp3], suggestions):
+            r1, r2, r3 = st.columns(3)
+            r4, r5, r6 = st.columns(3)
+            for col, (icon, prompt) in zip([r1, r2, r3, r4, r5, r6], suggestions):
                 with col:
-                    if st.button(prompt, key=f"sugg_{prompt[:20]}", use_container_width=True):
+                    if st.button(f"{icon} {prompt}", key=f"sugg_{prompt[:24]}", use_container_width=True):
                         st.session_state._pending_chat = prompt
                         st.rerun()
 
@@ -271,53 +276,137 @@ def render_observability():
 
 
 def _chatbot_query(query: str) -> tuple[str, list[str]]:
-    """Try ObservabilityChatbot, fallback to simple log analysis."""
+    """Try ObservabilityChatbot, fallback to rich log analytics."""
     try:
         from src.uc2_observability.rag_chatbot import ObservabilityChatbot
         bot = ObservabilityChatbot()
         resp = bot.chat(query)
-        return resp.answer, resp.cited_run_ids
+        if resp.answer and len(resp.answer) > 20:
+            return resp.answer, resp.cited_run_ids
     except Exception:
         pass
 
-    # Simple fallback
     logs = load_run_logs()
+    if not logs:
+        return "No pipeline run data available yet. Run a pipeline first.", []
+
     q = query.lower()
+    total = len(logs)
+    ok    = sum(1 for r in logs if r.get("status") == "success")
+    err   = sum(1 for r in logs if r.get("status") == "error")
 
-    if "avg" in q and "dq" in q:
-        deltas = [r["dq_delta"] for r in logs if r.get("dq_delta") is not None]
+    # ── success rate ──
+    if any(w in q for w in ["success rate", "pass", "overall", "how many success"]):
+        rate = ok / total * 100 if total else 0
+        cited = [r.get("run_id", "")[:8] for r in logs if r.get("status") == "success"][:5]
+        return (
+            f"**Overall success rate: {rate:.1f}%** ({ok} succeeded, {err} failed out of {total} total runs).\n\n"
+            f"Sources: {', '.join(sorted({r.get('source_name','?') for r in logs if r.get('status')=='success'}))}"
+        ), cited
+
+    # ── DQ delta / improvement ──
+    if any(w in q for w in ["dq", "quality", "delta", "improv", "score"]):
+        deltas = [(r.get("source_name", "?"), r.get("dq_delta") or 0, r.get("dq_score_pre") or 0, r.get("dq_score_post") or 0)
+                  for r in logs if r.get("dq_delta") is not None]
         if deltas:
-            avg = sum(deltas) / len(deltas)
-            return f"Average DQ delta across {len(deltas)} runs: {avg:+.2f} points.", []
-        return "No DQ delta data available.", []
+            avg_d = sum(d for _, d, _, _ in deltas) / len(deltas)
+            best = max(deltas, key=lambda x: x[1])
+            worst = min(deltas, key=lambda x: x[1])
+            return (
+                f"**Average DQ improvement: {avg_d:+.2f} pts** across {len(deltas)} runs.\n\n"
+                f"🟢 Best improvement: **{best[0]}** ({best[2]:.1f} → {best[3]:.1f}, Δ={best[1]:+.2f})\n\n"
+                f"🔴 Worst: **{worst[0]}** ({worst[2]:.1f} → {worst[3]:.1f}, Δ={worst[1]:+.2f})\n\n"
+                f"High DQ delta means the pipeline cleaned and enriched the data significantly."
+            ), []
 
-    if "quarantin" in q:
+    # ── quarantine ──
+    if any(w in q for w in ["quarantin", "flagged", "rejected"]):
         by_src: dict[str, int] = {}
         for r in logs:
             src = r.get("source_name", r.get("source", "unknown"))
             by_src[src] = by_src.get(src, 0) + (r.get("rows_quarantined") or 0)
+        total_q = sum(by_src.values())
+        total_r = sum((r.get("rows_in") or 0) for r in logs)
+        qrate = total_q / total_r * 100 if total_r else 0
         if by_src:
             top = max(by_src, key=lambda k: by_src[k])
-            return f"Source with most quarantined rows: **{top}** ({by_src[top]:,} rows).", []
-        return "No quarantine data found.", []
+            rows_sorted = sorted(by_src.items(), key=lambda x: x[1], reverse=True)
+            breakdown = "\n".join(f"  • {s}: {v:,}" for s, v in rows_sorted[:5])
+            return (
+                f"**Total quarantined: {total_q:,} rows** ({qrate:.2f}% of all input).\n\n"
+                f"Source with most quarantined rows: **{top}** ({by_src[top]:,})\n\n"
+                f"Breakdown:\n{breakdown}\n\n"
+                f"Quarantine reasons include: null key columns, schema violations, duplicate records."
+            ), []
 
-    if "error" in q or "fail" in q:
+    # ── enrichment / LLM / tiers ──
+    if any(w in q for w in ["enrich", "llm", "s3", "s1", "s2", "tier", "deterministic"]):
+        s1 = sum((r.get("enrichment_stats") or {}).get("deterministic", 0) for r in logs)
+        s2 = sum((r.get("enrichment_stats") or {}).get("embedding", 0) for r in logs)
+        s3 = sum((r.get("enrichment_stats") or {}).get("llm", 0) for r in logs)
+        grand = s1 + s2 + s3 or 1
+        return (
+            f"**Total enrichment across all runs: {grand:,} resolutions**\n\n"
+            f"🟢 S1 Deterministic (regex/keyword): **{s1:,}** ({s1/grand*100:.1f}%)\n\n"
+            f"🔵 S2 KNN Corpus (FAISS similarity): **{s2:,}** ({s2/grand*100:.1f}%)\n\n"
+            f"🟡 S3 RAG-LLM (Claude/LLM-assisted): **{s3:,}** ({s3/grand*100:.1f}%)\n\n"
+            f"S3 only fires when S1 and S2 can't resolve — keeps LLM cost minimal."
+        ), []
+
+    # ── cost ──
+    if any(w in q for w in ["cost", "usd", "spend", "money", "expensive"]):
+        from src.ui.utils.api_client import prom_scalar
+        try:
+            total_cost = prom_scalar('sum(etl_llm_cost_usd_total)') or 0.0
+            return (
+                f"**Total LLM cost: ${total_cost:.4f} USD** across all pipeline runs.\n\n"
+                f"Cost comes from S3 RAG-LLM enrichment (Claude Haiku). "
+                f"S1 and S2 are free. The architecture is designed to minimize S3 calls."
+            ), []
+        except Exception:
+            return "Cost data not available — Prometheus may be offline.", []
+
+    # ── errors / failures ──
+    if any(w in q for w in ["error", "fail", "broken", "crash"]):
         errors = [r for r in logs if r.get("status") == "error"]
         if errors:
-            srcs = ", ".join({r.get("source_name", "?") for r in errors[:5]})
-            return f"Found {len(errors)} failed runs. Sources: {srcs}.", [r.get("run_id", "")[:8] for r in errors[:5]]
-        return "No failed runs found.", []
+            srcs = sorted({r.get("source_name", "?") for r in errors})
+            err_details = "\n".join(
+                f"  • {r.get('source_name','?')} — {str(r.get('error','unknown'))[:60]}"
+                for r in errors[:5]
+            )
+            cited = [r.get("run_id", "")[:8] for r in errors[:5]]
+            return (
+                f"**{len(errors)} failed run(s)** out of {total} total.\n\n"
+                f"Sources affected: {', '.join(srcs)}\n\n"
+                f"Details:\n{err_details}"
+            ), cited
+        return f"No failed runs found. All {total} recorded runs completed successfully.", []
 
-    if "success" in q or "rate" in q:
-        total = len(logs)
-        ok = sum(1 for r in logs if r.get("status") == "success")
-        rate = ok / total * 100 if total else 0
-        return f"Overall success rate: {rate:.1f}% ({ok}/{total} runs).", []
+    # ── source breakdown ──
+    if any(w in q for w in ["source", "which source", "breakdown"]):
+        by_src: dict[str, dict] = {}
+        for r in logs:
+            src = r.get("source_name", "unknown")
+            if src not in by_src:
+                by_src[src] = {"runs": 0, "rows": 0, "ok": 0}
+            by_src[src]["runs"] += 1
+            by_src[src]["rows"] += (r.get("rows_in") or 0)
+            if r.get("status") == "success":
+                by_src[src]["ok"] += 1
+        lines = "\n".join(
+            f"  • **{s}**: {v['runs']} runs, {v['rows']:,} rows, {v['ok']/v['runs']*100:.0f}% success"
+            for s, v in sorted(by_src.items(), key=lambda x: x[1]["rows"], reverse=True)
+        )
+        return f"**Pipeline runs by source:**\n\n{lines}", []
 
-    total = len(logs)
-    ok = sum(1 for r in logs if r.get("status") == "success")
+    # ── default summary ──
+    total_rows = sum((r.get("rows_in") or 0) for r in logs)
+    total_out  = sum((r.get("rows_out") or 0) for r in logs)
     return (
-        f"I have {total} pipeline runs in memory. {ok} succeeded. "
-        "Ask about DQ scores, quarantine rates, enrichment tiers, or specific sources.",
-        []
-    )
+        f"**MIP Pipeline Summary** — {total} runs recorded\n\n"
+        f"✅ Success: {ok} | ❌ Failed: {err}\n\n"
+        f"📦 Total rows processed: {total_rows:,} in → {total_out:,} out\n\n"
+        f"Try asking: *success rate*, *DQ improvement*, *quarantine breakdown*, "
+        f"*enrichment tiers*, *LLM cost*, *failed runs*, or *source breakdown*."
+    ), []

@@ -58,20 +58,24 @@ def render_recommendations():
         products_df = _load_products()
         rules_df    = _load_rules()
 
-        if products_df is not None:
-            # Use product_name if available, else product_id
-            name_col = "product_name" if "product_name" in products_df.columns else products_df.columns[0]
-            product_names = products_df[name_col].dropna().unique().tolist()[:500]
-            product_names = [str(p) for p in product_names if str(p) not in ("nan", "None", "")]
-        else:
-            product_names = []
-
-        # If product_name not populated, fall back to IDs from rules
+        # Only show products that actually have rules (antecedent_id in rules)
+        product_names = []
+        if products_df is not None and rules_df is not None:
+            ant_col_check = "antecedent_id" if "antecedent_id" in rules_df.columns else None
+            id_col_check  = "product_id"    if "product_id"    in products_df.columns else products_df.columns[0]
+            name_col_check = "product_name" if "product_name"  in products_df.columns else products_df.columns[0]
+            if ant_col_check:
+                ant_ids_in_rules = set(rules_df[ant_col_check].astype(str).values)
+                filtered_prods = products_df[products_df[id_col_check].astype(str).isin(ant_ids_in_rules)]
+                product_names = sorted(
+                    [str(p) for p in filtered_prods[name_col_check].dropna().unique()
+                     if str(p) not in ("nan", "None", "")]
+                )[:500]
+        # Fallback: ids directly from rules
         if not product_names and rules_df is not None:
-            ant_col = "antecedent_id" if "antecedent_id" in rules_df.columns else None
-            if ant_col:
-                product_names = rules_df[ant_col].dropna().unique().tolist()[:500]
-                product_names = [str(p) for p in product_names]
+            ant_col_check = "antecedent_id" if "antecedent_id" in rules_df.columns else None
+            if ant_col_check:
+                product_names = sorted([str(p) for p in rules_df[ant_col_check].dropna().unique()])[:500]
 
         col1, col2 = st.columns([3, 1])
         with col1:
@@ -344,32 +348,65 @@ def _get_recommendations(product: str, rec_type: str,
             pass
         return str(pid)
 
+    ant_ids_set = set(rules_df[ant_col].astype(str).values)
+
     def _find_pid(query):
         """Resolve product name or ID to antecedent_id string."""
-        # Direct match
-        if str(query) in rules_df[ant_col].astype(str).values:
-            return str(query)
-        # Name lookup in products
+        q = str(query).strip()
+        # Direct match as antecedent_id
+        if q in ant_ids_set:
+            return q
+        # Name lookup via products df
         if products_df is not None:
             try:
                 id_col   = "product_id"   if "product_id"   in products_df.columns else products_df.columns[0]
                 name_col = "product_name" if "product_name" in products_df.columns else products_df.columns[1]
-                mask = products_df[name_col].astype(str).str.lower().str.contains(str(query).lower(), na=False)
+                # Exact name
+                exact = products_df[products_df[name_col].astype(str).str.lower() == q.lower()]
+                if not exact.empty:
+                    pid = str(exact.iloc[0][id_col])
+                    if pid in ant_ids_set:
+                        return pid
+                # Partial name
+                mask = products_df[name_col].astype(str).str.lower().str.contains(q.lower(), na=False, regex=False)
                 hits = products_df[mask]
-                if not hits.empty:
-                    return str(hits.iloc[0][id_col])
+                for _, row in hits.iterrows():
+                    pid = str(row[id_col])
+                    if pid in ant_ids_set:
+                        return pid
             except Exception:
                 pass
         return None
 
     pid = _find_pid(product)
     if not pid:
-        # Try treating query as pid directly
         pid = str(product)
 
     matches = rules_df[rules_df[ant_col].astype(str) == pid].nlargest(10, "lift")
     if matches.empty:
-        return [], f"No rules found for product '{product}' (resolved pid: {pid}). Try searching by product ID."
+        # Try fuzzy: find any rule where antecedent_id resolves to a name containing the query
+        if products_df is not None:
+            try:
+                id_col   = "product_id"   if "product_id"   in products_df.columns else products_df.columns[0]
+                name_col = "product_name" if "product_name" in products_df.columns else products_df.columns[1]
+                # All antecedent ids → find ones whose product_name matches query
+                ant_ids_series = rules_df[ant_col].astype(str).unique()
+                sub = products_df[products_df[id_col].astype(str).isin(ant_ids_series)]
+                sub_match = sub[sub[name_col].astype(str).str.lower().str.contains(str(product).lower(), na=False, regex=False)]
+                if not sub_match.empty:
+                    pid = str(sub_match.iloc[0][id_col])
+                    matches = rules_df[rules_df[ant_col].astype(str) == pid].nlargest(10, "lift")
+            except Exception:
+                pass
+
+    if matches.empty:
+        total_ant = len(ant_ids_set)
+        return [], (
+            f"No co-purchase rules found for **'{product}'**. "
+            f"The rules index contains {total_ant} unique antecedent products. "
+            f"Try selecting a different product from the dropdown — only products that appear "
+            f"in at least {int(len(rules_df))} transactions are indexed."
+        )
 
     results = []
     for _, row in matches.iterrows():

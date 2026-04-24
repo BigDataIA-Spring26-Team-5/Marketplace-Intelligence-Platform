@@ -141,32 +141,67 @@ def render_enrichment_lab():
             </div>""", unsafe_allow_html=True)
 
     with right:
-        # ChromaDB collections
+        # ChromaDB collections — each row rendered separately so Streamlit doesn't escape HTML
         collections = chroma_collections()
-        if collections:
-            st.markdown('<div class="card"><div class="card-title">ChromaDB Collections</div>', unsafe_allow_html=True)
-            for c in collections:
-                name = str(c.get("name", "")).replace("<", "&lt;").replace(">", "&gt;")
+        with st.container():
+            st.markdown('<div class="card"><div class="card-title">🗄 ChromaDB Collections</div>', unsafe_allow_html=True)
+            if collections:
+                coll_rows = ""
+                for c in collections:
+                    cname = str(c.get("name", "")).replace("<", "&lt;").replace(">", "&gt;")
+                    coll_rows += f"""
+                    <tr>
+                      <td style="font-family:var(--mono);font-size:14px;color:var(--text);">{cname}</td>
+                      <td><span class="badge info">vector store</span></td>
+                    </tr>"""
                 st.markdown(f"""
-                <div style="display:flex;align-items:center;justify-content:space-between;
-                            padding:9px 0;border-bottom:1px solid var(--border);">
-                  <span class="mono" style="font-size:13px;color:var(--text);">{name}</span>
-                  <span class="badge info">collection</span>
-                </div>""", unsafe_allow_html=True)
+                <table class="data-table" style="margin-top:4px;">
+                  <thead><tr><th>Collection</th><th>Type</th></tr></thead>
+                  <tbody>{coll_rows}</tbody>
+                </table>""", unsafe_allow_html=True)
+            else:
+                st.markdown('<div style="color:var(--text-dim);font-size:14px;padding:8px 0;">ChromaDB not reachable — start with <code>docker-compose -p mip up -d chroma</code></div>', unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
-        # Safety guardrails
-        st.markdown("""
-        <div class="card">
-          <div class="card-title">Safety Guardrails</div>
-          <div class="guardrail-badge">✓ allergens — S1 extraction only (never inferred)</div>
-          <div class="guardrail-badge">✓ dietary_tags — S1 extraction only</div>
-          <div class="guardrail-badge">✓ is_organic — S1 extraction only</div>
-          <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">
-            S2/S3 only resolves <code>primary_category</code>. Safety fields are never
-            inferred by KNN or LLM — false positives are worse than nulls.
-          </div>
-        </div>""", unsafe_allow_html=True)
+        # Safety guardrails — explicit items, always visible
+        with st.container():
+            st.markdown("""
+            <div class="card">
+              <div class="card-title">🛡 Safety Guardrails</div>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+                <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+                            background:var(--green-dim);border:1px solid rgba(47,158,68,.15);
+                            border-radius:6px;">
+                  <span style="color:var(--green);font-size:16px;margin-top:1px;">✓</span>
+                  <div>
+                    <div style="font-weight:700;font-size:14px;color:var(--green);">allergens</div>
+                    <div style="font-size:13px;color:var(--text-muted);">S1 extraction only — never inferred by KNN or LLM</div>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+                            background:var(--green-dim);border:1px solid rgba(47,158,68,.15);
+                            border-radius:6px;">
+                  <span style="color:var(--green);font-size:16px;margin-top:1px;">✓</span>
+                  <div>
+                    <div style="font-weight:700;font-size:14px;color:var(--green);">dietary_tags</div>
+                    <div style="font-size:13px;color:var(--text-muted);">S1 regex extraction from product text only</div>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+                            background:var(--green-dim);border:1px solid rgba(47,158,68,.15);
+                            border-radius:6px;">
+                  <span style="color:var(--green);font-size:16px;margin-top:1px;">✓</span>
+                  <div>
+                    <div style="font-weight:700;font-size:14px;color:var(--green);">is_organic</div>
+                    <div style="font-size:13px;color:var(--text-muted);">Boolean from product label — never LLM-inferred</div>
+                  </div>
+                </div>
+              </div>
+              <div style="font-size:13px;color:var(--text-dim);margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+                S2/S3 resolves <strong>only</strong> <code>primary_category</code>.
+                False positives on allergens (e.g. "gluten-free" for a barley product) are worse than nulls.
+              </div>
+            </div>""", unsafe_allow_html=True)
 
     # ── LLM cost breakdown ────────────────────────────────────────────────────
     try:
