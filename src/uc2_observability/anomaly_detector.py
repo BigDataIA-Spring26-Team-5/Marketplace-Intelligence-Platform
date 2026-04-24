@@ -32,8 +32,9 @@ logger = logging.getLogger(__name__)
 
 # ── configuration ──────────────────────────────────────────────────────────────
 
-PROMETHEUS_URL = "http://localhost:9090"
-PG_DSN = "host=localhost port=5432 dbname=uc2 user=mip password=REMOVED_PG_PASSWORD"
+import os as _os
+PROMETHEUS_URL = _os.getenv("UC2_PROMETHEUS_URL", "http://localhost:9090")
+PG_DSN = _os.getenv("UC2_PG_DSN", "host=localhost port=5432 dbname=uc2 user=mip password=REMOVED_PG_PASSWORD")
 
 # PromQL expressions used to build the feature matrix.
 # Each entry: (feature_name, promql_template)
@@ -145,8 +146,10 @@ def _build_feature_matrix(source: str, n_runs: int) -> tuple[np.ndarray, list[st
 
     matrix = np.array(rows, dtype=float)
     # Impute NaN with column means so IsolationForest doesn't fail
-    if matrix.shape[0] > 1:
-        col_means = np.nanmean(matrix, axis=0)
+    if matrix.shape[0] >= 1:
+        with np.errstate(all="ignore"):
+            col_means = np.nanmean(matrix, axis=0)
+        col_means = np.where(np.isnan(col_means), 0.0, col_means)
         inds = np.where(np.isnan(matrix))
         matrix[inds] = np.take(col_means, inds[1])
 
