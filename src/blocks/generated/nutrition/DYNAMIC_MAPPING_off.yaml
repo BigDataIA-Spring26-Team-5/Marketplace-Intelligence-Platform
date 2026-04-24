@@ -4,17 +4,15 @@ column_operations:
   action: set_null
   status: missing
   reason: No source data available
-- target: serving_size_unit
+- target: data_source
   type: string
-  action: set_null
-  status: missing
-  reason: Unit extraction from composite serving_size column may fail for some values;
-    fallback to null
+  action: set_default
+  default_value: OpenFoodFacts
 - target: serving_size_unit
   type: string
   action: regex_extract
   source: serving_size
-  pattern: (g|ml|l|kg|mg|oz|lb)\b
+  pattern: (g|oz|ml|l|kg|lb|mg)\b
   keep_source: true
 - target: serving_size
   type: float
@@ -26,15 +24,17 @@ column_operations:
   action: parse_date
   source: published_date
   format: unix_timestamp
-- target: data_source
-  type: string
-  action: format_transform
-  source: data_source
+- source: code
+  action: drop_column
 - source: pnns_groups_1
   action: drop_column
 - source: pnns_groups_2
   action: drop_column
 - source: traces
+  action: drop_column
+- source: labels
+  action: drop_column
+- source: countries
   action: drop_column
 - source: nova_group
   action: drop_column
@@ -51,6 +51,4 @@ column_operations:
 - source: proteins_100g
   action: drop_column
 - source: salt_100g
-  action: drop_column
-- source: countries
   action: drop_column

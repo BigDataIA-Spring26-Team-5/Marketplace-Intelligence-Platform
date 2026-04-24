@@ -28,9 +28,10 @@ logger = logging.getLogger(__name__)
 
 # ── configuration ──────────────────────────────────────────────────────────────
 
-PG_DSN = "host=localhost port=5432 dbname=uc2 user=mip password=mip_pass"
-CHROMA_HOST = "localhost"
-CHROMA_PORT = 8000
+import os as _os
+PG_DSN = _os.getenv("UC2_PG_DSN", "host=localhost port=5432 dbname=uc2 user=mip password=mip_pass")
+CHROMA_HOST = _os.getenv("UC2_CHROMA_HOST", "localhost")
+CHROMA_PORT = int(_os.getenv("UC2_CHROMA_PORT", "8000"))
 CHROMA_COLLECTION = "audit_corpus"
 EMBED_MODEL = "all-MiniLM-L6-v2"
 CURSOR_FILE = Path("/tmp/chunker_cursor.txt")

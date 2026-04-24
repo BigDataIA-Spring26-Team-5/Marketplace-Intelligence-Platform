@@ -316,8 +316,8 @@ class TestRouteAfterAnalyzeSchema:
 
     def test_routes_to_critique_schema_on_miss(self):
         from src.agents.graph import route_after_analyze_schema
-        assert route_after_analyze_schema({"cache_yaml_hit": False}) == "critique_schema"
+        assert route_after_analyze_schema({"cache_yaml_hit": False, "with_critic": True}) == "critique_schema"
 
     def test_routes_to_critique_schema_when_key_absent(self):
         from src.agents.graph import route_after_analyze_schema
-        assert route_after_analyze_schema({}) == "critique_schema"
+        assert route_after_analyze_schema({"with_critic": True}) == "critique_schema"

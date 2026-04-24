@@ -146,6 +146,7 @@ class MetricsCollector:
         block_seq: int,
         dq_score: float,
         rows: int,
+        duration_ms: float | None = None,
     ) -> None:
         """Push per-block DQ score to Pushgateway for real-time trend chart in Grafana."""
         try:
@@ -158,6 +159,10 @@ class MetricsCollector:
 
             g2 = Gauge("etl_block_rows", "Row count after block", labels, registry=registry)
             g2.labels(*label_vals).set(float(rows))
+
+            if duration_ms is not None:
+                g3 = Gauge("etl_block_duration_ms", "Block execution duration in ms", labels, registry=registry)
+                g3.labels(*label_vals).set(float(duration_ms))
 
             push_to_gateway(
                 self.pushgateway_url,
