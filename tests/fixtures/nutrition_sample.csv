@@ -1,0 +1,26 @@
+product_name,brand_owner,brand_name,ingredients,food_category,serving_size,serving_size_unit
+Cheerios Cereal,General Mills,Cheerios,"WHOLE GRAIN OATS, CORN STARCH, SUGAR, SALT, TRIPOTASSIUM PHOSPHATE, VITAMIN E",Breakfast Cereals,28.0,GRM
+Organic Whole Milk,Horizon Organic,Horizon,"ORGANIC WHOLE MILK, VITAMIN D3",Dairy,240.0,ML
+Almond Butter Smooth,Justin's,Justin's,"DRY ROASTED ALMONDS, PALM OIL, SALT",Nut Butters,32.0,GRM
+Gluten-Free Bread,Udi's,Udi's,"TAPIOCA STARCH, BROWN RICE FLOUR, WATER, EGGS, CANOLA OIL, YEAST, SALT",Bakery,28.0,GRM
+Vegan Protein Bar,RXBAR,RXBAR,"DATES, EGG WHITES, ALMONDS, CASHEWS, NATURAL FLAVORS",Snacks,52.0,GRM
+Peanut Butter Creamy,Jif,Jif,"ROASTED PEANUTS, SUGAR, HYDROGENATED VEGETABLE OILS (RAPESEED, COTTONSEED, SOYBEAN), SALT",Nut Butters,32.0,GRM
+2% Reduced Fat Milk,Dean Foods,DairyPure,"REDUCED FAT MILK, VITAMIN A PALMITATE, VITAMIN D3",Dairy,240.0,ML
+Sourdough Bread,Pepperidge Farm,Pepperidge Farm,"ENRICHED FLOUR (WHEAT FLOUR, NIACIN, REDUCED IRON, THIAMINE), WATER, YEAST, SALT",Bakery,45.0,GRM
+Honey Roasted Almonds,Blue Diamond,Blue Diamond,"ALMONDS, SUGAR, HONEY, CORN STARCH, SEA SALT",Snacks,28.0,GRM
+Cheddar Cheese Slices,Kraft,Kraft,"AMERICAN CHEESE (MILK, CHEESE CULTURES, SALT, ENZYMES), WATER, SODIUM PHOSPHATE",Dairy,21.0,GRM
+Organic Baby Spinach,Earthbound Farm,Earthbound Farm,ORGANIC BABY SPINACH,Vegetables,85.0,GRM
+Salmon Fillet,Wild Planet,Wild Planet,"WILD ALASKAN PINK SALMON, SEA SALT",Seafood,85.0,GRM
+Keto Granola,Kiss My Keto,Kiss My Keto,"ALMONDS, COCONUT, PUMPKIN SEEDS, SUNFLOWER SEEDS, ERYTHRITOL, COCONUT OIL, VANILLA",Breakfast Cereals,45.0,GRM
+Vanilla Greek Yogurt,Chobani,Chobani,"CULTURED NONFAT MILK, CANE SUGAR, NATURAL FLAVORS, PECTIN, LOCUST BEAN GUM",Dairy,150.0,GRM
+Wheat Crackers,Triscuit,Triscuit,"WHOLE GRAIN WHEAT, SOYBEAN OIL, SEA SALT",Snacks,28.0,GRM
+Orange Juice,Tropicana,Tropicana,"100% ORANGE JUICE (FILTERED WATER, ORANGE JUICE CONCENTRATE)",Beverages,240.0,ML
+Halal Ground Beef,Laura's,Laura's Lean,"BEEF, SALT",Meat & Poultry,113.0,GRM
+Tomato Basil Pasta Sauce,Rao's,Rao's Homemade,"TOMATOES, OLIVE OIL, ONIONS, GARLIC, BASIL, SALT",Condiments,125.0,GRM
+Kosher Chicken Broth,Manischewitz,Manischewitz,"CHICKEN BROTH, SALT, NATURAL FLAVORS",Soups,240.0,ML
+Vegan Cheddar Shreds,Daiya,Daiya,"FILTERED WATER, TAPIOCA STARCH, COCONUT OIL, CHICKPEA PROTEIN, SALT",Dairy,28.0,GRM
+Non-GMO Corn Chips,Late July,Late July,"ORGANIC CORN, SUNFLOWER OIL, SEA SALT",Snacks,28.0,GRM
+Low-Fat Cottage Cheese,Daisy,Daisy,"CULTURED SKIM MILK, CREAM, SALT",Dairy,113.0,GRM
+Infant Formula Powder,Similac,Similac,"NONFAT MILK, LACTOSE, WHEY PROTEIN, SOY OIL, COCONUT OIL, VITAMIN D",Baby Food,10.0,GRM
+Sugar-Free Chocolate,Lily's,Lily's,"UNSWEETENED CHOCOLATE, ERYTHRITOL, INULIN, COCOA BUTTER, STEVIA",Confectionery,40.0,GRM
+Vegetarian Black Beans,Bush's,Bush's Best,"PREPARED BLACK BEANS, WATER, SUGAR, SALT, CALCIUM CHLORIDE, DISODIUM EDTA",Vegetables,130.0,GRM
