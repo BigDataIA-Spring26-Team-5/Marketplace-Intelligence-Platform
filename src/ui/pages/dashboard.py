@@ -171,26 +171,29 @@ def render_dashboard():
             </div>""", unsafe_allow_html=True)
 
     # ── Prometheus source bar chart ───────────────────────────────────────────
+    _SKIP_SOURCES = {"part_0000", "*", "usda"}
     try:
         from src.ui.utils.api_client import prom_series
         series = prom_series('sum by (source) (etl_rows_in)')
         if series:
-            series_sorted = sorted(series, key=lambda x: x[1], reverse=True)[:8]
-            max_val = max(v for _, v in series_sorted) or 1
-            bars_html = ""
-            for labels, val in series_sorted:
-                src = labels.get("source", "unknown")
-                pct = val / max_val * 100
-                bars_html += f"""
-                <div class="bar-row">
-                  <div class="bar-label">{src[:12]}</div>
-                  <div class="bar-track"><div class="bar-fill bar-accent" style="width:{pct:.1f}%"></div></div>
-                  <div class="bar-val">{int(val):,}</div>
-                </div>"""
-            st.markdown(f"""
-            <div class="card">
-              <div class="card-title">Rows Processed by Source</div>
-              <div class="bar-chart">{bars_html}</div>
-            </div>""", unsafe_allow_html=True)
+            filtered = [(l, v) for l, v in series if l.get("source", "") not in _SKIP_SOURCES]
+            series_sorted = sorted(filtered, key=lambda x: x[1], reverse=True)[:8]
+            if series_sorted:
+                max_val = max(v for _, v in series_sorted) or 1
+                bars_html = ""
+                for labels, val in series_sorted:
+                    src = labels.get("source", "unknown")
+                    pct = val / max_val * 100
+                    bars_html += f"""
+                    <div class="bar-row">
+                      <div class="bar-label">{src[:14]}</div>
+                      <div class="bar-track"><div class="bar-fill bar-accent" style="width:{pct:.1f}%"></div></div>
+                      <div class="bar-val">{int(val):,}</div>
+                    </div>"""
+                st.markdown(f"""
+                <div class="card">
+                  <div class="card-title">Rows Processed by Source</div>
+                  <div class="bar-chart">{bars_html}</div>
+                </div>""", unsafe_allow_html=True)
     except Exception:
         pass

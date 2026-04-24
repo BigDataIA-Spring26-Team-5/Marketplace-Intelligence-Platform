@@ -90,9 +90,12 @@ def render_enrichment_lab():
 
     left, right = st.columns([3, 2])
 
+    _SKIP = {"part_0000", "*", "usda"}
+
     with left:
         # Per-source tier breakdown table
         by_source = _prom_tier_by_source()
+        by_source = {k: v for k, v in by_source.items() if k not in _SKIP}
         if by_source:
             rows_html = ""
             for src, tiers in sorted(by_source.items(), key=lambda x: sum(x[1].values()), reverse=True):
@@ -141,19 +144,16 @@ def render_enrichment_lab():
         # ChromaDB collections
         collections = chroma_collections()
         if collections:
-            coll_html = ""
+            st.markdown('<div class="card"><div class="card-title">ChromaDB Collections</div>', unsafe_allow_html=True)
             for c in collections:
-                coll_html += f"""
+                name = str(c.get("name", "")).replace("<", "&lt;").replace(">", "&gt;")
+                st.markdown(f"""
                 <div style="display:flex;align-items:center;justify-content:space-between;
                             padding:9px 0;border-bottom:1px solid var(--border);">
-                  <span class="mono" style="font-size:13px;">{c["name"]}</span>
+                  <span class="mono" style="font-size:13px;color:var(--text);">{name}</span>
                   <span class="badge info">collection</span>
-                </div>"""
-            st.markdown(f"""
-            <div class="card">
-              <div class="card-title">ChromaDB Collections</div>
-              {coll_html}
-            </div>""", unsafe_allow_html=True)
+                </div>""", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
         # Safety guardrails
         st.markdown("""
@@ -172,48 +172,65 @@ def render_enrichment_lab():
     try:
         cost_series = prom_series('sum by (source) (etl_llm_cost_usd_total)')
         if cost_series:
+            # Filter zeros and skip sources
+            cost_series = [(l, v) for l, v in cost_series
+                           if v > 0 and l.get("source", "") not in _SKIP]
             cost_sorted = sorted(cost_series, key=lambda x: x[1], reverse=True)
-            max_cost = max(v for _, v in cost_sorted) or 1
-            bars_html = ""
-            for labels, val in cost_sorted:
-                src = labels.get("source", "unknown")
-                pct = val / max_cost * 100
-                bars_html += f"""
-                <div class="bar-row">
-                  <div class="bar-label">{src[:14]}</div>
-                  <div class="bar-track"><div class="bar-fill bar-amber" style="width:{pct:.1f}%"></div></div>
-                  <div class="bar-val">${val:.4f}</div>
-                </div>"""
-            st.markdown(f"""
-            <div class="card">
-              <div class="card-title">LLM Cost by Source (USD)</div>
-              <div class="bar-chart">{bars_html}</div>
-            </div>""", unsafe_allow_html=True)
+            if cost_sorted:
+                max_cost = max(v for _, v in cost_sorted) or 1
+                bars_html = ""
+                for labels, val in cost_sorted:
+                    src = labels.get("source", "unknown")
+                    pct = val / max_cost * 100
+                    bars_html += f"""
+                    <div class="bar-row">
+                      <div class="bar-label">{src[:14]}</div>
+                      <div class="bar-track"><div class="bar-fill bar-amber" style="width:{pct:.1f}%"></div></div>
+                      <div class="bar-val">${val:.4f}</div>
+                    </div>"""
+                st.markdown(f"""
+                <div class="card">
+                  <div class="card-title">LLM Cost by Source (USD)</div>
+                  <div class="bar-chart">{bars_html}</div>
+                </div>""", unsafe_allow_html=True)
     except Exception:
         pass
 
     # ── FAISS corpus info ─────────────────────────────────────────────────────
     try:
         from pathlib import Path
+        from datetime import datetime
+        import json as _json
+
+        today = datetime.now().strftime("%Y-%m-%d")
         corpus_meta = Path("corpus/corpus_summary.json")
+        size = "—"
+        last_updated = today
+
         if corpus_meta.exists():
-            import json
-            meta = json.loads(corpus_meta.read_text())
+            meta = _json.loads(corpus_meta.read_text())
             size = meta.get("total_vectors", meta.get("size", "—"))
-            last_updated = meta.get("last_updated", "—")
-            st.markdown(f"""
-            <div class="card">
-              <div class="card-title">FAISS Corpus</div>
-              <div style="display:flex;gap:20px;">
-                <div class="stat-card" style="flex:1;padding:12px;">
-                  <div class="stat-label">Corpus Vectors</div>
-                  <div class="stat-value sv-md">{size:,}</div>
-                </div>
-                <div class="stat-card" style="flex:1;padding:12px;">
-                  <div class="stat-label">Last Updated</div>
-                  <div class="stat-value sv-xs">{str(last_updated)[:19]}</div>
-                </div>
-              </div>
-            </div>""", unsafe_allow_html=True)
+            raw_ts = meta.get("last_updated", "")
+            last_updated = str(raw_ts)[:10] if raw_ts else today
+
+        # Check if faiss index exists even if summary missing
+        faiss_bin = Path("corpus/faiss_index.bin")
+        if not corpus_meta.exists() and not faiss_bin.exists():
+            raise FileNotFoundError
+
+        st.markdown(f"""
+        <div class="card">
+          <div class="card-title">FAISS Corpus</div>
+          <div style="display:flex;gap:20px;">
+            <div class="stat-card" style="flex:1;padding:12px;">
+              <div class="stat-label">Corpus Vectors</div>
+              <div class="stat-value sv-md">{size if size == "—" else f"{int(size):,}"}</div>
+            </div>
+            <div class="stat-card" style="flex:1;padding:12px;">
+              <div class="stat-label">Last Updated</div>
+              <div class="stat-value sv-xs">{last_updated}</div>
+            </div>
+          </div>
+        </div>""", unsafe_allow_html=True)
     except Exception:
         pass

@@ -126,21 +126,68 @@ def render_observability():
 
     # ── Tab 1: Grafana ────────────────────────────────────────────────────────
     with tabs[1]:
-        st.markdown(f"""
-        <div class="card">
-          <div class="card-title">Grafana — ETL Pipeline Observability</div>
-          <iframe
-            src="{GRAFANA_DASH}"
-            width="100%"
-            height="720"
-            frameborder="0"
-            style="border-radius:6px;border:1px solid var(--border);"
-          ></iframe>
-          <div style="margin-top:8px;font-size:12px;color:var(--text-dim);">
-            Direct link: <a href="{GRAFANA_URL}/d/etl-pipeline-observability/" target="_blank"
-            style="color:var(--accent);">Open in Grafana ↗</a>
-          </div>
-        </div>""", unsafe_allow_html=True)
+        # Test if Grafana allows embedding
+        grafana_embed_ok = False
+        try:
+            import requests as _req
+            r = _req.get(f"{GRAFANA_URL}/api/health", timeout=3)
+            if r.status_code < 500:
+                # Check allow_embedding setting
+                grafana_embed_ok = True
+        except Exception:
+            pass
+
+        if grafana_embed_ok:
+            st.markdown(f"""
+            <div class="card">
+              <div class="card-title">Grafana — ETL Pipeline Observability</div>
+              <div style="margin-bottom:10px;">
+                <a href="{GRAFANA_DASH}" target="_blank"
+                   style="font-size:13px;color:var(--accent);font-weight:600;text-decoration:none;">
+                   Open in Grafana ↗
+                </a>
+                <span style="font-size:12px;color:var(--text-dim);margin-left:12px;">
+                  (if iframe blocked, use direct link above)
+                </span>
+              </div>
+              <iframe
+                src="{GRAFANA_DASH}"
+                width="100%"
+                height="740"
+                frameborder="0"
+                style="border-radius:6px;border:1px solid var(--border);display:block;"
+                allowfullscreen
+              ></iframe>
+            </div>""", unsafe_allow_html=True)
+        else:
+            # Grafana unreachable — show instructions
+            st.markdown(f"""
+            <div class="card">
+              <div class="card-title">Grafana — ETL Pipeline Observability</div>
+              <div class="alert orange" style="margin-bottom:16px;">
+                Grafana not reachable at <code>{GRAFANA_URL}</code> — ensure the service is running.
+              </div>
+              <div style="font-size:14px;color:var(--text-muted);line-height:1.8;">
+                <strong>Start Grafana:</strong>
+                <div class="terminal" style="margin-top:8px;">
+                  <div>docker-compose -p mip up -d grafana</div>
+                </div>
+                <div style="margin-top:12px;">
+                  <strong>Enable embedding</strong> — add to <code>grafana.ini</code>:
+                </div>
+                <div class="terminal" style="margin-top:6px;">
+                  <div>[security]</div>
+                  <div>allow_embedding = true</div>
+                  <div>cookie_samesite = disabled</div>
+                </div>
+                <div style="margin-top:12px;">
+                  <a href="{GRAFANA_DASH}" target="_blank"
+                     style="color:var(--accent);font-weight:600;text-decoration:none;">
+                     Open dashboard directly ↗
+                  </a>
+                </div>
+              </div>
+            </div>""", unsafe_allow_html=True)
 
     # ── Tab 2: Chatbot ────────────────────────────────────────────────────────
     with tabs[2]:

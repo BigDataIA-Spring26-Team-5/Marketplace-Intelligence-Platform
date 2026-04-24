@@ -7,8 +7,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import streamlit as st
 
 st.set_page_config(
-    page_title="DataForge — MIP",
-    page_icon="🔧",
+    page_title="Marketplace Intelligence Platform",
+    page_icon="🛒",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -44,21 +44,50 @@ header[data-testid="stHeader"] { display: none; }
   padding-right: 1.5rem !important;
   max-width: 100% !important;
 }
+body, p, div, span, li, td, th, input, select, textarea, label {
+  font-size: 14px !important;
+}
+h1 { font-size: 22px !important; }
+h2 { font-size: 18px !important; }
+h3 { font-size: 16px !important; }
 [data-testid="stSidebar"] { background: var(--surface) !important; border-right: 1px solid var(--border); }
 [data-testid="stSidebar"] > div:first-child { padding: 0 !important; }
 [data-testid="stSidebar"] .stButton > button {
-  background: transparent; border: none; border-left: 2px solid transparent;
-  color: var(--text-muted); font-size: 15px; font-weight: 500;
-  padding: 8px 14px; width: 100%; text-align: left; border-radius: 0;
-  display: flex; align-items: center; gap: 9px; transition: all 0.1s;
-  font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
+  background: transparent !important;
+  border: none !important;
+  border-left: 2px solid transparent !important;
+  color: var(--text-muted) !important; font-size: 14px !important; font-weight: 500 !important;
+  padding: 8px 14px !important; width: 100% !important; text-align: left !important; border-radius: 0 !important;
+  display: flex !important; align-items: center !important; gap: 9px !important; transition: all 0.1s !important;
+  font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif !important;
+  box-shadow: none !important;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
-  color: var(--text); background: var(--surface2);
+  color: var(--text) !important; background: var(--surface2) !important;
 }
-[data-testid="stSidebar"] .stButton.active > button {
-  color: var(--accent); background: var(--accent-dim);
-  border-left-color: var(--accent);
+/* Default Streamlit button overrides */
+.stButton > button {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+  transition: all 0.12s !important;
+}
+.stButton > button:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  background: var(--accent-dim) !important;
+}
+button[kind="primary"], .stButton > button[kind="primary"] {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
+}
+button[kind="primary"]:hover {
+  background: #1562a8 !important;
 }
 .sidebar-brand {
   display:flex; align-items:center; gap:10px;
@@ -169,11 +198,11 @@ header[data-testid="stHeader"] { display: none; }
 /* ── tables ── */
 .data-table { width:100%; border-collapse:collapse; font-size:14px; }
 .data-table th {
-  font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em;
+  font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em;
   color:var(--text-dim); padding:9px 12px;
   border-bottom:1px solid var(--border); background:var(--surface); text-align:left;
 }
-.data-table td { padding:11px 12px; border-bottom:1px solid var(--border); color:var(--text-muted); vertical-align:middle; }
+.data-table td { padding:11px 12px; border-bottom:1px solid var(--border); color:var(--text-muted); vertical-align:middle; font-size:14px; }
 .data-table td:first-child { color:var(--text); font-weight:500; }
 .data-table tr:last-child td { border-bottom:none; }
 .data-table tbody tr:hover { background:var(--surface); }
@@ -414,10 +443,21 @@ header[data-testid="stHeader"] { display: none; }
 }
 .divider { border:none; border-top:1px solid var(--border); margin:14px 0; }
 
-/* Stremlit tab overrides */
-.stTabs [data-baseweb="tab"] { font-size:14px; font-weight:600; }
+/* Streamlit tab overrides */
+.stTabs [data-baseweb="tab"] { font-size:14px !important; font-weight:600 !important; }
 .stTabs [data-baseweb="tab-list"] { border-bottom:1px solid var(--border); }
 .stSlider { margin-bottom:4px; }
+/* Streamlit widget font sizes */
+.stSelectbox label, .stTextInput label, .stTextArea label,
+.stCheckbox label, .stRadio label, .stFileUploader label { font-size:14px !important; }
+.stSelectbox > div > div, .stTextInput > div > div > input { font-size:14px !important; }
+.stMarkdown p, .stMarkdown li { font-size:14px !important; line-height:1.6; }
+/* Remove Streamlit red focus ring */
+.stTextInput > div > div > input:focus, .stTextArea textarea:focus {
+  border-color: var(--accent) !important; box-shadow: 0 0 0 2px rgba(25,113,194,.12) !important;
+}
+/* Streamlit expander */
+details summary { font-size:14px !important; font-weight:600 !important; }
 """
 
 st.markdown(f"<style>{GLOBAL_CSS}</style>", unsafe_allow_html=True)
@@ -457,10 +497,10 @@ run_badge = (
 st.markdown(f"""
 <div class="df-topbar">
   <div style="display:flex;align-items:center;gap:10px;">
-    <div style="width:28px;height:28px;background:var(--accent);border-radius:5px;
+    <div style="width:32px;height:32px;background:var(--accent);border-radius:6px;
                 display:flex;align-items:center;justify-content:center;
-                font-size:12px;font-weight:700;color:#fff;letter-spacing:-0.5px;">DF</div>
-    <div style="font-size:16px;font-weight:700;color:var(--text);">Data<span style="color:var(--accent);">Forge</span></div>
+                font-size:11px;font-weight:800;color:#fff;letter-spacing:-0.5px;">MIP</div>
+    <div style="font-size:15px;font-weight:700;color:var(--text);">Marketplace <span style="color:var(--accent);">Intelligence</span> Platform</div>
   </div>
   <div class="health-rail">
     <span class="health-label">Infra</span>
@@ -497,27 +537,30 @@ def _nav_btn(label: str, page_key: str, icon: str, badge: str = "", badge_class:
 with st.sidebar:
     st.markdown("""
     <div class="sidebar-brand">
-      <div class="sidebar-logo">DF</div>
-      <div class="sidebar-name">Data<span>Forge</span></div>
+      <div class="sidebar-logo" style="font-size:10px;letter-spacing:-0.5px;">MIP</div>
+      <div>
+        <div class="sidebar-name" style="font-size:14px;">Marketplace <span>Intel</span></div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:1px;">Platform v2.0</div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
-    _nav_btn("Dashboard",      "dashboard",  "◈")
+    _nav_btn("Dashboard",      "dashboard",  "🏠")
 
     st.markdown('<span class="nav-section-label">Pipeline</span>', unsafe_allow_html=True)
+    _nav_btn("Domain Packs",   "domain",     "📦")
     _nav_btn("Pipeline",       "pipeline",   "▶", "ETL")
-    _nav_btn("Domain Packs",   "domain",     "◧")
-    _nav_btn("Enrichment Lab", "enrichment", "◉")
+    _nav_btn("Enrichment Lab", "enrichment", "🔬")
 
     st.markdown('<span class="nav-section-label">Analytics</span>', unsafe_allow_html=True)
-    _nav_btn("Observability",    "observability",  "◎")
-    _nav_btn("MLflow",           "mlflow",         "◈", "EXP", "exp")
-    _nav_btn("Search",           "search",         "⊕")
-    _nav_btn("Recommendations",  "recs",           "◆")
+    _nav_btn("Observability",    "observability",  "📊")
+    _nav_btn("MLflow",           "mlflow",         "📈", "EXP", "exp")
+    _nav_btn("Search",           "search",         "🔍")
+    _nav_btn("Recommendations",  "recs",           "💡")
 
     st.markdown('<span class="nav-section-label">Ops</span>', unsafe_allow_html=True)
-    _nav_btn("Airflow",  "airflow", "◈", "12")
-    _nav_btn("Tests",    "tests",   "✓")
+    _nav_btn("Airflow",  "airflow", "🔄", "12")
+    _nav_btn("Tests",    "tests",   "✅")
 
 
 # ── Route to page ─────────────────────────────────────────────────────────────

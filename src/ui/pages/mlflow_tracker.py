@@ -26,7 +26,35 @@ def render_mlflow():
     # ── Experiment picker ─────────────────────────────────────────────────────
     experiments = mlflow_experiments()
     if not experiments:
-        st.markdown('<div class="alert orange">MLflow unreachable — check that the server is running on :5000</div>', unsafe_allow_html=True)
+        # Try a direct HTTP check to give a better error
+        try:
+            import requests as _req
+            r = _req.get(f"{MLFLOW_URL}/health", timeout=3)
+            mlflow_up = r.status_code < 500
+        except Exception:
+            mlflow_up = False
+
+        if not mlflow_up:
+            st.markdown(f"""
+            <div class="card">
+              <div class="card-title">MLflow Tracker</div>
+              <div class="alert orange" style="margin-bottom:14px;">
+                MLflow not reachable at <code>{MLFLOW_URL}</code>
+              </div>
+              <div style="font-size:14px;color:var(--text-muted);line-height:1.8;">
+                <strong>Start MLflow:</strong>
+                <div class="terminal" style="margin-top:8px;margin-bottom:10px;">
+                  <div>docker-compose -p mip up -d mlflow</div>
+                  <div class="t-dim"># or: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow.db</div>
+                </div>
+                <a href="{MLFLOW_URL}" target="_blank"
+                   style="color:var(--accent);font-weight:600;text-decoration:none;">
+                   Try opening MLflow UI ↗
+                </a>
+              </div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="alert orange">MLflow is running but returned no experiments yet. Run a pipeline first.</div>', unsafe_allow_html=True)
         return
 
     exp_names = [e["name"] for e in experiments]
