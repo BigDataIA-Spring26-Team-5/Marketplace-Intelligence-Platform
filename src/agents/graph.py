@@ -671,6 +671,13 @@ def save_output_node(state: PipelineState) -> dict:
         # Write structured run log
         log_path = RunLogWriter().save(state, status="success", start_time=_run_start)
 
+        # Log to MLflow (best-effort, never blocks pipeline)
+        try:
+            from src.uc2_observability.mlflow_bridge import log_run_to_mlflow
+            log_run_to_mlflow(state)
+        except Exception as e:
+            logger.warning(f"MLflow logging failed: {e}")
+
         # Push Prometheus metrics via Pushgateway + Postgres audit_events
         if log_path is not None:
             try:
