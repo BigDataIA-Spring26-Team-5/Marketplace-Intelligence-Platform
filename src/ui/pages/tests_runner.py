@@ -77,7 +77,13 @@ def render_tests():
 
     # Custom path
     with st.expander("Custom pytest command"):
-        custom_cmd = st.text_input("Command", value=" ".join(cmd))
+        st.markdown('<div style="font-size:13px;color:var(--text-dim);margin-bottom:4px;">Edit the command below and it will be used when you click Run Tests.</div>', unsafe_allow_html=True)
+        custom_cmd = st.text_input(
+            "pytest command",
+            value=" ".join(cmd),
+            label_visibility="collapsed",
+            placeholder="pytest tests/ -v",
+        )
         if custom_cmd:
             cmd = custom_cmd.split()
 

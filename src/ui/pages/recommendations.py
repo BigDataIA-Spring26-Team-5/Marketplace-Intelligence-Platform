@@ -165,23 +165,12 @@ def render_recommendations():
                     return str(pid)
                 try:
                     col = "product_id" if "product_id" in products_df_local.columns else products_df_local.columns[0]
-                    name_col = "product_name" if "product_name" in products_df_local.columns else products_df_local.columns[1]
-                    pid_str = str(pid)
-                    try:
-                        pid_int = str(int(float(pid_str)))
-                    except (ValueError, OverflowError):
-                        pid_int = pid_str
-                    for candidate in dict.fromkeys([pid_str, pid_int]):
-                        match = products_df_local[products_df_local[col].astype(str) == candidate]
-                        if not match.empty:
-                            return str(match.iloc[0][name_col])[:40]
-                    try:
-                        norm = products_df_local[col].apply(lambda x: str(int(float(x))) if str(x).replace('.','',1).isdigit() else str(x))
-                        match = products_df_local[norm == pid_int]
-                        if not match.empty:
-                            return str(match.iloc[0][name_col])[:40]
-                    except Exception:
-                        pass
+                    ncol = "product_name" if "product_name" in products_df_local.columns else products_df_local.columns[1]
+                    pid_n = _norm(str(pid))
+                    norm_col = products_df_local[col].astype(str).apply(_norm)
+                    match = products_df_local[norm_col == pid_n]
+                    if not match.empty:
+                        return str(match.iloc[0][ncol])[:40]
                 except Exception:
                     pass
                 return str(pid)
@@ -318,39 +307,16 @@ def _render_demo_ui():
     </div>""", unsafe_allow_html=True)
 
 
+def _norm(v: str) -> str:
+    """Normalize a product ID string: '22935.0' → '22935'."""
+    try:
+        return str(int(float(v)))
+    except (ValueError, TypeError):
+        return str(v)
+
+
 def _get_recommendations(product: str, rec_type: str,
                          rules_df=None, products_df=None) -> tuple[list[dict], str]:
-    # Try ProductRecommender — combine also_bought + you_might_like for richer results
-    try:
-        from src.uc4_recommendations.recommender import ProductRecommender
-        rec = ProductRecommender.load(str(UC4_DIR))
-        if rec_type == "also_bought":
-            results = rec.also_bought(product, top_k=10)
-            # supplement with graph traversal if fewer than 5
-            if len(results) < 5:
-                extra = rec.you_might_like(product, top_k=10)
-                seen = {r.get("product_id") for r in results}
-                for r in extra:
-                    if r.get("product_id") not in seen:
-                        results.append(r)
-                        seen.add(r.get("product_id"))
-        else:
-            results = rec.you_might_like(product, top_k=10)
-            # supplement with rules if fewer than 5
-            if len(results) < 5:
-                extra = rec.also_bought(product, top_k=10)
-                seen = {r.get("product_id") for r in results}
-                for r in extra:
-                    if r.get("product_id") not in seen:
-                        results.append(r)
-                        seen.add(r.get("product_id"))
-        if isinstance(results, list) and results:
-            return results[:9], ""
-        # Fall through if empty
-    except Exception:
-        pass
-
-    # Direct rules lookup fallback — works with saved parquet (no frozensets needed)
     if rules_df is None:
         rules_df = _load_rules()
     if products_df is None:
@@ -364,95 +330,86 @@ def _get_recommendations(product: str, rec_type: str,
     if not ant_col or not con_col:
         return [], "Rules parquet missing antecedent_id/consequent_id columns."
 
-    def _pid_to_name(pid):
-        if products_df is None:
-            return str(pid)
-        try:
-            id_col   = "product_id"   if "product_id"   in products_df.columns else products_df.columns[0]
-            name_col = "product_name" if "product_name" in products_df.columns else products_df.columns[1]
-            pid_str = str(pid)
-            try:
-                pid_int = str(int(float(pid_str)))
-            except (ValueError, OverflowError):
-                pid_int = pid_str
-            for candidate in dict.fromkeys([pid_str, pid_int]):
-                match = products_df[products_df[id_col].astype(str) == candidate]
-                if not match.empty:
-                    return str(match.iloc[0][name_col])
-            try:
-                norm = products_df[id_col].apply(lambda x: str(int(float(x))) if str(x).replace('.','',1).isdigit() else str(x))
-                match = products_df[norm == pid_int]
-                if not match.empty:
-                    return str(match.iloc[0][name_col])
-            except Exception:
-                pass
-        except Exception:
-            pass
-        return str(pid)
+    # Build normalized lookup columns once
+    rules_ant_norm = rules_df[ant_col].astype(str).apply(_norm)
+    ant_ids_norm   = set(rules_ant_norm.values)                  # e.g. {"22935", "24852", ...}
 
-    ant_ids_set = set(rules_df[ant_col].astype(str).values)
+    if products_df is not None:
+        id_col   = "product_id"   if "product_id"   in products_df.columns else products_df.columns[0]
+        name_col = "product_name" if "product_name" in products_df.columns else products_df.columns[1]
+        prod_id_norm = products_df[id_col].astype(str).apply(_norm)
+    else:
+        id_col = name_col = None
+        prod_id_norm = None
 
-    def _find_pid(query):
-        """Resolve product name or ID to antecedent_id string."""
-        q = str(query).strip()
-        # Direct match as antecedent_id
-        if q in ant_ids_set:
+    def _pid_to_name(pid: str) -> str:
+        if products_df is None or id_col is None:
+            return pid
+        pid_n = _norm(pid)
+        mask = prod_id_norm == pid_n
+        match = products_df[mask]
+        return str(match.iloc[0][name_col]) if not match.empty else pid
+
+    def _find_pid(query: str):
+        """Return the normalized antecedent_id that matches the product name/ID query."""
+        q = query.strip()
+        q_n = _norm(q)
+        # Direct ID match (normalized)
+        if q_n in ant_ids_norm:
+            return q_n
+        if q in ant_ids_norm:
             return q
-        # Name lookup via products df
+        # Name lookup
         if products_df is not None:
             try:
-                id_col   = "product_id"   if "product_id"   in products_df.columns else products_df.columns[0]
-                name_col = "product_name" if "product_name" in products_df.columns else products_df.columns[1]
-                # Exact name
+                # Exact name match
                 exact = products_df[products_df[name_col].astype(str).str.lower() == q.lower()]
-                if not exact.empty:
-                    pid = str(exact.iloc[0][id_col])
-                    if pid in ant_ids_set:
-                        return pid
-                # Partial name
+                for _, row in exact.iterrows():
+                    pid_n = _norm(str(row[id_col]))
+                    if pid_n in ant_ids_norm:
+                        return pid_n
+                # Partial name match
                 mask = products_df[name_col].astype(str).str.lower().str.contains(q.lower(), na=False, regex=False)
-                hits = products_df[mask]
-                for _, row in hits.iterrows():
-                    pid = str(row[id_col])
-                    if pid in ant_ids_set:
-                        return pid
+                for _, row in products_df[mask].iterrows():
+                    pid_n = _norm(str(row[id_col]))
+                    if pid_n in ant_ids_norm:
+                        return pid_n
             except Exception:
                 pass
         return None
 
     pid = _find_pid(product)
     if not pid:
-        pid = str(product)
-
-    matches = rules_df[rules_df[ant_col].astype(str) == pid].nlargest(10, "lift")
-    if matches.empty:
-        # Try fuzzy: find any rule where antecedent_id resolves to a name containing the query
+        # Last-resort: search products whose name contains query AND whose norm id is in rules
         if products_df is not None:
             try:
-                id_col   = "product_id"   if "product_id"   in products_df.columns else products_df.columns[0]
-                name_col = "product_name" if "product_name" in products_df.columns else products_df.columns[1]
-                # All antecedent ids → find ones whose product_name matches query
-                ant_ids_series = rules_df[ant_col].astype(str).unique()
-                sub = products_df[products_df[id_col].astype(str).isin(ant_ids_series)]
-                sub_match = sub[sub[name_col].astype(str).str.lower().str.contains(str(product).lower(), na=False, regex=False)]
-                if not sub_match.empty:
-                    pid = str(sub_match.iloc[0][id_col])
-                    matches = rules_df[rules_df[ant_col].astype(str) == pid].nlargest(10, "lift")
+                sub = products_df[products_df[name_col].astype(str).str.lower().str.contains(
+                    str(product).lower(), na=False, regex=False
+                )]
+                for _, row in sub.iterrows():
+                    pid_n = _norm(str(row[id_col]))
+                    if pid_n in ant_ids_norm:
+                        pid = pid_n
+                        break
             except Exception:
                 pass
 
-    if matches.empty:
-        total_ant = len(ant_ids_set)
+    if not pid:
+        total_ant = len(ant_ids_norm)
         return [], (
             f"No co-purchase rules found for **'{product}'**. "
-            f"The rules index contains {total_ant} unique antecedent products. "
-            f"Try selecting a different product from the dropdown — only products that appear "
-            f"in at least {int(len(rules_df))} transactions are indexed."
+            f"Rules index has {total_ant} antecedent products."
         )
+
+    # Filter rules using normalized antecedent column
+    matches = rules_df[rules_ant_norm == pid].nlargest(9, "lift")
+
+    if matches.empty:
+        return [], f"No co-purchase rules found for **'{product}'** (pid={pid})."
 
     results = []
     for _, row in matches.iterrows():
-        con_pid  = str(row[con_col])
+        con_pid  = _norm(str(row[con_col]))
         con_name = _pid_to_name(con_pid)
         results.append({
             "product_id":   con_pid,
