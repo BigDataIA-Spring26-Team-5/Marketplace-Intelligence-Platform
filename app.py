@@ -1006,7 +1006,7 @@ def main() -> None:
 
     # Sidebar: mode selector + cache controls + live log feed
     with st.sidebar:
-        mode = st.radio("Mode", ["Pipeline", "Search", "Recommendations", "Observability", "EDA", "Test Coverage"], key="app_mode")
+        mode = st.radio("Mode", ["Pipeline", "Search", "Recommendations", "Observability", "MLflow", "EDA", "Test Coverage"], key="app_mode")
         st.markdown("---")
         st.markdown("### Cache Controls")
         no_cache = st.checkbox(
@@ -1077,6 +1077,9 @@ def main() -> None:
         _render_recommendations_page()
     elif mode == "Observability":
         _render_observability_page()
+    elif mode == "MLflow":
+        from src.uc2_observability.mlflow_streamlit import render_mlflow_page
+        render_mlflow_page()
     elif mode == "EDA":
         from src.eda.streamlit_page import render_eda_page
         render_eda_page()
