@@ -135,11 +135,11 @@ button[kind="primary"]:hover { background: #1562a8 !important; }
 }
 .nav-badge.exp { background:var(--orange-dim); color:var(--orange); }
 
-/* ── topbar — thinner, moved up ── */
+/* ── topbar ── */
 .df-topbar {
   display:flex; align-items:center; justify-content:space-between;
   background:var(--bg); border-bottom:1px solid var(--border);
-  padding:0 20px; height:54px; margin-bottom:16px;
+  padding:0 20px; height:44px; margin-top:-8px; margin-bottom:12px;
   position:sticky; top:0; z-index:100;
 }
 .health-rail { display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
@@ -527,7 +527,7 @@ st.markdown(f"""
     <div style="width:30px;height:30px;background:var(--accent);border-radius:6px;
                 display:flex;align-items:center;justify-content:center;
                 font-size:10px;font-weight:800;color:#fff;letter-spacing:-0.5px;">MIP</div>
-    <div style="font-size:18px;font-weight:700;color:var(--text);">Marketplace <span style="color:var(--accent);">Intelligence</span> Platform</div>
+    <div style="font-size:22px;font-weight:800;color:var(--text);letter-spacing:-.3px;">Marketplace <span style="color:var(--accent);">Intelligence</span> Platform</div>
   </div>
   <div class="health-rail">
     <span class="health-label">Infra</span>

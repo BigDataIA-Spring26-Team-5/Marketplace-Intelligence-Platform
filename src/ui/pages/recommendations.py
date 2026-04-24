@@ -320,16 +320,32 @@ def _render_demo_ui():
 
 def _get_recommendations(product: str, rec_type: str,
                          rules_df=None, products_df=None) -> tuple[list[dict], str]:
-    # Try ProductRecommender first (handles graph traversal for you_might_like)
+    # Try ProductRecommender — combine also_bought + you_might_like for richer results
     try:
         from src.uc4_recommendations.recommender import ProductRecommender
         rec = ProductRecommender.load(str(UC4_DIR))
         if rec_type == "also_bought":
-            results = rec.also_bought(product)
+            results = rec.also_bought(product, top_k=10)
+            # supplement with graph traversal if fewer than 5
+            if len(results) < 5:
+                extra = rec.you_might_like(product, top_k=10)
+                seen = {r.get("product_id") for r in results}
+                for r in extra:
+                    if r.get("product_id") not in seen:
+                        results.append(r)
+                        seen.add(r.get("product_id"))
         else:
-            results = rec.you_might_like(product)
+            results = rec.you_might_like(product, top_k=10)
+            # supplement with rules if fewer than 5
+            if len(results) < 5:
+                extra = rec.also_bought(product, top_k=10)
+                seen = {r.get("product_id") for r in results}
+                for r in extra:
+                    if r.get("product_id") not in seen:
+                        results.append(r)
+                        seen.add(r.get("product_id"))
         if isinstance(results, list) and results:
-            return results, ""
+            return results[:9], ""
         # Fall through if empty
     except Exception:
         pass

@@ -259,13 +259,11 @@ def render_dashboard():
                 max_val = max(v for _, v in series_sorted) or 1
                 bars_html = ""
                 for labels, val in series_sorted:
-                    src = labels.get("source", "unknown")
                     pct = val / max_val * 100
                     bars_html += f"""
-                    <div class="bar-row">
-                      <div style="width:90px;flex-shrink:0;font-family:var(--mono);font-size:12px;color:var(--text-muted);text-align:right;">{src[:12]}</div>
-                      <div class="bar-track" style="flex:3"><div class="bar-fill bar-accent" style="width:{pct:.1f}%"></div></div>
-                      <div class="bar-val">{int(val):,}</div>
+                    <div class="bar-row" style="gap:12px;">
+                      <div class="bar-track" style="flex:1;max-width:180px;"><div class="bar-fill bar-accent" style="width:{pct:.1f}%"></div></div>
+                      <div style="font-family:var(--mono);font-size:15px;font-weight:700;color:var(--text);min-width:80px;">{int(val):,}</div>
                     </div>"""
                 st.markdown(f"""
                 <div class="card">
