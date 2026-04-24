@@ -576,7 +576,7 @@ class TestOutputGuardrails:
 
     def test_sequence_planner_allergens_before_enrich(self):
         blocks = [
-            "dq_score_pre", "llm_enrich", "extract_allergens", "dq_score_post"
+            "dq_score_pre", "llm_enrich", "nutrition__extract_allergens", "dq_score_post"
         ]
         result = validate_sequence_planner_output(
             result={"block_sequence": blocks},

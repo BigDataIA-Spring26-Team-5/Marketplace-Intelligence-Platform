@@ -104,13 +104,24 @@ A `yaml` cache hit sets `cache_yaml_hit` in state, which causes `route_after_ana
 
 ### Block sequence has a `"__generated__"` sentinel
 
-[src/registry/block_registry.py](src/registry/block_registry.py) `get_default_sequence(domain, unified_schema, enable_enrichment)` returns an ordered list containing the sentinel `"__generated__"`. [src/pipeline/runner.py](src/pipeline/runner.py) `PipelineRunner` replaces the sentinel with the `DynamicMappingBlock` for the current source at execution time. Two other composite names expand at runtime: `dedup_stage` → `fuzzy_deduplicate, column_wise_merge, golden_record_select`; `enrich_stage` → `extract_allergens, llm_enrich`. Don't remove the sentinel or reorder around it without understanding what is being injected where.
+[src/registry/block_registry.py](src/registry/block_registry.py) reads `domain_packs/<domain>/block_sequence.yaml` and returns the ordered list for that domain, containing the sentinel `"__generated__"`. [src/pipeline/runner.py](src/pipeline/runner.py) `PipelineRunner` replaces the sentinel with the `DynamicMappingBlock` for the current source at execution time. One composite name expands at runtime: `dedup_stage` → `fuzzy_deduplicate, column_wise_merge, golden_record_select`. `enrich_stage` is removed — domain packs list enrichment blocks individually. Don't remove the sentinel or reorder around it without understanding what is being injected where.
+
+### Domain Packs
+
+`domain_packs/<domain>/` is the canonical location for all domain-specific configuration. Adding a new domain requires **zero edits to `src/`**:
+
+- `block_sequence.yaml` — ordered block names (supports `sequence`, `silver_sequence`, `gold_sequence` keys)
+- `enrichment_rules.yaml` — S1 deterministic patterns and S3 LLM rules per field
+- `prompt_examples.yaml` — few-shot column mapping examples injected into Agent 1's prompt
+- `custom_blocks/*.py` — domain-specific `Block` subclasses; auto-discovered at registry init and registered as `<domain>__<block.name>`
+
+`EnrichmentRulesLoader(domain)` in `src/enrichment/rules_loader.py` reads `enrichment_rules.yaml` and exposes `s1_fields` / `llm_fields` / `safety_field_names()` consumed by `LLMEnrichBlock`.
 
 ### Pipeline modes change the block sequence
 
 `--mode` / `state["pipeline_mode"]` selects one of three shapes:
 
-- **`full`** (default): `dq_score_pre → __generated__ → cleaning → dedup_stage → enrich_stage → dq_score_post`. Output: CSV to `output/`.
+- **`full`** (default): sequence from `domain_packs/<domain>/block_sequence.yaml` (e.g. nutrition: `dq_score_pre → __generated__ → cleaning → dedup_stage → nutrition__extract_allergens → llm_enrich → dq_score_post`). Output: CSV to `output/`.
 - **`silver`**: schema transform only via `get_silver_sequence()` — **no dedup, no enrichment**. Output: Parquet to `gs://mip-silver-2024/<source>/<YYYY/MM/DD>/`. `save_output_node` also updates the watermark.
 - **`gold`**: invoked via `src/pipeline/gold_pipeline.py` (separate entry point, not the graph). Reads all Silver Parquet for a `source+date`, runs dedup + enrichment + DQ scoring, appends to BigQuery `mip_gold.products`.
 

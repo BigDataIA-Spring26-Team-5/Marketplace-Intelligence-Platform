@@ -1,0 +1,74 @@
+{
+  "product_name": {
+    "status": "mapped",
+    "required": true
+  },
+  "brand_owner": {
+    "status": "mapped",
+    "required": true
+  },
+  "brand_name": {
+    "status": "absent",
+    "required": false
+  },
+  "ingredients": {
+    "status": "absent",
+    "required": false
+  },
+  "category": {
+    "status": "enriched",
+    "required": false
+  },
+  "serving_size": {
+    "status": "absent",
+    "required": false
+  },
+  "serving_size_unit": {
+    "status": "absent",
+    "required": false
+  },
+  "published_date": {
+    "status": "derived",
+    "required": false
+  },
+  "data_source": {
+    "status": "absent",
+    "required": false
+  },
+  "recall_number": {
+    "status": "mapped",
+    "required": false
+  },
+  "recall_class": {
+    "status": "mapped",
+    "required": false
+  },
+  "recall_reason": {
+    "status": "mapped",
+    "required": false
+  },
+  "recall_status": {
+    "status": "mapped",
+    "required": false
+  },
+  "distribution_pattern": {
+    "status": "mapped",
+    "required": false
+  },
+  "allergens": {
+    "status": "enriched",
+    "required": false
+  },
+  "primary_category": {
+    "status": "enriched",
+    "required": false
+  },
+  "dietary_tags": {
+    "status": "enriched",
+    "required": false
+  },
+  "is_organic": {
+    "status": "enriched",
+    "required": false
+  }
+}

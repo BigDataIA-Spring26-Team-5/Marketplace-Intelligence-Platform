@@ -9,6 +9,7 @@ from src.blocks.base import Block
 from src.enrichment.deterministic import deterministic_enrich
 from src.enrichment.embedding import embedding_enrich
 from src.enrichment.llm_tier import llm_enrich
+from src.enrichment.rules_loader import EnrichmentRulesLoader
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,13 @@ class LLMEnrichBlock(Block):
 
     def run(self, df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
         config = config or {}
+        domain = config.get("domain", "nutrition")
         enrich_cols = config.get("enrichment_columns", ENRICHMENT_COLUMNS)
 
         df = df.copy()
+
+        # Load enrichment rules for this domain
+        rules_loader = EnrichmentRulesLoader(domain)
 
         # Ensure enrichment columns exist
         for col in enrich_cols:
@@ -46,15 +51,18 @@ class LLMEnrichBlock(Block):
         initial_missing = int(needs_enrichment.sum())
         logger.info(f"Enrichment: {initial_missing}/{len(df)} rows need enrichment")
 
-        # Strategy 1: Deterministic extraction (all safety fields + primary_category)
-        df, needs_enrichment, s1_stats = deterministic_enrich(df, enrich_cols, needs_enrichment)
+        # Strategy 1: Deterministic extraction using domain rules
+        df, needs_enrichment, s1_stats = deterministic_enrich(
+            df, enrich_cols, needs_enrichment, rules=rules_loader.s1_fields
+        )
         stats["deterministic"] = s1_stats["resolved"]
         logger.info(f"  S1 (deterministic extraction): resolved {stats['deterministic']} rows")
 
         # Capture safety field values after S1 to verify S2/S3 do not modify them
+        safety_field_names = rules_loader.safety_field_names() or _SAFETY_FIELDS
         safety_snapshot = {
             col: df[col].copy()
-            for col in _SAFETY_FIELDS
+            for col in safety_field_names
             if col in df.columns
         }
 

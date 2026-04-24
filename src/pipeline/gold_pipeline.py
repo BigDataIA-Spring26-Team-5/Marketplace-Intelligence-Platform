@@ -335,8 +335,7 @@ def run_gold_pipeline(
     gold_sequence = block_reg.get_gold_sequence(domain=domain)
 
     if skip_enrichment:
-        _ENRICHMENT_BLOCKS = {"extract_allergens", "llm_enrich"}
-        gold_sequence = [b for b in gold_sequence if b not in _ENRICHMENT_BLOCKS]
+        gold_sequence = [b for b in gold_sequence if b != "llm_enrich" and "extract_allergens" not in b]
         logger.info("--skip-enrichment: removed enrichment blocks from gold sequence")
 
     # Expand stages to individual block names for PipelineRunner
