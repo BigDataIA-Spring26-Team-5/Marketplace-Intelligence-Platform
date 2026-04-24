@@ -150,7 +150,94 @@ def render_tests():
 
         st.rerun()
 
-    # ── Test coverage hint ────────────────────────────────────────────────────
+    # ── Static coverage metrics (from docs/TEST_COVERAGE_REPORT.md) ──────────
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    metrics = [
+        ("Coverage (core)", "81.72%", "var(--green)"),
+        ("Tests Passing",   "920",    "var(--green)"),
+        ("Tests Failing",   "2",      "var(--red)"),
+        ("Tests Skipped",   "1",      "var(--amber)"),
+        ("Test Files",      "43",     "var(--accent)"),
+    ]
+    for col, (label, val, color) in zip([c1, c2, c3, c4, c5], metrics):
+        with col:
+            st.markdown(f"""
+            <div class="stat-card">
+              <div class="stat-label">{label}</div>
+              <div class="stat-value sv-md" style="color:{color}">{val}</div>
+            </div>""", unsafe_allow_html=True)
+
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+    # Module coverage breakdown
+    coverage_data = [
+        ("src/uc3_search/",           100, "success"),
+        ("src/schema/analyzer.py",    99,  "success"),
+        ("src/enrichment/deterministic.py", 98, "success"),
+        ("src/uc4_recommendations/association_rules.py", 97, "success"),
+        ("src/uc2_observability/mcp_server.py", 97, "success"),
+        ("src/uc4_recommendations/recommender.py", 92, "success"),
+        ("src/enrichment/embedding.py", 96, "success"),
+        ("src/pipeline/runner.py",    87,  "warning"),
+        ("src/models/llm.py",         84,  "warning"),
+        ("src/agents/graph.py",       72,  "warning"),
+        ("src/cache/client.py",       69,  "warning"),
+        ("src/blocks/dq_score.py",    33,  "error"),
+        ("src/blocks/extract_quantity_column.py", 32, "error"),
+    ]
+
+    lc, rc = st.columns(2)
+    with lc:
+        bars_html = ""
+        for module, pct, status in coverage_data[:7]:
+            color = {"success": "var(--green)", "warning": "var(--amber)", "error": "var(--red)"}[status]
+            bars_html += f"""
+            <div class="bar-row">
+              <div class="bar-label" style="width:220px;text-align:left;font-size:12px;">{module.split("/")[-1]}</div>
+              <div class="bar-track"><div class="bar-fill" style="width:{pct}%;background:{color};"></div></div>
+              <div class="bar-val">{pct}%</div>
+            </div>"""
+        st.markdown(f"""
+        <div class="card">
+          <div class="card-title">Module Coverage (top)</div>
+          <div class="bar-chart">{bars_html}</div>
+        </div>""", unsafe_allow_html=True)
+
+    with rc:
+        bars_html2 = ""
+        for module, pct, status in coverage_data[7:]:
+            color = {"success": "var(--green)", "warning": "var(--amber)", "error": "var(--red)"}[status]
+            bars_html2 += f"""
+            <div class="bar-row">
+              <div class="bar-label" style="width:220px;text-align:left;font-size:12px;">{module.split("/")[-1]}</div>
+              <div class="bar-track"><div class="bar-fill" style="width:{pct}%;background:{color};"></div></div>
+              <div class="bar-val">{pct}%</div>
+            </div>"""
+        st.markdown(f"""
+        <div class="card">
+          <div class="card-title">Module Coverage (gaps)</div>
+          <div class="bar-chart">{bars_html2}</div>
+        </div>""", unsafe_allow_html=True)
+
+    # Test strategy breakdown
+    strategy_rows = """
+    <tr><td>Unit Testing</td><td class="badge success">Implemented</td><td class="mono">tests/unit/</td><td>41 files, ~850 tests</td></tr>
+    <tr><td>Integration Testing</td><td class="badge success">Implemented</td><td class="mono">tests/integration/</td><td>7 files, ~60 tests</td></tr>
+    <tr><td>Property-Based (Hypothesis)</td><td class="badge success">Implemented</td><td class="mono">tests/property/</td><td>1 file, 12 tests</td></tr>
+    <tr><td>UC2 Observability</td><td class="badge success">Implemented</td><td class="mono">tests/uc2_observability/</td><td>5 files</td></tr>
+    """
+    st.markdown(f"""
+    <div class="card">
+      <div class="card-title">Test Strategies — Generated: 2026-04-24</div>
+      <table class="data-table">
+        <thead><tr><th>Strategy</th><th>Status</th><th>Location</th><th>Count</th></tr></thead>
+        <tbody>{strategy_rows}</tbody>
+      </table>
+    </div>""", unsafe_allow_html=True)
+
+    # Suite list (always visible)
     if "test_output" not in st.session_state:
         st.markdown("""
         <div class="card">
@@ -159,10 +246,10 @@ def render_tests():
             <thead><tr><th>Suite</th><th>Path</th><th>Description</th></tr></thead>
             <tbody>
               <tr><td>All Tests</td><td class="mono">tests/</td><td>Full test suite</td></tr>
-              <tr><td>Unit Tests</td><td class="mono">tests/ -m "not integration"</td><td>Fast tests, no external deps</td></tr>
+              <tr><td>Unit Tests</td><td class="mono">tests/ -m "not integration"</td><td>Fast, no external deps</td></tr>
               <tr><td>Integration Tests</td><td class="mono">tests/ -m integration</td><td>Requires Redis, Postgres, GCS</td></tr>
               <tr><td>Log Writer</td><td class="mono">tests/uc2_observability/test_log_writer.py</td><td>UC2 run log write/read</td></tr>
-              <tr><td>Cache Pipeline</td><td class="mono">tests/integration/test_cache_pipeline.py</td><td>Redis + SQLite cache integration</td></tr>
+              <tr><td>Cache Pipeline</td><td class="mono">tests/integration/test_cache_pipeline.py</td><td>Redis + SQLite cache</td></tr>
               <tr><td>Cache Client</td><td class="mono">tests/unit/test_cache_client.py</td><td>Cache client unit tests</td></tr>
             </tbody>
           </table>
