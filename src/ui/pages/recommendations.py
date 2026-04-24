@@ -166,9 +166,22 @@ def render_recommendations():
                 try:
                     col = "product_id" if "product_id" in products_df_local.columns else products_df_local.columns[0]
                     name_col = "product_name" if "product_name" in products_df_local.columns else products_df_local.columns[1]
-                    match = products_df_local[products_df_local[col].astype(str) == str(pid)]
-                    if not match.empty:
-                        return str(match.iloc[0][name_col])[:40]
+                    pid_str = str(pid)
+                    try:
+                        pid_int = str(int(float(pid_str)))
+                    except (ValueError, OverflowError):
+                        pid_int = pid_str
+                    for candidate in dict.fromkeys([pid_str, pid_int]):
+                        match = products_df_local[products_df_local[col].astype(str) == candidate]
+                        if not match.empty:
+                            return str(match.iloc[0][name_col])[:40]
+                    try:
+                        norm = products_df_local[col].apply(lambda x: str(int(float(x))) if str(x).replace('.','',1).isdigit() else str(x))
+                        match = products_df_local[norm == pid_int]
+                        if not match.empty:
+                            return str(match.iloc[0][name_col])[:40]
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 return str(pid)
@@ -341,9 +354,22 @@ def _get_recommendations(product: str, rec_type: str,
         try:
             id_col   = "product_id"   if "product_id"   in products_df.columns else products_df.columns[0]
             name_col = "product_name" if "product_name" in products_df.columns else products_df.columns[1]
-            match = products_df[products_df[id_col].astype(str) == str(pid)]
-            if not match.empty:
-                return str(match.iloc[0][name_col])
+            pid_str = str(pid)
+            try:
+                pid_int = str(int(float(pid_str)))
+            except (ValueError, OverflowError):
+                pid_int = pid_str
+            for candidate in dict.fromkeys([pid_str, pid_int]):
+                match = products_df[products_df[id_col].astype(str) == candidate]
+                if not match.empty:
+                    return str(match.iloc[0][name_col])
+            try:
+                norm = products_df[id_col].apply(lambda x: str(int(float(x))) if str(x).replace('.','',1).isdigit() else str(x))
+                match = products_df[norm == pid_int]
+                if not match.empty:
+                    return str(match.iloc[0][name_col])
+            except Exception:
+                pass
         except Exception:
             pass
         return str(pid)

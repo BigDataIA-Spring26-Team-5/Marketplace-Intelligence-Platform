@@ -188,24 +188,25 @@ def render_dashboard():
     s3_tot = sum((r.get("enrichment_stats") or {}).get("llm", 0)           for r in logs_all)
 
     # Bronze GCS data volume (from ENDPOINTS.md — confirmed record counts)
-    # USDA: 467k, OFF: 1M, openFDA: 25.1k, ESCI: 2M → ~3.49M records × ~500 bytes avg
+    # USDA: 467k, OFF: 1M, openFDA: 25.1k, ESCI: 2M → ~3.49M records × ~2KB avg JSON
     BRONZE_RECORDS = 467_000 + 1_000_000 + 25_100 + 2_000_000
-    BRONZE_GB      = round(BRONZE_RECORDS * 500 / 1e9, 2)
-    SILVER_GB      = round(total_rows_out * 300 / 1e9, 3)  # ~300 bytes/row parquet
+    BRONZE_GB      = round(BRONZE_RECORDS * 2000 / 1e9, 2)
+    SILVER_GB      = round(total_rows_out * 800 / 1e9, 3)  # ~800 bytes/row parquet
 
     st.markdown('<div style="margin-bottom:8px;font-size:13px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.07em;">Platform Metrics</div>', unsafe_allow_html=True)
 
+    _SC = "background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:14px 16px;min-height:115px;"
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
         st.markdown(f"""
-        <div class="stat-card">
+        <div style="{_SC}">
           <div class="stat-label">Bronze Volume</div>
           <div class="stat-value sv-md">{BRONZE_GB}<span class="stat-unit"> GB</span></div>
           <div class="stat-delta up">{BRONZE_RECORDS/1e6:.1f}M records ingested</div>
         </div>""", unsafe_allow_html=True)
     with m2:
         st.markdown(f"""
-        <div class="stat-card">
+        <div style="{_SC}">
           <div class="stat-label">Rows Processed</div>
           <div class="stat-value sv-md">{total_rows_in:,}</div>
           <div class="stat-delta up">ETL pipeline runs</div>
@@ -213,7 +214,7 @@ def render_dashboard():
     with m3:
         dq_pre_color = "var(--red)" if avg_pre < 50 else "var(--amber)"
         st.markdown(f"""
-        <div class="stat-card">
+        <div style="{_SC}">
           <div class="stat-label">Avg DQ Pre-Clean</div>
           <div class="stat-value sv-md" style="color:{dq_pre_color}">{avg_pre}</div>
           <div class="stat-delta">raw data quality score</div>
@@ -221,16 +222,15 @@ def render_dashboard():
     with m4:
         dq_post_color = "var(--green)" if avg_post >= 70 else "var(--amber)"
         st.markdown(f"""
-        <div class="stat-card">
+        <div style="{_SC}">
           <div class="stat-label">Avg DQ Post-Clean</div>
           <div class="stat-value sv-md" style="color:{dq_post_color}">{avg_post}</div>
           <div class="stat-delta up">after enrichment + cleaning</div>
         </div>""", unsafe_allow_html=True)
     with m5:
         enriched_tot = s1_tot + s2_tot + s3_tot
-        enrich_rate = round(enriched_tot / total_rows_in * 100, 1) if total_rows_in else 0
         st.markdown(f"""
-        <div class="stat-card">
+        <div style="{_SC}">
           <div class="stat-label">Enriched Records</div>
           <div class="stat-value sv-md">{enriched_tot:,}</div>
           <div class="stat-delta up">S1+S2+S3 enrichment coverage</div>
@@ -239,7 +239,7 @@ def render_dashboard():
         q_pct = round(total_quaran / total_rows_in * 100, 2) if total_rows_in else 0
         q_color = "var(--red)" if q_pct > 5 else ("var(--amber)" if q_pct > 1 else "var(--green)")
         st.markdown(f"""
-        <div class="stat-card">
+        <div style="{_SC}">
           <div class="stat-label">Quarantined Rows</div>
           <div class="stat-value sv-md" style="color:{q_color}">{total_quaran:,}</div>
           <div class="stat-delta">{q_pct}% of all input rows</div>
@@ -263,8 +263,8 @@ def render_dashboard():
                     pct = val / max_val * 100
                     bars_html += f"""
                     <div class="bar-row">
-                      <div class="bar-label">{src[:14]}</div>
-                      <div class="bar-track"><div class="bar-fill bar-accent" style="width:{pct:.1f}%"></div></div>
+                      <div style="width:90px;flex-shrink:0;font-family:var(--mono);font-size:12px;color:var(--text-muted);text-align:right;">{src[:12]}</div>
+                      <div class="bar-track" style="flex:3"><div class="bar-fill bar-accent" style="width:{pct:.1f}%"></div></div>
                       <div class="bar-val">{int(val):,}</div>
                     </div>"""
                 st.markdown(f"""
