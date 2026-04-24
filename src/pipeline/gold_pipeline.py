@@ -374,6 +374,8 @@ def run_gold_pipeline(
         "domain": domain,
         "unified_schema": unified,
         "cache_client": cache_client,
+        "run_id": run_id,
+        "source_name": source_name,
     }
 
     runner = PipelineRunner(block_reg)

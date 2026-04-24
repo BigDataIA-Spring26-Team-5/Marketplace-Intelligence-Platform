@@ -141,6 +141,11 @@ services:
   pushgateway:
     image: prom/pushgateway:latest
     container_name: mip_pushgateway
+    command:
+      - "--persistence.file=/data/pushgateway.db"
+      - "--persistence.interval=5m"
+    volumes:
+      - pushgateway_data:/data
     ports:
       - "9091:9091"
     restart: unless-stopped
@@ -215,3 +220,4 @@ volumes:
   grafana_data:
   chromadb_data:
   mlflow_data:
+  pushgateway_data:
