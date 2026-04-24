@@ -134,8 +134,24 @@ class AssociationRuleMiner:
         if self._rules is None or self._rules.empty:
             return []
 
-        matches = self._rules[self._rules["antecedent_id"] == product_id]
-        matches = matches.nlargest(top_k, "lift")
+        # normalize to string to handle float antecedent_id (parquet loads ints as float64)
+        pid_str = str(product_id)
+        try:
+            pid_norm = str(int(float(pid_str)))
+        except (ValueError, OverflowError):
+            pid_norm = pid_str
+        ant_str = self._rules["antecedent_id"].astype(str)
+        mask = ant_str.isin({pid_str, pid_norm})
+        # also try int-normalised column
+        if not mask.any():
+            try:
+                ant_norm = self._rules["antecedent_id"].apply(
+                    lambda x: str(int(float(x))) if str(x).replace('.','',1).isdigit() else str(x)
+                )
+                mask = ant_norm.isin({pid_str, pid_norm})
+            except Exception:
+                pass
+        matches = self._rules[mask].nlargest(top_k, "lift")
 
         return [
             {
