@@ -44,7 +44,7 @@ def _infer_provider(model: str) -> str:
 # ── Model routing — override via env vars ────────────────────────────
 _ORCHESTRATOR_MODEL  = os.environ.get("ORCHESTRATOR_LLM",  "deepseek/deepseek-chat")
 _CODEGEN_MODEL       = os.environ.get("CODEGEN_LLM",       "deepseek/deepseek-chat")
-_ENRICHMENT_MODEL    = os.environ.get("ENRICHMENT_LLM",    "claude-haiku-4-5-20251001")
+_ENRICHMENT_MODEL    = os.environ.get("ENRICHMENT_LLM",    "groq/llama-3.1-8b-instant")
 _CRITIC_MODEL        = os.environ.get("CRITIC_LLM",        "anthropic/claude-sonnet-4-6")
 _OBSERVABILITY_MODEL = os.environ.get("OBSERVABILITY_LLM", "groq/llama-3.1-8b-instant")
 
@@ -115,11 +115,19 @@ def call_llm_json(model: str, messages: list[dict], temperature: float = 0.0) ->
         raise
 
 
-async def async_call_llm_json(model: str, messages: list[dict], temperature: float = 0.0) -> dict:
+async def async_call_llm_json(
+    model: str,
+    messages: list[dict],
+    temperature: float = 0.0,
+    api_key: str | None = None,
+) -> dict:
     """Async LLM call via litellm.acompletion. Same JSON parsing as call_llm_json."""
     import re
     global _llm_call_counter
-    response = await litellm.acompletion(model=model, messages=messages, temperature=temperature)
+    kwargs: dict = dict(model=model, messages=messages, temperature=temperature)
+    if api_key:
+        kwargs["api_key"] = api_key
+    response = await litellm.acompletion(**kwargs)
     raw = response.choices[0].message.content
     _llm_call_counter += 1
     try:
