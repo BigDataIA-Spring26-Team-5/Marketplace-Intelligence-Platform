@@ -268,4 +268,3 @@ tests/                      # unit + integration + property-based
 - **YAML-cache write coherence.** `plan_sequence_node` writes the full cacheable blob. Add fields that any agent produces and update that write site, or replayed runs silently drop them.
 - **UC2 imports.** Route all UC2 observability symbols through [`src/models/llm.py`](src/models/llm.py), never directly from `src/uc2_observability/`. The import guard in `llm.py` keeps the pipeline working when UC2 deps are absent.
 - **UC2 emits are best-effort.** Wrap every new emit in `try/except`, log as warning, never raise. Observability must not block pipeline.
-- **Don't touch `final_project/`** if present — separate project with its own deps and `CLAUDE.md`.
