@@ -1,0 +1,25 @@
+domain: retail_inventory
+
+sequence:
+  - dq_score_pre
+  - __generated__
+  - strip_whitespace
+  - remove_noise_words
+  - fuzzy_deduplicate
+  - column_wise_merge
+  - golden_record_select
+  - dq_score_post
+
+silver_sequence:
+  - dq_score_pre
+  - __generated__
+  - strip_whitespace
+  - remove_noise_words
+  - schema_enforce
+
+gold_sequence:
+  - dq_score_pre
+  - fuzzy_deduplicate
+  - column_wise_merge
+  - golden_record_select
+  - dq_score_post

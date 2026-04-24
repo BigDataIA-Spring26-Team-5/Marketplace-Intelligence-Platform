@@ -1,0 +1,9 @@
+domain: pharma
+sequence:
+  - dq_score_pre
+  - __generated__
+  - strip_whitespace
+  - lowercase_brand
+  - pharma__extract_therapeutic_class
+  - llm_enrich
+  - dq_score_post

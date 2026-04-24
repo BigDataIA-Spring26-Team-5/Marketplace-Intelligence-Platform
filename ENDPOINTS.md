@@ -16,6 +16,29 @@
 | Redis (MCP cache) | 35.239.47.242:6379 | no auth |
 | MLflow | http://35.239.47.242:5000 | — |
 
+## REST API (port 8002) — UC1/UC2/UC3/UC4
+
+All endpoints versioned under `/v1/`. MCP tools also accessible at `/mcp/tools/*`.
+
+| Router | Base path | Description |
+|--------|-----------|-------------|
+| Pipeline | `/v1/pipeline/runs` | Submit/poll/resume pipeline runs |
+| Observability | `/v1/observability/` | Run history, traces, anomalies, cost, dedup |
+| Search | `/v1/search/query` | Hybrid product search (UC3) |
+| Recommendations | `/v1/recommendations/` | Also-bought / you-might-like (UC4) |
+| Ops | `/v1/ops/` | Cache stats/flush, domain schema |
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| REST API | http://35.239.47.242:8002 | — |
+| REST API Swagger | http://35.239.47.242:8002/docs | — |
+| REST API Health | http://35.239.47.242:8002/health | — |
+| MCP via REST API | http://35.239.47.242:8002/mcp/tools | — |
+
+Start: `uvicorn src.api.main:app --host 0.0.0.0 --port 8002`
+
+Env vars: `MAX_CONCURRENT_RUNS` (default 2), `PIPELINE_RATE_LIMIT` (default 10/minute), `API_KEY_ENABLED` (default false), `API_KEY`
+
 ## UC1 Pipeline
 
 | Service | URL | Credentials |

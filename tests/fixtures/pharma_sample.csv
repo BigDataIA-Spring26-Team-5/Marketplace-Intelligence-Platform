@@ -1,0 +1,26 @@
+drug_name,ndc_code,dosage_form,active_ingredient,strength,manufacturer,approval_status,route_of_administration,therapeutic_class,market_status
+Metformin Hydrochloride,0093-1048-01,tablet,metformin hydrochloride,500mg,Teva Pharmaceuticals,approved,oral,Antidiabetic,marketed
+Lisinopril,0116-0013-01,tablet,lisinopril,10mg,Zydus Cadila,approved,oral,ACE Inhibitor,marketed
+Atorvastatin Calcium,0071-0155-23,tablet,atorvastatin calcium,40mg,Pfizer,approved,oral,Statin,marketed
+Amoxicillin Trihydrate,0093-4158-01,capsule,amoxicillin trihydrate,500mg,Teva Pharmaceuticals,approved,oral,Penicillin Antibiotic,marketed
+Omeprazole,0093-7148-98,capsule,omeprazole,20mg,Teva Pharmaceuticals,approved,oral,Proton Pump Inhibitor,marketed
+Albuterol Sulfate,59930-1500-1,inhaler,albuterol sulfate,90mcg/actuation,Perrigo,approved,inhalation,Bronchodilator,marketed
+Levothyroxine Sodium,0074-7_obscured-13,tablet,levothyroxine sodium,50mcg,AbbVie,approved,oral,Thyroid Hormone,marketed
+Sertraline Hydrochloride,0049-4960-30,tablet,sertraline hydrochloride,50mg,Pfizer,approved,oral,SSRI,marketed
+Amlodipine Besylate,0069-1520-30,tablet,amlodipine besylate,5mg,Pfizer,approved,oral,Calcium Channel Blocker,marketed
+Gabapentin,0071-0806-24,capsule,gabapentin,300mg,Pfizer,approved,oral,Anticonvulsant,marketed
+Ibuprofen,0536-3603-01,tablet,ibuprofen,400mg,Major Pharmaceuticals,approved,oral,NSAID,marketed
+Losartan Potassium,0006-0951-58,tablet,losartan potassium,50mg,Merck,approved,oral,ARB,marketed
+Azithromycin Dihydrate,0069-3060-75,tablet,azithromycin dihydrate,250mg,Pfizer,approved,oral,Macrolide Antibiotic,marketed
+Furosemide,0054-3535-25,tablet,furosemide,40mg,Roxane Laboratories,approved,oral,Loop Diuretic,marketed
+Metoprolol Succinate,0186-1092-05,tablet extended release,metoprolol succinate,25mg,AstraZeneca,approved,oral,Beta Blocker,marketed
+Warfarin Sodium,0056-0172-70,tablet,warfarin sodium,5mg,Bristol-Myers Squibb,approved,oral,Anticoagulant,marketed
+Prednisone,0054-4742-25,tablet,prednisone,20mg,Roxane Laboratories,approved,oral,Corticosteroid,marketed
+Escitalopram Oxalate,0456-2005-01,tablet,escitalopram oxalate,10mg,Forest Laboratories,approved,oral,SSRI,marketed
+Ciprofloxacin Hydrochloride,0085-1717-01,tablet,ciprofloxacin hydrochloride,500mg,Schering,approved,oral,Fluoroquinolone,marketed
+Glipizide,0049-3490-66,tablet extended release,glipizide,5mg,Pfizer,approved,oral,Sulfonylurea,marketed
+Experimental Drug XR-451,PENDING-001,capsule,compound-xr451,200mg,BioResearch Labs,tentative,oral,Investigational,pre-market
+Withdrawn Compound Y,WITHDRAWN-002,tablet,compound-y,100mg,Generic Corp,withdrawn,oral,Antibiotic,recalled
+Hydroxychloroquine Sulfate,0173-0733-55,tablet,hydroxychloroquine sulfate,200mg,GlaxoSmithKline,approved,oral,Antimalarial,marketed
+Montelukast Sodium,0006-0711-31,tablet,montelukast sodium,10mg,Merck,approved,oral,Leukotriene Modifier,marketed
+Clopidogrel Bisulfate,0069-3100-30,tablet,clopidogrel bisulfate,75mg,Sanofi,approved,oral,Antiplatelet,marketed

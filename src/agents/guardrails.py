@@ -99,6 +99,28 @@ SAFETY_COLUMNS = frozenset(["allergens", "is_organic", "dietary_tags"])
 # Columns that enrichment is allowed to fill
 ENRICHABLE_COLUMNS = frozenset(["primary_category"])
 
+
+def get_safety_columns(domain: str) -> frozenset:
+    """Return safety columns for the given domain; falls back to SAFETY_COLUMNS."""
+    try:
+        from src.enrichment.rules_loader import EnrichmentRulesLoader
+        names = frozenset(EnrichmentRulesLoader(domain).safety_field_names())
+        return names if names else SAFETY_COLUMNS
+    except Exception:
+        return SAFETY_COLUMNS
+
+
+def get_valid_categories(domain: str) -> frozenset:
+    """Return valid enrichment categories for the given domain; falls back to VALID_CATEGORIES."""
+    try:
+        from src.enrichment.rules_loader import EnrichmentRulesLoader
+        cats_str = EnrichmentRulesLoader(domain).llm_categories_string
+        if cats_str:
+            return frozenset(c.strip() for c in cats_str.split(",") if c.strip())
+    except Exception:
+        pass
+    return VALID_CATEGORIES
+
 # Maximum allowed response size (characters) to guard against runaway output
 MAX_RESPONSE_SIZE = 200_000
 
@@ -522,10 +544,13 @@ def validate_sequence_planner_output(
                 "Normalization blocks must run before deduplication blocks"
             )
 
-    # extract_allergens before llm_enrich
-    if "extract_allergens" in sequence and "llm_enrich" in sequence:
-        if sequence.index("extract_allergens") > sequence.index("llm_enrich"):
-            errors.append("extract_allergens must run before llm_enrich")
+    # Any allergen-extraction block must run before llm_enrich
+    allergen_blocks = [b for b in sequence if "extract_allergens" in b]
+    if allergen_blocks and "llm_enrich" in sequence:
+        llm_idx = sequence.index("llm_enrich")
+        for ab in allergen_blocks:
+            if sequence.index(ab) > llm_idx:
+                errors.append(f"{ab} must run before llm_enrich")
 
     return GuardrailResult(
         passed=len(errors) == 0,
@@ -539,6 +564,7 @@ def validate_enrichment_output(
     result: Any,
     batch_size: int,
     batch_indices: list[int],
+    domain: str = "nutrition",
 ) -> GuardrailResult:
     """Validate LLM output from LLM enrichment (S3).
 
@@ -580,7 +606,8 @@ def validate_enrichment_output(
             continue
 
         # Hallucination check: category must be from the allowed set
-        if category is not None and category not in VALID_CATEGORIES:
+        _valid_cats = get_valid_categories(domain)
+        if category is not None and category not in _valid_cats:
             warnings.append(
                 f"results[{i}] primary_category='{category}' is not in the "
                 "allowed categories list (possible hallucination) — will be kept "
@@ -588,7 +615,8 @@ def validate_enrichment_output(
             )
 
         # SAFETY: LLM must NOT return safety columns
-        for safety_col in SAFETY_COLUMNS:
+        _safety_cols = get_safety_columns(domain)
+        for safety_col in _safety_cols:
             if safety_col in item and item[safety_col] is not None:
                 errors.append(
                     f"results[{i}] contains safety column '{safety_col}' — "

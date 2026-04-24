@@ -1,0 +1,120 @@
+domain: nutrition
+
+text_columns: [product_name, ingredients, category]
+
+fields:
+  # Safety fields — S1-only, never passed to S2/S3
+  - name: allergens
+    strategy: deterministic
+    output_type: multi
+    patterns:
+      - regex: "\\b(milk|dairy|lactose|casein|whey|cream|butter)\\b"
+        label: milk
+      - regex: "\\b(egg|albumin|lysozyme|mayonnaise)\\b"
+        label: egg
+      - regex: "\\b(fish|cod|salmon|tuna|anchov|bass|tilapia)\\b"
+        label: fish
+      - regex: "\\b(shellfish|shrimp|crab|lobster|crawfish|prawn)\\b"
+        label: shellfish
+      - regex: "\\b(almond|cashew|walnut|pecan|pistachio|macadamia|hazelnut|brazil\\s*nut)\\b"
+        label: tree nut
+      - regex: "\\b(peanut)\\b"
+        label: peanut
+      - regex: "\\b(wheat|flour|gluten|semolina|durum|spelt)\\b"
+        label: wheat
+      - regex: "\\b(soy|soybean|soya|tofu|edamame|lecithin)\\b"
+        label: soybean
+      - regex: "\\b(sesame|tahini)\\b"
+        label: sesame
+
+  - name: dietary_tags
+    strategy: deterministic
+    output_type: multi
+    patterns:
+      - regex: "\\b(gluten[\\s-]?free)\\b"
+        label: gluten-free
+      - regex: "\\b(vegan)\\b"
+        label: vegan
+      - regex: "\\b(vegetarian)\\b"
+        label: vegetarian
+      - regex: "\\b(kosher)\\b"
+        label: kosher
+      - regex: "\\b(halal)\\b"
+        label: halal
+      - regex: "\\b(sugar[\\s-]?free)\\b"
+        label: sugar-free
+      - regex: "\\b(low[\\s-]?fat)\\b"
+        label: low-fat
+      - regex: "\\b(non[\\s-]?gmo)\\b"
+        label: non-gmo
+      - regex: "\\b(keto)\\b"
+        label: keto
+
+  - name: is_organic
+    strategy: deterministic
+    output_type: boolean
+    patterns:
+      - regex: "\\b(organic|usda\\s+organic)\\b"
+        label: "true"
+
+  # LLM field — S1 patterns attempt first, then S2/S3 cascade
+  - name: primary_category
+    strategy: llm
+    output_type: single
+    patterns:
+      - regex: "\\b(cereal|oat|granola|muesli)\\b"
+        label: Breakfast Cereals
+      - regex: "\\b(milk|cream|yogurt|cheese|butter|dairy)\\b"
+        label: Dairy
+      - regex: "\\b(chicken|beef|pork|turkey|meat|sausage|bacon)\\b"
+        label: Meat & Poultry
+      - regex: "\\b(fish|salmon|tuna|shrimp|seafood|cod)\\b"
+        label: Seafood
+      - regex: "\\b(bread|bagel|muffin|croissant|baguette|roll)\\b"
+        label: Bakery
+      - regex: "\\b(candy|chocolate|gummy|sweet|confection)\\b"
+        label: Confectionery
+      - regex: "\\b(chip|pretzel|popcorn|cracker|snack)\\b"
+        label: Snacks
+      - regex: "\\b(juice|soda|water|tea|coffee|beverage|drink)\\b"
+        label: Beverages
+      - regex: "\\b(sauce|ketchup|mustard|dressing|condiment|mayo)\\b"
+        label: Condiments
+      - regex: "\\b(frozen|ice cream|popsicle)\\b"
+        label: Frozen Foods
+      - regex: "\\b(fruit|apple|banana|berry|orange|grape)\\b"
+        label: Fruits
+      - regex: "\\b(vegetable|carrot|broccoli|spinach|lettuce|tomato)\\b"
+        label: Vegetables
+      - regex: "\\b(pasta|noodle|spaghetti|macaroni)\\b"
+        label: Pasta & Grains
+      - regex: "\\b(rice|quinoa|couscous)\\b"
+        label: Pasta & Grains
+      - regex: "\\b(soup|stew|broth|chili)\\b"
+        label: Soups
+      - regex: "\\b(baby|infant|toddler)\\b"
+        label: Baby Food
+      - regex: "\\b(organic)\\b"
+        label: Organic
+      - regex: "\\b(supplement|vitamin|mineral|protein powder)\\b"
+        label: Supplements
+    classification_classes:
+      - Breakfast Cereals
+      - Dairy
+      - Meat & Poultry
+      - Seafood
+      - Bakery
+      - Confectionery
+      - Snacks
+      - Beverages
+      - Condiments
+      - Frozen Foods
+      - Fruits
+      - Vegetables
+      - Pasta & Grains
+      - Soups
+      - Baby Food
+      - Organic
+      - Supplements
+      - Other
+    rag_context_field: product_name
