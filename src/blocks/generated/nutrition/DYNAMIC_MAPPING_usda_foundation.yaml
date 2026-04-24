@@ -1,4 +1,8 @@
 column_operations:
+- target: data_source
+  type: string
+  action: set_default
+  default_value: USDA
 - target: brand_owner
   type: string
   action: set_null
@@ -24,17 +28,38 @@ column_operations:
   action: set_null
   status: missing
   reason: No source data available
-- target: category
+- target: ingredients
   type: string
-  action: extract_json_field
-  source: category
-  key: ''
+  action: set_null
+  status: missing
+  reason: "No ingredient text exists in source \u2014 nutrient array is not a substitute"
+- target: brand_owner
+  type: string
+  action: set_null
+  status: missing
+  reason: No brand owner information available in source schema
+- target: brand_name
+  type: string
+  action: set_null
+  status: missing
+  reason: No brand name information available in source schema
+- target: serving_size
+  type: string
+  action: set_null
+  status: missing
+  reason: Serving size is embedded in complex nested arrays (foodPortions) and cannot
+    be reliably extracted to a single scalar value
+- target: serving_size_unit
+  type: string
+  action: set_null
+  status: missing
+  reason: Serving size unit is embedded in complex nested arrays (foodPortions) and
+    cannot be reliably extracted to a single scalar value
 - target: data_source
   type: string
-  action: value_map
-  source: data_source
-  mapping:
-    Foundation: USDA
+  action: type_cast
+  source: fdcId
+  source_type: int64
 - source: foodClass
   action: drop_column
 - source: foodNutrients
