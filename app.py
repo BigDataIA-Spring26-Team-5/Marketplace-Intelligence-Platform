@@ -587,7 +587,24 @@ def _render_search_page() -> None:
             return
 
     st.markdown("---")
-    query = st.text_input("Search products", placeholder="e.g., organic gluten-free cereal")
+
+    _EXAMPLE_QUERIES = [
+        ("Semantic", "organic gluten-free oat cereal"),
+        ("Keyword",  "peanut butter"),
+        ("Recall",   "romaine lettuce"),
+        ("Brand",    "Kraft cheddar cheese"),
+        ("Safety",   "nut-free snack for kids"),
+    ]
+    st.caption("**Example queries** — click to load:")
+    ex_cols = st.columns(len(_EXAMPLE_QUERIES))
+    for col, (label, q) in zip(ex_cols, _EXAMPLE_QUERIES):
+        with col:
+            if st.button(f"{label}", key=f"uc3_ex_{label}"):
+                st.session_state["uc3_query_val"] = q
+
+    default_query = st.session_state.get("uc3_query_val", "")
+    query = st.text_input("Search products", value=default_query,
+                          placeholder="e.g., organic gluten-free cereal", key="uc3_query")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -625,7 +642,13 @@ def _render_recommendations_page() -> None:
     st.caption("Association rules (also-bought) + graph traversal (cross-category) from Instacart + UC1 enriched catalog.")
 
     if "uc4_rec" not in st.session_state:
-        st.session_state.uc4_rec = ProductRecommender()
+        if ProductRecommender.is_saved():
+            try:
+                st.session_state.uc4_rec = ProductRecommender.load()
+            except Exception:
+                st.session_state.uc4_rec = ProductRecommender()
+        else:
+            st.session_state.uc4_rec = ProductRecommender()
 
     rec: ProductRecommender = st.session_state.uc4_rec
 
@@ -634,7 +657,7 @@ def _render_recommendations_page() -> None:
         col_s, col_b = st.columns([3, 1])
         with col_s:
             sample_orders = st.number_input("Sample orders to load", min_value=1000,
-                                             max_value=500000, value=100000, step=10000,
+                                             max_value=500000, value=50000, step=10000,
                                              key="uc4_sample")
         with col_b:
             st.write("")
@@ -645,8 +668,10 @@ def _render_recommendations_page() -> None:
                             sample_orders=int(sample_orders)
                         )
                         stats = rec.build(prod_df, tx_df)
+                        rec.save()
                         st.session_state.uc4_rec = rec
-                        st.success("Recommender ready!")
+                        st.session_state.uc4_tx_df = tx_df
+                        st.success("Recommender ready! (saved to disk)")
                         st.json(stats)
                         st.rerun()
                     except Exception as exc:
@@ -659,51 +684,110 @@ def _render_recommendations_page() -> None:
     c2.metric("Association Rules", f"{stats['rules']:,}")
     c3.metric("Graph Edges", f"{stats['graph'].get('copurchase_edges', 0):,}")
 
+    # Pull example products from rules for UI hints
+    examples = rec.top_antecedents(n=8)
+    example_names = [e["product_name"] for e in examples]
+
     st.markdown("---")
     tab1, tab2, tab3 = st.tabs(["Also Bought", "You Might Like", "Before vs After (Demo)"])
 
     with tab1:
-        pid = st.text_input("Product ID or name", key="uc4_pid_also",
-                            placeholder="e.g., Banana")
+        st.caption("Co-purchase association rules (FP-Growth). Type a product name or pick an example.")
+        if example_names:
+            ex1 = st.selectbox("Quick examples", ["— type below or pick —"] + example_names, key="uc4_ex1")
+        else:
+            ex1 = None
+        default1 = ex1 if ex1 and ex1 != "— type below or pick —" else ""
+        pid = st.text_input("Product name or ID", value=default1, key="uc4_pid_also",
+                            placeholder="e.g., Organic Yellow Onion")
         if pid:
             recs = rec.also_bought(pid, top_k=10)
             if recs:
-                import pandas as pd
+                found_pid = rec.find_product(pid)
+                found_name = rec._get_product_name(found_pid) if found_pid else pid
+                st.write(f"**Showing rules for:** {found_name}")
                 st.dataframe(pd.DataFrame(recs), use_container_width=True)
             else:
-                st.info("No co-purchase rules found for this product.")
+                st.info("No co-purchase rules found. Try one of the example products above.")
 
     with tab2:
-        pid2 = st.text_input("Product ID or name", key="uc4_pid_like",
-                             placeholder="e.g., Banana")
+        st.caption("Cross-category affinity via graph traversal. Finds products in different departments.")
+        if example_names:
+            ex2 = st.selectbox("Quick examples", ["— type below or pick —"] + example_names, key="uc4_ex2")
+        else:
+            ex2 = None
+        default2 = ex2 if ex2 and ex2 != "— type below or pick —" else ""
+        pid2 = st.text_input("Product name or ID", value=default2, key="uc4_pid_like",
+                             placeholder="e.g., Limes")
         if pid2:
             recs2 = rec.you_might_like(pid2, top_k=10)
             if recs2:
-                import pandas as pd
+                found_pid2 = rec.find_product(pid2)
+                found_name2 = rec._get_product_name(found_pid2) if found_pid2 else pid2
+                st.write(f"**Showing cross-category for:** {found_name2}")
                 st.dataframe(pd.DataFrame(recs2), use_container_width=True)
             else:
-                st.info("No cross-category recommendations found.")
+                st.info("No cross-category recommendations found. Products may share the same department.")
 
     with tab3:
-        st.caption("Shows lift improvement when using UC1-enriched canonical IDs vs raw fragmented product IDs.")
-        pid3 = st.text_input("Product ID", key="uc4_pid_demo",
-                             placeholder="e.g., Banana")
+        st.caption(
+            "Shows lift improvement from UC1 deduplication. "
+            "**Raw** uses product names as IDs (text fragmentation). "
+            "**Enriched** uses canonical product IDs (consolidated signal)."
+        )
+        if example_names:
+            ex3 = st.selectbox("Quick examples (pick a product with high lift)",
+                               ["— type below or pick —"] + example_names, key="uc4_ex3")
+        else:
+            ex3 = None
+        default3 = ex3 if ex3 and ex3 != "— type below or pick —" else ""
+        pid3 = st.text_input("Product name or ID", value=default3, key="uc4_pid_demo",
+                             placeholder="e.g., Organic Yellow Onion")
+
         if pid3 and st.button("Run Comparison", key="uc4_demo_btn"):
-            with st.spinner("Running before/after comparison…"):
+            # Use stored tx_df if available; otherwise fetch a small sample
+            if "uc4_tx_df" not in st.session_state:
+                with st.spinner("Fetching transaction sample from BigQuery for demo…"):
+                    try:
+                        tx_df_demo, _ = ProductRecommender.load_from_bigquery(sample_orders=50000)
+                        st.session_state.uc4_tx_df = tx_df_demo
+                    except Exception as exc:
+                        st.error(f"Failed to load transactions: {exc}")
+                        st.stop()
+            tx_df = st.session_state.uc4_tx_df
+
+            with st.spinner("Mining rules on raw (names) vs enriched (IDs) — ~30 sec…"):
                 try:
-                    tx_df, _ = ProductRecommender.load_from_bigquery(sample_orders=50000)
-                    result = rec.demo_comparison(tx_df, tx_df, pid3, top_k=5)
+                    result = rec.demo_comparison(tx_df, pid3, top_k=5)
+
+                    st.markdown(f"### Results for: **{result['product_name']}**")
                     col_a, col_b = st.columns(2)
                     with col_a:
                         st.subheader("Raw (before UC1)")
+                        st.caption("product_name as ID — text variants fragment signal")
                         st.metric("Max Lift", result["max_lift_raw"])
-                        st.metric("Unique IDs", result["raw_unique_ids"])
+                        st.metric("Unique Product IDs", f"{result['raw_unique_ids']:,}")
+                        if result["raw_recommendations"]:
+                            st.dataframe(pd.DataFrame(result["raw_recommendations"]),
+                                         use_container_width=True)
+                        else:
+                            st.info("No rules found in raw data.")
                     with col_b:
                         st.subheader("Enriched (after UC1)")
+                        st.caption("canonical product_id — consolidated signal")
+                        delta = result["lift_improvement"]
                         st.metric("Max Lift", result["max_lift_enriched"],
-                                  delta=f"+{result['lift_improvement']:.4f}")
-                        st.metric("Unique IDs", result["enriched_unique_ids"])
-                    st.metric("Signal Consolidation Ratio", result["signal_consolidation_ratio"])
+                                  delta=f"+{delta:.4f}" if delta >= 0 else f"{delta:.4f}")
+                        st.metric("Unique Product IDs", f"{result['enriched_unique_ids']:,}")
+                        if result["enriched_recommendations"]:
+                            st.dataframe(pd.DataFrame(result["enriched_recommendations"]),
+                                         use_container_width=True)
+                        else:
+                            st.info("No rules found in enriched data.")
+
+                    st.metric("Signal Consolidation Ratio",
+                              result["signal_consolidation_ratio"],
+                              help="raw_unique_ids / enriched_unique_ids — higher = more fragmentation in raw")
                 except Exception as exc:
                     st.error(f"Comparison failed: {exc}")
 
