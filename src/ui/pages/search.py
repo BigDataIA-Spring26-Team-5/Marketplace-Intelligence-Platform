@@ -39,16 +39,37 @@ def render_search():
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
+    EXAMPLE_QUERIES = [
+        "organic gluten-free cereal",
+        "Greek yogurt high protein",
+        "almond milk unsweetened",
+        "frozen pizza pepperoni",
+        "vitamin C supplement",
+        "grass fed beef",
+    ]
+
     if not query:
-        st.markdown("""
-        <div class="card" style="text-align:center;padding:40px;">
-          <div style="font-size:32px;margin-bottom:12px;">⊕</div>
-          <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:6px;">Search the Product Catalog</div>
-          <div style="font-size:13px;color:var(--text-muted);">
-            Searches across product names, brands, ingredients, and categories using BM25 + ChromaDB semantic search.
-          </div>
-        </div>""", unsafe_allow_html=True)
-        return
+        eg_buttons = st.columns(3)
+        for i, eq in enumerate(EXAMPLE_QUERIES):
+            with eg_buttons[i % 3]:
+                if st.button(f'🔍 {eq}', key=f"eg_{i}", use_container_width=True):
+                    st.session_state._search_query = eq
+                    st.rerun()
+
+        # Pick up pre-set query from button click
+        if "_search_query" in st.session_state:
+            query = st.session_state.pop("_search_query")
+        else:
+            st.markdown("""
+            <div class="card" style="text-align:center;padding:32px;">
+              <div style="font-size:28px;margin-bottom:12px;">🔍</div>
+              <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:6px;">Search the Product Catalog</div>
+              <div style="font-size:14px;color:var(--text-muted);">
+                BM25 + ChromaDB semantic search with Reciprocal Rank Fusion over the unified product catalog.
+                <br>Covers product names, brands, ingredients, categories, allergens, and dietary tags.
+              </div>
+            </div>""", unsafe_allow_html=True)
+            return
 
     # ── Run search ────────────────────────────────────────────────────────────
     with st.spinner("Searching…"):
@@ -75,43 +96,61 @@ def render_search():
     # ── Product grid (3 columns) ──────────────────────────────────────────────
     cols = st.columns(3)
     for i, r in enumerate(results):
-        name     = r.get("product_name", r.get("description", "Unknown"))
-        brand    = r.get("brand_name", r.get("brand", ""))
-        category = r.get("primary_category", "")
-        allergens = r.get("allergens", "")
-        is_organic = r.get("is_organic", False)
-        dietary = r.get("dietary_tags", "") or ""
-        score    = r.get("score", r.get("rrf_score", 0.0))
-        recalled = "recall" in str(r.get("status", "")).lower()
+        def _safe(v, default=""):
+            """Return empty string for nan/None/empty."""
+            if v is None: return default
+            s = str(v).strip()
+            return default if s in ("nan", "None", "none", "") else s
 
+        name      = _safe(r.get("product_name") or r.get("description") or r.get("text"), "Unknown Product")
+        brand     = _safe(r.get("brand_name") or r.get("brand"))
+        category  = _safe(r.get("primary_category") or r.get("category"))
+        allergens = _safe(r.get("allergens"))
+        is_organic = str(r.get("is_organic", "")).lower() in ("true", "1", "yes")
+        dietary   = _safe(r.get("dietary_tags") or r.get("tags"))
+        score     = r.get("score") or r.get("rrf_score") or r.get("distance") or 0.0
+        try:
+            score = float(score)
+        except Exception:
+            score = 0.0
+        recalled  = "recall" in _safe(r.get("status")).lower()
+
+        # Build tag list
         tags = []
         if is_organic:
             tags.append("organic")
         if recalled:
             tags.append("recalled")
         if dietary:
-            for t in str(dietary).split(","):
+            for t in dietary.split(","):
                 t = t.strip()
-                if t:
+                if t and t not in tags:
                     tags.append(t)
 
-        tag_html = " ".join(_tag_badge(t) for t in tags[:4])
-        card_cls = "product-card recalled" if recalled else "product-card"
-        score_html = f'<div style="font-size:11px;color:var(--text-dim);margin-top:8px;font-family:var(--mono);">score: {score:.3f}</div>' if score else ""
+        tag_html = " ".join(_tag_badge(t) for t in tags[:5])
+        if not tag_html and category:
+            tag_html = f'<span class="badge info" style="font-size:11px;">{category}</span>'
 
-        cat_html = f'<span class="badge info" style="font-size:11px;">{category}</span>' if category else ""
+        card_cls = "product-card recalled" if recalled else "product-card"
+
+        # Score display (round to 3 dp, hide if 0)
+        score_html = ""
+        if score and abs(score) > 0.0001:
+            score_html = f'<div style="font-size:11px;color:var(--text-dim);margin-top:8px;font-family:var(--mono);">score: {score:.3f}</div>'
+
+        cat_badge = f'<span class="badge purple" style="font-size:11px;margin-bottom:8px;display:inline-block;">{category}</span>' if category else ""
 
         allergen_html = ""
-        if allergens and str(allergens) not in ("nan", "None", ""):
-            allergen_html = f'<div style="font-size:11px;color:var(--amber);margin-top:6px;">⚠ {allergens}</div>'
+        if allergens:
+            allergen_html = f'<div style="font-size:12px;color:var(--amber);margin-top:6px;">⚠ {allergens[:60]}</div>'
 
         with cols[i % 3]:
             st.markdown(f"""
             <div class="{card_cls}">
-              <div class="product-name">{name}</div>
-              <div class="product-brand">{brand}</div>
-              {f'<div style="margin-bottom:8px;">{cat_html}</div>' if cat_html else ""}
-              <div class="product-tags">{tag_html}</div>
+              <div class="product-name">{name[:80]}</div>
+              <div class="product-brand">{brand[:40] if brand else "&nbsp;"}</div>
+              {cat_badge}
+              <div class="product-tags">{tag_html if tag_html else '<span style="color:var(--text-dim);font-size:12px;">no tags</span>'}</div>
               {allergen_html}
               {score_html}
             </div>""", unsafe_allow_html=True)
