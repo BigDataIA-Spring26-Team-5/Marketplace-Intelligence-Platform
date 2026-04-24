@@ -38,7 +38,10 @@ services:
       - "9092:9092"
     environment:
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: EXTERNAL://0.0.0.0:9092,INTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: EXTERNAL://localhost:9092,INTERNAL://mip_kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     restart: unless-stopped
 
@@ -78,7 +81,10 @@ services:
   # ── Airflow ──────────────────────────────────────────────────────────────────
 
   airflow:
-    image: apache/airflow:2.8.0
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    image: mip-airflow:py311-custom
     container_name: mip_airflow
     ports:
       - "8080:8080"
@@ -94,6 +100,15 @@ services:
       _AIRFLOW_WWW_USER_USERNAME: "admin"
       _AIRFLOW_WWW_USER_PASSWORD: "admin"
       PYTHONPATH: /opt/airflow
+      UC2_PG_DSN: "host=host.docker.internal port=5432 dbname=uc2 user=mip password=mip_pass"
+      UC2_KAFKA_BOOTSTRAP: "mip_kafka:29092"
+      UC2_PROMETHEUS_URL: "http://host.docker.internal:9090"
+      UC2_PUSHGATEWAY_URL: "host.docker.internal:9091"
+      UC2_CHROMA_HOST: "host.docker.internal"
+      UC2_CHROMA_PORT: "8000"
+      REDIS_URL: "redis://host.docker.internal:6379"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/airflow.db:/opt/airflow/airflow.db
