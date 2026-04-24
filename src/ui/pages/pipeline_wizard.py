@@ -404,7 +404,8 @@ def render_pipeline():
 
     with right:
         results = ps.get("step_results", {})
-        _render_hitl_panels(results, step)
+        with st.container(height=400, border=False):
+            _render_hitl_panels(results, step)
 
     # ── Execute current step ──────────────────────────────────────────────────
     if step <= len(STEPS):
