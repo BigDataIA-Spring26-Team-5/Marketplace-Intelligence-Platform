@@ -85,10 +85,57 @@ def render_pipeline():
     if step == 0 and not ps.get("source_path"):
         st.markdown(_stepper_html(0), unsafe_allow_html=True)
 
+        # ── Demo Bronze push ──────────────────────────────────────────────────
+        st.markdown("""
+        <div class="alert orange" style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+          <span style="font-size:18px;">📤</span>
+          <div>
+            <strong>Demo Mode</strong> — push a 50-row USDA slice to GCS Bronze,
+            then run the full pipeline against it in one click.
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+        d1, d2 = st.columns([1, 3])
+        with d1:
+            push_clicked = st.button("📤  Push Demo Data → Bronze", use_container_width=True)
+        with d2:
+            if st.session_state.get("demo_uri"):
+                st.markdown(
+                    f'<div class="alert green" style="margin:0;padding:8px 12px;">'
+                    f'✓ Pushed → <span class="mono">{st.session_state.demo_uri}</span></div>',
+                    unsafe_allow_html=True,
+                )
+            elif st.session_state.get("demo_err"):
+                st.markdown(
+                    f'<div class="alert red" style="margin:0;padding:8px 12px;">'
+                    f'✗ {st.session_state.demo_err}</div>',
+                    unsafe_allow_html=True,
+                )
+
+        if push_clicked:
+            from src.ui.utils.demo_push import push_demo_bronze
+            with st.spinner("Pushing 50 rows to GCS Bronze…"):
+                ok, uri, msg = push_demo_bronze()
+            if ok:
+                st.session_state.demo_uri = uri
+                st.session_state.demo_err = ""
+            else:
+                st.session_state.demo_uri = ""
+                st.session_state.demo_err = msg
+            st.rerun()
+
+        st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
         st.markdown('<div class="card"><div class="card-title">Source Configuration</div>', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
+
+        # Pre-fill source from demo push if available
+        _default_src = st.session_state.get("demo_uri", "")
         with col1:
-            source_path = st.text_input("Source path / GCS URI", placeholder="data/usda_fooddata_sample.csv")
+            source_path = st.text_input(
+                "Source path / GCS URI",
+                value=_default_src,
+                placeholder="data/usda_fooddata_sample.csv",
+            )
         with col2:
             domain = st.selectbox("Domain", DOMAINS)
 
@@ -156,7 +203,12 @@ def render_pipeline():
 
         if step <= len(STEPS):
             current_step_name = STEPS[current_step_idx]
-            log_html += f'<div><span class="stream-dot"></span><span class="t-blue">Running {current_step_name}...</span></div>'
+            # Show waiting indicator — not "Running" (misleading before button click)
+            log_html += (
+                f'<div class="t-dim" style="margin-top:8px;border-top:1px solid #dee2e6;'
+                f'padding-top:8px;">⏸ Awaiting approval — click '
+                f'<strong>▶ Run {STEP_LABELS[current_step_name]}</strong> below to execute</div>'
+            )
 
         st.markdown(f"""
         <div class="card">
@@ -206,35 +258,45 @@ def render_pipeline():
     # ── Execute current step ──────────────────────────────────────────────────
     if step <= len(STEPS):
         step_name = STEPS[step - 1]
-        col_run, col_skip = st.columns([1, 4])
+        st.markdown("<hr style='border:none;border-top:1px solid #dee2e6;margin:8px 0 12px'>", unsafe_allow_html=True)
+        col_run, col_skip = st.columns([2, 1])
         with col_run:
-            run_clicked = st.button(f"▶  Run {STEP_LABELS[step_name]}", type="primary")
+            run_clicked = st.button(
+                f"▶  Run {STEP_LABELS[step_name]}",
+                type="primary",
+                use_container_width=True,
+                key=f"run_btn_{step}",
+            )
         with col_skip:
-            skip_clicked = st.button("⏭  Skip")
+            skip_clicked = st.button(
+                "⏭  Skip",
+                use_container_width=True,
+                key=f"skip_btn_{step}",
+            )
 
         if run_clicked or skip_clicked:
             if run_clicked:
-                # Actually invoke the pipeline node
-                try:
-                    from src.agents.graph import run_step
-                    state = dict(ps)
-                    state.setdefault("step_results", {})
-                    result_state = run_step(step_name, state)
-                    ps["step_results"][step_name] = _extract_step_summary(step_name, result_state)
-                    ps.update({k: v for k, v in result_state.items() if k != "step_results"})
-                    st.session_state.log_entries.append({
-                        "cls": "t-green",
-                        "text": f"✓ {step_name} completed"
-                    })
-                except Exception as e:
-                    st.session_state.log_entries.append({
-                        "cls": "t-red",
-                        "text": f"✗ {step_name} failed: {e}"
-                    })
+                with st.spinner(f"Running {STEP_LABELS[step_name]}…"):
+                    try:
+                        from src.agents.graph import run_step
+                        state = dict(ps)
+                        state.setdefault("step_results", {})
+                        result_state = run_step(step_name, state)
+                        ps["step_results"][step_name] = _extract_step_summary(step_name, result_state)
+                        ps.update({k: v for k, v in result_state.items() if k != "step_results"})
+                        st.session_state.log_entries.append({
+                            "cls": "t-green",
+                            "text": f"✓ {step_name} completed",
+                        })
+                    except Exception as e:
+                        st.session_state.log_entries.append({
+                            "cls": "t-red",
+                            "text": f"✗ {step_name} failed: {e}",
+                        })
             else:
                 st.session_state.log_entries.append({
                     "cls": "t-dim",
-                    "text": f"⟶ {step_name} skipped"
+                    "text": f"⟶ {step_name} skipped",
                 })
 
             st.session_state.pipeline_state = ps
