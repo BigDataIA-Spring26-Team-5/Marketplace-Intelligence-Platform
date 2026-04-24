@@ -31,11 +31,13 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- Unified-schema impact is identified and aligned with `config/unified_schema.json`
+- Domain-schema impact is identified and aligned with `config/schemas/<domain>_schema.json`
 - Agent responsibilities remain within the current three-agent architecture
 - Planned transformations use declarative YAML or existing blocks, not runtime-generated Python
 - HITL approval points and quarantine behavior are identified when the feature affects them
-- Enrichment changes preserve deterministic-only handling for safety fields
+- Enrichment changes preserve deterministic-only handling for safety fields (domain-defined via EnrichmentRulesLoader)
+- New domain support requires only `domain_packs/<domain>/` additions — zero `src/` edits
+- SC-002 compliance verified: non-food domain output contains zero food-domain enrichment columns
 - DQ scoring, generated mapping persistence, and documentation/runtime guidance updates are covered
 
 ## Project Structure
