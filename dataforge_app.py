@@ -47,7 +47,13 @@ section[data-testid="stMain"] > div,
   background-color: #ffffff !important;
   color: #212529 !important;
 }
-[data-testid="stAppViewContainer"] > section:first-child {
+/* Sidebar — force visible + light bg */
+section[data-testid="stSidebar"],
+[data-testid="stSidebar"] {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  transform: none !important;
   background-color: var(--surface) !important;
 }
 .main .block-container {
