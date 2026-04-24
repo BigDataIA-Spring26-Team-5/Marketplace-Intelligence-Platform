@@ -7,8 +7,9 @@ Food-product catalog pipeline that ingests heterogeneous sources (USDA FoodData 
 - **UC3** — hybrid search (BM25 + semantic) across 99,666 indexed products
 - **UC4** — association-rule and graph-based recommendations built from 50k Instacart orders (49,688 products, 105 rules, 105 edges)
 
-Live on GCP at **35.239.47.242** — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the endpoint list.
-
+- Live on GCP at **35.239.47.242** — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the endpoint list.
+- Codelabs: https://codelabs-preview.appspot.com/?file_id=1qG3yRCYtzhSTFo97FNTSXtc9i-zMtj7WOxIXy7K4dWI#0
+- recording: https://teams.microsoft.com/l/meetingrecap?driveId=b%213uqOjpR9uE6WTxah7h1msZr6jH1n5YJHiA27kQNInRFHnPywmj3uSb5GyiDc1NoG&driveItemId=01WYA5BLQ2BPGE2ZMM2ZGZEBKB7GSNFFY6&sitePath=https%3A%2F%2Fnortheastern-my.sharepoint.com%2F%3Av%3A%2Fg%2Fpersonal%2Fryan_aq_northeastern_edu%2FIQAaC8xNZYzWTZIFQfmk0pceAeKTozP8qnGAegOprfUE80w&fileUrl=https%3A%2F%2Fnortheastern-my.sharepoint.com%2F%3Av%3A%2Fg%2Fpersonal%2Fryan_aq_northeastern_edu%2FIQAaC8xNZYzWTZIFQfmk0pceAeKTozP8qnGAegOprfUE80w&threadId=19%3Acab17817ff2540cd80f6fb9f31cd683f%40thread.v2&organizerId=a0c913ff-abe6-4dec-b9b6-da5a8d07c941&tenantId=a8eec281-aaa3-4dae-ac9b-9a398b9215e7&callId=0bb323be-a18c-4894-ad9c-0a67de3e9aab&threadType=GroupChat&meetingType=Adhoc&subType=RecapSharingLink_RecapChiclet
 ---
 
 ## 1. Problem
