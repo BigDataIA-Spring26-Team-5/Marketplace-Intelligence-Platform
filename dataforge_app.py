@@ -48,9 +48,12 @@ section[data-testid="stMain"] > div,
   color: #212529 !important;
 }
 /* Sidebar — force visible + light bg */
-section[data-testid="stSidebar"] {
+section[data-testid="stSidebar"],
+[data-testid="stSidebar"] {
   display: flex !important;
   visibility: visible !important;
+  opacity: 1 !important;
+  transform: none !important;
   background-color: var(--surface) !important;
 }
 .main .block-container {
