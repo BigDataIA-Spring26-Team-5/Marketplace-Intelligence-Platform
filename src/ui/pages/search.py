@@ -145,12 +145,16 @@ def render_search():
             allergen_html = f'<div style="font-size:12px;color:var(--amber);margin-top:6px;">⚠ {allergens[:60]}</div>'
 
         with cols[i % 3]:
+            recalled_border = "border-color:rgba(201,42,42,.3);" if recalled else ""
             st.markdown(f"""
-            <div class="{card_cls}">
-              <div class="product-name">{name[:80]}</div>
-              <div class="product-brand">{brand[:40] if brand else "&nbsp;"}</div>
-              {cat_badge}
-              <div class="product-tags">{tag_html if tag_html else '<span style="color:var(--text-dim);font-size:12px;">no tags</span>'}</div>
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;
+                        padding:14px 16px;margin-bottom:10px;{recalled_border}">
+              <div style="font-size:15px;font-weight:700;color:var(--text);line-height:1.35;
+                          margin-bottom:4px;word-break:break-word;">{name[:70]}</div>
+              <div style="font-size:12px;font-weight:600;color:var(--text-dim);text-transform:uppercase;
+                          letter-spacing:.04em;margin-bottom:9px;">{brand[:40] if brand else "&nbsp;"}</div>
+              {f'<div style="margin-bottom:8px;">{cat_badge}</div>' if cat_badge else ""}
+              <div style="display:flex;flex-wrap:wrap;gap:4px;">{tag_html}</div>
               {allergen_html}
               {score_html}
             </div>""", unsafe_allow_html=True)
