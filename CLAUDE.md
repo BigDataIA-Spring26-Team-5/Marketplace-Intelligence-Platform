@@ -37,6 +37,10 @@ poetry run streamlit run app.py
 # MCP observability server (FastAPI, Redis-cached, port 8001)
 uvicorn src.uc2_observability.mcp_server:app --host 0.0.0.0 --port 8001
 
+# REST API (UC1 pipeline + UC2 observability + UC3 search + UC4 recommendations, port 8002)
+# Swagger UI: http://localhost:8002/docs — all endpoints versioned under /v1/
+uvicorn src.api.main:app --host 0.0.0.0 --port 8002
+
 # (One-time) Build the KNN enrichment corpus from USDA FoodData Central
 poetry run python scripts/build_corpus.py
 poetry run python scripts/build_corpus.py --limit 10000
@@ -250,8 +254,15 @@ UC2 event emission from the graph (`run_started`, `run_completed`, `block_start`
 - **Safety boundary in enrichment** — `allergens`, `dietary_tags`, `is_organic` are S1-only. Never add them to S2/S3 output paths.
 
 ## Active Technologies
+- Python 3.11 (Poetry) + LangGraph 0.4, pandas 2.2, PyYAML, pathlib (stdlib), importlib (stdlib) (016-kernel-domain-separation)
+- `domain_packs/<domain>/` filesystem directory; `config/schemas/<domain>_schema.json` for domain schema; `src/blocks/generated/<domain>/` for YAML mapping files (016-kernel-domain-separation)
+- Python 3.11 (Poetry) + FastAPI (already in stack via mcp_server.py), Uvicorn, Pydantic v2 (016-kernel-domain-separation)
+- SQLite via CheckpointManager (run state); Postgres (observability queries); Redis + SQLite fallback (cache) (016-kernel-domain-separation)
 
 - Python 3.11 (Poetry). pandas 2.2, LangGraph 0.4, LiteLLM 1.55, FAISS-CPU, sentence-transformers, rapidfuzz, pyarrow, redis-py, streamlit, structlog, prometheus_client, chromadb, networkx, mlxtend, rank-bm25.
 - Redis at `localhost:6379` (SQLite fallback at `output/cache.db`).
 - GCS buckets: `mip-bronze-2024` (JSONL), `mip-silver-2024` (Parquet), BigQuery `mip_gold.products`.
 - Prometheus Pushgateway at `localhost:9091`; Grafana at `localhost:3000`.
+
+## Recent Changes
+- 016-kernel-domain-separation: Added Python 3.11 (Poetry) + LangGraph 0.4, pandas 2.2, PyYAML, pathlib (stdlib), importlib (stdlib)
