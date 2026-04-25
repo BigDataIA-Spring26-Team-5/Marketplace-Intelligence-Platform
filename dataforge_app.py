@@ -500,8 +500,25 @@ button[kind="primary"]:hover { background: #1562a8 !important; }
 .stTextInput > div > div > input:focus, .stTextArea textarea:focus {
   border-color: var(--accent) !important; box-shadow: 0 0 0 2px rgba(25,113,194,.12) !important;
 }
+.stChatInput textarea:focus, .stChatInput > div > div > textarea:focus,
+[data-testid="stChatInput"] textarea:focus {
+  border-color: var(--accent) !important; box-shadow: 0 0 0 2px rgba(25,113,194,.12) !important;
+  outline: none !important;
+}
+[data-testid="stChatInput"] textarea, .stChatInput textarea {
+  border-color: var(--border) !important;
+}
 /* Streamlit expander */
-details summary { font-size:17px !important; font-weight:600 !important; }
+details summary {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  display: flex !important;
+  align-items: center !important;
+  list-style: none !important;
+  cursor: pointer;
+}
+details summary::-webkit-details-marker { display: none !important; }
+details summary::marker { display: none !important; }
 """
 
 st.markdown(f"<style>{GLOBAL_CSS}</style>", unsafe_allow_html=True)

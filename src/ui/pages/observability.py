@@ -275,8 +275,30 @@ def render_observability():
                 st.rerun()
 
 
+_PIPELINE_KEYWORDS = {
+    "run", "pipeline", "dq", "quality", "score", "enrich", "llm", "s1", "s2", "s3",
+    "tier", "quarantin", "flagged", "reject", "success", "fail", "error", "crash",
+    "source", "rows", "cost", "usd", "spend", "anomaly", "block", "dedup", "schema",
+    "data", "record", "batch", "dag", "airflow", "kafka", "bronze", "silver", "gold",
+    "usda", "fda", "off", "esci", "nutrition", "safety", "status", "broken",
+}
+
+
+def _is_pipeline_question(q: str) -> bool:
+    words = set(q.lower().split())
+    return bool(words & _PIPELINE_KEYWORDS)
+
+
 def _chatbot_query(query: str) -> tuple[str, list[str]]:
     """Try ObservabilityChatbot, fallback to rich log analytics."""
+    if not _is_pipeline_question(query):
+        return (
+            "I only answer questions about pipeline runs, DQ scores, enrichment, "
+            "anomalies, and cost.\n\n"
+            "Try asking: *success rate*, *DQ improvement*, *quarantine breakdown*, "
+            "*enrichment tiers*, *LLM cost*, *failed runs*, or *source breakdown*."
+        ), []
+
     try:
         from src.uc2_observability.rag_chatbot import ObservabilityChatbot
         bot = ObservabilityChatbot()
