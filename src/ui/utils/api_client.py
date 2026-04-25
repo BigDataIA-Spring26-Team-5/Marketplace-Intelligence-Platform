@@ -110,7 +110,22 @@ def _dq(val) -> float | None:
         f = float(val)
         if f != f:  # NaN
             return None
-        return round(f * 100, 2) if f <= 1.0 else round(f, 2)
+        return round(f * 100, 2) if 0.0 <= f <= 1.0 else round(f, 2)
+    except Exception:
+        return None
+
+
+def _dq_delta(val) -> float | None:
+    """Parse DQ delta — never scale, just clamp to sane range."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if f != f:  # NaN
+            return None
+        if abs(f) > 100:
+            return None  # corrupt value — drop silently
+        return round(f, 2)
     except Exception:
         return None
 
@@ -125,7 +140,7 @@ def load_run_logs(limit: int | None = None) -> list[dict]:
                 d = json.loads(Path(f).read_text())
                 d["dq_score_pre"]  = _dq(d.get("dq_score_pre"))
                 d["dq_score_post"] = _dq(d.get("dq_score_post"))
-                d["dq_delta"]      = _dq(d.get("dq_delta"))
+                d["dq_delta"]      = _dq_delta(d.get("dq_delta"))
                 logs.append(d)
             except Exception:
                 pass
