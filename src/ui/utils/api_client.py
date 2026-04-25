@@ -138,9 +138,15 @@ def load_run_logs(limit: int | None = None) -> list[dict]:
         for f in files:
             try:
                 d = json.loads(Path(f).read_text())
-                d["dq_score_pre"]  = _dq(d.get("dq_score_pre"))
-                d["dq_score_post"] = _dq(d.get("dq_score_post"))
-                d["dq_delta"]      = _dq_delta(d.get("dq_delta"))
+                pre  = _dq(d.get("dq_score_pre"))
+                post = _dq(d.get("dq_score_post"))
+                d["dq_score_pre"]  = pre
+                d["dq_score_post"] = post
+                # Recompute delta from normalized scores; drop run if post=0 (block never ran)
+                if pre is not None and post is not None and post > 0:
+                    d["dq_delta"] = round(post - pre, 2)
+                else:
+                    d["dq_delta"] = None
                 logs.append(d)
             except Exception:
                 pass
