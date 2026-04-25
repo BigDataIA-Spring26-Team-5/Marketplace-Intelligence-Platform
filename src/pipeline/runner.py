@@ -156,7 +156,7 @@ class PipelineRunner:
                         "rows_out": len(df),
                         "duration_ms": duration_ms,
                         "null_rates": null_rates,
-                        "dq_score": _compute_block_dq(df),
+                        "dq_score": self._compute_block_dq(df),
                         "block_seq": len(audit_log),
                         "ts": datetime.now(timezone.utc).isoformat(),
                     })
